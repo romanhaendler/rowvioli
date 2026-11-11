@@ -10,9 +10,23 @@ def main():
     ap = sub.add_parser("apply")
     ap.add_argument("directory")
     ap.add_argument("--key", default="worker.pub", help="public key file")
-    for name in ("run", "work"):
-        sub.add_parser(name)
+    rp = sub.add_parser("run")
+    rp.add_argument("source", nargs="?", default="")
+    rp.add_argument("table", nargs="?", default="")
+    rp.add_argument("--slots", type=int, default=4)
+    lp = sub.add_parser("_load")  # one run, started by the worker loop
+    for arg in ("worker", "source", "table"):
+        lp.add_argument(arg)
+    sub.add_parser("work")
     a, _ = p.parse_known_args()
+
+    if a.cmd == "run":
+        from . import worker
+        sys.exit(worker.run(a.source, a.table, a.slots))
+    if a.cmd == "_load":
+        from . import load
+        load.load(a.worker, a.source, a.table)
+        return
 
     if a.cmd == "apply":
         from . import apply, control

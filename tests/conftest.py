@@ -1,7 +1,8 @@
 """Test harness: two throwaway Postgres containers, the program as a real process.
 
 Tests never import the program. They use the `rv` fixture:
-  rv.run(*args, env={...})   runs `rowvioli` in rv.dir with ROWVIOLI_TARGET_URL set
+  rv.run(*args, env={...})   runs `rowvioli` in rv.dir with ROWVIOLI_TARGET_URL and
+                             ROWVIOLI_KEY_FILE (rv.dir/worker.key, from `key new`) set
   rv.target(sql, params)     queries the target, returns rows (or None)
   rv.source(sql, params)     the same for the source
   rv.definition({"erp.toml": "..."})  writes rv.dir/sources/, returns its path
@@ -70,7 +71,8 @@ class Rv:
         self.target_url, self.source_url, self.dir = target_url, source_url, dir
 
     def run(self, *args, env=None, timeout=60):
-        e = {**os.environ, "ROWVIOLI_TARGET_URL": self.target_url, **(env or {})}
+        e = {**os.environ, "ROWVIOLI_TARGET_URL": self.target_url,
+             "ROWVIOLI_KEY_FILE": str(self.dir / "worker.key"), **(env or {})}
         return subprocess.run([ROWVIOLI, *args], cwd=self.dir, env=e, capture_output=True,
                               text=True, timeout=timeout)
 

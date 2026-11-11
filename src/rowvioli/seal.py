@@ -30,6 +30,10 @@ def load_public(path):
     return PublicKey(open(path, "rb").read().strip(), Base64Encoder)
 
 
+def load_private(path=None):
+    return PrivateKey(open(path or os.environ["ROWVIOLI_KEY_FILE"], "rb").read().strip(), Base64Encoder)
+
+
 def seal(public_key, name, block):
     """The source name is sealed with its block, so a ciphertext copied to another source is rejected."""
     return SealedBox(public_key).encrypt(json.dumps({"name": name, "connection": block}).encode())
