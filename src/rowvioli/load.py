@@ -142,5 +142,8 @@ def load(worker, source="", table=""):
         try:
             answer = publish(conn, t, stage(conn, t))
         except Exception as e:
-            answer = fail(conn, t, str(e))
+            try:
+                answer = fail(conn, t, str(e))
+            except Exception:  # the target dropped the connection: the lock went with it, nothing can be stored
+                answer = {"status": "failed", "reason": "connection to the target lost"}
         print(json.dumps({"table": f"{t['schema']}.{t['table']}", **answer}), flush=True)

@@ -6,10 +6,14 @@ Tests never import the program. They use the `rv` fixture:
   rv.target(sql, params)     queries the target, returns rows (or None)
   rv.source(sql, params)     the same for the source
   rv.definition({"erp.toml": "..."})  writes rv.dir/sources/, returns its path
+  rv.start(*args)            like rv.run, in the background: a Popen (stdout/stderr piped), killed at test end
+  rv.kill_runs(p)            kill -9 the run processes started by the worker process p
+  until(check)               polls check() until it is truthy (10 s), returns its value
 Each test gets a fresh database in each container, so tests and worktrees do not collide.
 """
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -70,11 +74,29 @@ class Rv:
     def __init__(self, target_url, source_url, dir):
         self.target_url, self.source_url, self.dir = target_url, source_url, dir
 
+        self.started = []
+
+    def _env(self, env):
+        return {**os.environ, "ROWVIOLI_TARGET_URL": self.target_url,
+                "ROWVIOLI_KEY_FILE": str(self.dir / "worker.key"), **(env or {})}
+
     def run(self, *args, env=None, timeout=60):
-        e = {**os.environ, "ROWVIOLI_TARGET_URL": self.target_url,
-             "ROWVIOLI_KEY_FILE": str(self.dir / "worker.key"), **(env or {})}
-        return subprocess.run([ROWVIOLI, *args], cwd=self.dir, env=e, capture_output=True,
+        return subprocess.run([ROWVIOLI, *args], cwd=self.dir, env=self._env(env), capture_output=True,
                               text=True, timeout=timeout)
+
+    def start(self, *args, env=None):
+        p = subprocess.Popen([ROWVIOLI, *args], cwd=self.dir, env=self._env(env), stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True)
+        self.started.append(p)
+        return p
+
+    def kill_runs(self, worker):
+        """kill -9 every run process (child) of the worker process; returns their pids."""
+        pids = [int(x) for x in subprocess.run(["pgrep", "-P", str(worker.pid)], capture_output=True,
+                                               text=True).stdout.split()]
+        for pid in pids:
+            os.kill(pid, signal.SIGKILL)
+        return pids
 
     def target(self, sql, params=None):
         return _query(self.target_url, sql, params)
@@ -97,4 +119,18 @@ def rv(servers, tmp_path):
     for role, name in servers.items():
         _query(_url(name), f"CREATE DATABASE {db}")
         urls[role] = _url(name, db)
-    yield Rv(urls["target"], urls["source"], tmp_path)
+    rv = Rv(urls["target"], urls["source"], tmp_path)
+    yield rv
+    for p in rv.started:
+        rv.kill_runs(p)
+        p.kill()
+        p.wait()
+
+
+def until(check, timeout=10):
+    end = time.monotonic() + timeout
+    while not (value := check()):
+        if time.monotonic() > end:
+            raise AssertionError(f"timed out waiting for {check}")
+        time.sleep(0.05)
+    return value
