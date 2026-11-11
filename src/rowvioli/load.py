@@ -3,6 +3,7 @@
 Prints one JSON line {"table": <schema.table>, "status": ...} for the worker loop, or nothing if it claimed nothing.
 """
 import json
+from urllib.parse import urlsplit
 
 from . import connectors, control, seal
 from .connectors import quote
@@ -28,7 +29,7 @@ CLAIM = [
 ]
 
 TABLE = """SELECT t.id, s.name, s.type, s.connection, t.source_table, s.target_schema, t.target_table, t.key,
-                  t.options::text
+                  t.options::text, s.max_delete_share::float8
              FROM _rowvioli.tables t JOIN _rowvioli.sources s ON s.name = t.source WHERE t.id = $1"""
 
 
@@ -50,7 +51,7 @@ def claim(conn, worker, source, table):
     except Exception:
         sql(conn, "ROLLBACK")
         raise
-    keys = ("id", "source", "type", "connection", "source_table", "schema", "table", "key", "options")
+    keys = ("id", "source", "type", "connection", "source_table", "schema", "table", "key", "options", "max_delete_share")
     t = dict(zip(keys, sql(conn, TABLE, [id])[0]), run=run, worker=worker)
     t["mirror"] = f"{quote(t['schema'])}.{quote(t['table'])}"
     t["log"] = f"{quote(t['schema'])}.{quote(t['table'] + '__log')}"
@@ -59,8 +60,13 @@ def claim(conn, worker, source, table):
 
 def stage(conn, t):
     """Steps 2-3: open the connection, call the connector, fill the TEMP staging table. Returns rows read."""
-    connection = seal.open_(seal.load_private(), t["source"], t["connection"])
-    batches = connectors.REGISTRY[t["type"]](connection, t["source_table"], json.loads(t["options"]))
+    if t["type"] not in connectors.REGISTRY:
+        raise Exception(f'connector "{t["type"]}" is not installed on worker {t["worker"]}')
+    try:
+        t["opened"] = seal.open_(seal.load_private(), t["source"], t["connection"])
+    except Exception as e:
+        raise Exception(f"the connection of source {t['source']} cannot be decrypted on worker {t['worker']}: {e}")
+    batches = connectors.REGISTRY[t["type"]](t["opened"], t["source_table"], json.loads(t["options"]))
     with conn.cursor() as c:
         return c.adbc_ingest("_stage", batches, mode="create", temporary=True)
 
@@ -89,7 +95,9 @@ def publish(conn, t, rows_read):
                                                 AND attnum > 0 AND NOT attisdropped ORDER BY attnum""")]
     names = ", ".join(cols)
     new = sql(conn, "SELECT to_regclass($1) IS NULL", [t["mirror"]])[0][0]
+    check(conn, t, rows_read, new)
     counts = diff(conn, t, cols, new) if t["key"] else None
+    limit(conn, t, rows_read, new, counts)
     if new:
         # Two first runs of one source race on IF NOT EXISTS (unique violation). Waiting for a lock inside a
         # transaction block does not refresh the catalog cache, so the schema is created in its own transaction.
@@ -119,14 +127,62 @@ def publish(conn, t, rows_read):
     return {"status": "ok", **counts}
 
 
+COLUMNS = """SELECT attname, format_type(atttypid, atttypmod) FROM pg_attribute
+              WHERE attrelid = $1::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attname"""
+PRIMARY_KEY = """SELECT a.attname FROM pg_index i, unnest(i.indkey) WITH ORDINALITY k(attnum, n), pg_attribute a
+                  WHERE i.indrelid = $1::regclass AND i.indisprimary AND a.attrelid = i.indrelid
+                    AND a.attnum = k.attnum ORDER BY k.n"""
+
+
+def check(conn, t, rows_read, new):
+    """Step 4 (README "Checks in step 4"): raises with the reason, fail() does the rest."""
+    if rows_read == 0:
+        raise Exception("the source delivered zero rows")
+    if not new:
+        if sql(conn, COLUMNS, ["pg_temp._stage"]) != sql(conn, COLUMNS, [t["mirror"]]):
+            raise Exception("the columns differ from the mirror's")
+        mirror_key = [k for (k,) in sql(conn, PRIMARY_KEY, [t["mirror"]])]
+        if mirror_key != (t["key"] or []):
+            raise Exception(f"the key {t['key']} differs from the mirror's primary key {mirror_key}")
+    if t["key"]:
+        keys = ", ".join(quote(k) for k in t["key"])
+        if sql(conn, f"SELECT 1 FROM _stage WHERE {' OR '.join(quote(k) + ' IS NULL' for k in t['key'])} LIMIT 1"):
+            raise Exception(f"a key column of ({keys}) is null")
+        if sql(conn, f"SELECT 1 FROM _stage GROUP BY {keys} HAVING count(*) > 1 LIMIT 1"):
+            raise Exception(f"a key combination of ({keys}) occurs twice")
+
+
+def limit(conn, t, rows_read, new, counts):
+    """max_delete_share: a broken source must not empty the mirror in a perfectly consistent way."""
+    if new:
+        return
+    before = sql(conn, f"SELECT count(*) FROM {t['mirror']}")[0][0]
+    gone = counts["deleted"] if counts else max(before - rows_read, 0)
+    if before and gone / before > t["max_delete_share"]:
+        raise Exception(f"{round(100 * gone / before)} % of the rows would be deleted")
+
+
 def rowcount(conn, query):
     with conn.cursor() as c:
         c.execute(query)
         return c.rowcount
 
 
+def scrub(text, connection):
+    """Removes every value of the connection from a reason. A driver may quote only a part of a value
+    (libpq quotes a badly encoded password alone), so the password of a URL is removed as well.
+    shortcut: other parts of a value (a password split at an unencoded @) can still leak; upgrade by
+    sealing the placeholder values with the block and scrubbing those."""
+    values = [str(v) for v in connection.values() if v not in (None, "")]
+    values += [p for v in values if (p := urlsplit(v).password)]
+    for v in sorted(values, key=len, reverse=True):
+        text = text.replace(v, "***")
+    return text
+
+
 def fail(conn, t, reason):
     """The one failure path of a run: status first, then the lock (released when the connection closes)."""
+    reason = scrub(reason, t.get("opened") or {})
     sql(conn, "ROLLBACK")  # outside a transaction this is only a warning
     sql(conn, "UPDATE _rowvioli.tables SET reason = $2 WHERE id = $1", [t["id"], reason])
     sql(conn, """UPDATE _rowvioli.runs SET status = 'failed', finished_at = clock_timestamp(), reason = $2
