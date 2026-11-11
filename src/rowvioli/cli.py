@@ -17,9 +17,12 @@ def main():
     lp = sub.add_parser("_load")  # one run, started by the worker loop
     for arg in ("worker", "source", "table"):
         lp.add_argument(arg)
-    sub.add_parser("work")
+    sub.add_parser("work").add_argument("--slots", type=int, default=4)
     a, _ = p.parse_known_args()
 
+    if a.cmd == "work":
+        from . import worker
+        worker.loop(a.slots)
     if a.cmd == "run":
         from . import worker
         sys.exit(worker.run(a.source, a.table, a.slots))

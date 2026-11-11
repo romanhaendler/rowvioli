@@ -1,6 +1,7 @@
 """One run, in a process of its own: claim, read, stage, diff, publish (README "A run", spec "One run").
 
-Prints one JSON line {"table": <schema.table>, "status": ...} for the worker loop, or nothing if it claimed nothing.
+Prints a JSON line {"claimed": <schema.table>, "run", "max_seconds"} right after the claim and one line
+{"table": <schema.table>, "status": ...} at the end, for the worker loop; nothing if it claimed nothing.
 """
 import json
 
@@ -28,7 +29,7 @@ CLAIM = [
 ]
 
 TABLE = """SELECT t.id, s.name, s.type, s.connection, t.source_table, s.target_schema, t.target_table, t.key,
-                  t.options::text
+                  t.options::text, s.max_seconds
              FROM _rowvioli.tables t JOIN _rowvioli.sources s ON s.name = t.source WHERE t.id = $1"""
 
 
@@ -50,7 +51,7 @@ def claim(conn, worker, source, table):
     except Exception:
         sql(conn, "ROLLBACK")
         raise
-    keys = ("id", "source", "type", "connection", "source_table", "schema", "table", "key", "options")
+    keys = ("id", "source", "type", "connection", "source_table", "schema", "table", "key", "options", "max_seconds")
     t = dict(zip(keys, sql(conn, TABLE, [id])[0]), run=run, worker=worker)
     t["mirror"] = f"{quote(t['schema'])}.{quote(t['table'])}"
     t["log"] = f"{quote(t['schema'])}.{quote(t['table'] + '__log')}"
@@ -139,8 +140,11 @@ def load(worker, source="", table=""):
         t = claim(conn, worker, source, table)
         if t is None:
             return
+        name = f"{t['schema']}.{t['table']}"
+        # tells the worker what to end after max_seconds
+        print(json.dumps({"claimed": name, "run": t["run"], "max_seconds": t["max_seconds"]}), flush=True)
         try:
             answer = publish(conn, t, stage(conn, t))
         except Exception as e:
             answer = fail(conn, t, str(e))
-        print(json.dumps({"table": f"{t['schema']}.{t['table']}", **answer}), flush=True)
+        print(json.dumps({"table": name, **answer}), flush=True)
