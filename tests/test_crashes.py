@@ -61,7 +61,9 @@ def kill_and_check(rv, worker):
     assert status(rv) == ("failed", "worker lost")
     assert rv.target("select due_at - attempted_at, attempts from _rowvioli.status") == [(timedelta(minutes=1), 1)]
     assert rv.target("select status, finished_at from _rowvioli.runs order by run desc limit 1") == [("running", None)]
-    worker.wait(timeout=10)  # `run` ends: nothing is due or loading any more
+    out, _ = worker.communicate(timeout=10)  # `run` ends: nothing is due or loading any more
+    assert worker.returncode == 1
+    assert json.loads(out)["tables"] == {"raw_erp.slow": {"status": "failed", "reason": "worker lost"}}
 
 
 def mirror(rv):

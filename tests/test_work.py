@@ -1,10 +1,7 @@
 """`rowvioli work`, the order of loading, both limits and `max_seconds` (spec tests 13, 14, 19)."""
-import os
-import subprocess
 import time
 
 import pytest
-from conftest import ROWVIOLI
 from test_run import apply, ok, run
 
 # a source view that takes `seconds` per row, to hold a run while it fills the staging table
@@ -80,20 +77,16 @@ def test_several_workers_never_exceed_parallel_per_source_nor_max_running_in_tot
         slow(ready, f"slow{i}", 4, 0.1)
     apply(ready, source(ready, "erp", "parallel = 2", tables) + source(ready, "crm", "parallel = 3", tables))
     ready.target("update _rowvioli.meta set max_running = 4")
-    env = {**os.environ, "ROWVIOLI_TARGET_URL": ready.target_url, "ROWVIOLI_KEY_FILE": str(ready.dir / "worker.key")}
-    workers = [subprocess.Popen([ROWVIOLI, "work", "--slots", "4"], cwd=ready.dir, env=env) for _ in range(6)]
+    for _ in range(6):
+        ready.start("work", "--slots", "4")
     highest, deadline = {"erp": 0, "crm": 0, "total": 0}, time.monotonic() + 60
-    try:
-        # probe pg_locks every 20 ms until every table was loaded once (experiment 5)
-        while ready.target("select count(*) from _rowvioli.status where status <> 'ok'") != [(0,)]:
-            assert time.monotonic() < deadline
-            held = dict(ready.target(HELD))
-            for name, n in [*held.items(), ("total", sum(held.values()))]:
-                highest[name] = max(highest[name], n)
-            time.sleep(0.02)
-    finally:
-        for w in workers:
-            w.kill()
+    # probe pg_locks every 20 ms until every table was loaded once (experiment 5)
+    while ready.target("select count(*) from _rowvioli.status where status <> 'ok'") != [(0,)]:
+        assert time.monotonic() < deadline
+        held = dict(ready.target(HELD))
+        for name, n in [*held.items(), ("total", sum(held.values()))]:
+            highest[name] = max(highest[name], n)
+        time.sleep(0.02)
     # erp's parallel and max_running were reached, so the probe could have seen them broken
     assert highest["erp"] == 2 and highest["crm"] <= 3 and highest["total"] == 4
 

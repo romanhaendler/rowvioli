@@ -36,6 +36,7 @@ def loop(slots, source="", table="", once=False):
                     reason = f"ended by worker {worker} after max_seconds = {c['max_seconds']}"
                     sql(conn, END, [c["run"], reason])
                     answers[c["claimed"]] = {"status": "failed", "reason": reason}
+                    c["done"] = True
             due, loading = sql(conn, DUE, [source, table])[0]
             if once and not running and (crashed or not (due or loading)):
                 return answers, crashed
@@ -54,9 +55,12 @@ def loop(slots, source="", table="", once=False):
                             running[p] = {**a, "at": time.monotonic()}
                         else:
                             answers[a.pop("table")] = a
+                            running[p]["done"] = True
                     else:  # end of output: the process has ended
                         p.wait()
                         claimed = running.pop(p)
+                        if claimed and not claimed.get("done"):  # it died without an answer, e.g. kill -9
+                            answers[claimed["claimed"]] = {"status": "failed", "reason": "worker lost"}
                         crashed |= not claimed and p.returncode != 0
                         ended |= bool(claimed)
 
