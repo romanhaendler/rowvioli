@@ -1,23 +1,60 @@
 # rowvioli
 
-> **Status 2026-11-11: concept.** There is no program yet. Measured so far: compare and publish as plain SQL, the row comparison on wide tables, the behaviour when a process is killed, and claiming by several workers. What is proven and what is not is listed in [docs/measurements.md](docs/measurements.md) and [docs/open-points.md](docs/open-points.md).
+> **Status 2026-11-11: concept.** There is no program yet. Measured so far: compare and publish as plain SQL, the row comparison on wide tables, the behaviour when a process is killed, claiming by several workers, and a complete run through the ADBC driver. The model described here (a maximum age per table, definitions in the target, stateless workers) replaced an earlier one with orders and a scheduler on the same day and is not tried out as a whole. What is proven and what is not is listed in [docs/measurements.md](docs/measurements.md) and [docs/open-points.md](docs/open-points.md).
 
-A program that mirrors tables from source systems into a PostgreSQL target. Consumers always see a complete state there. Queuing, locking, counting and monitoring happen in the target database and nowhere else.
+A program that mirrors tables from source systems into a PostgreSQL target. You say how old each table may be. Workers keep it that fresh, and consumers always see a complete state.
 
-The guiding idea: **Postgres does everything that is hard.** The program passes rows from the source to the target and triggers a few SQL statements there. It compares nothing itself and never holds a whole table in memory.
+```toml
+# sources/erp.toml
+[erp]
+type    = "odbc"
+max_age = "1h"
+
+[erp.connection]
+string = "Driver={ODBC Driver 18 for SQL Server};Server=sqlsrv01;Database=erp;UID=reader;PWD=$ERP_PASSWORD"
+
+[erp.tables]
+"dbo.Customers" = { key = ["customer_no"] }
+"dbo.Items"     = { key = ["item_no"] }
+"dbo.Orders"    = { key = ["order_no"], max_age = "5m" }
+```
+
+```sh
+rowvioli apply sources/     # once per deployment: writes the definition into the target
+rowvioli work               # on any number of machines: keeps every table fresh
+```
+
+```
+select * from _rowvioli.status;
+
+ source | table          | max_age | age    | status
+--------+----------------+---------+--------+------------------------------------------
+ erp    | dbo.Orders     | 5m      | 2m     | ok
+ erp    | dbo.Customers  | 1h      | 1h 3m  | loading (worker etl-02)
+ erp    | dbo.Items      | 1h      | 40m    | ok
+ crm    | contacts       | 1d      | 3h     | failed: 62 % of the rows would be deleted
+```
+
+That is the whole usage. There is no schedule, no queue and no job. One table in the target is work list, state and monitoring at once.
+
+Two ideas carry the design:
+
+- **You state the freshness, not the time.** A table is due when it is older than its `max_age`. A worker takes the table that misses its target the most.
+- **Postgres does everything that is hard.** The connection of a run is its lock and its sign of life. Postgres compares the rows, counts what is running and computes what is due. The program passes rows from the source to the target and never holds a whole table in memory.
 
 ## Contents
 
 - [Guarantees](#guarantees)
 - [Overview](#overview)
 - [Defining a source](#defining-a-source)
+- [When a table is loaded](#when-a-table-is-loaded)
 - [A run](#a-run)
 - [Comparing in the target](#comparing-in-the-target)
 - [Target schema](#target-schema)
-- [Orders and workers](#orders-and-workers)
+- [Workers](#workers)
 - [How Postgres counts](#how-postgres-counts)
 - [Failures](#failures)
-- [Secrets](#secrets)
+- [Connections](#connections)
 - [Commands](#commands)
 - [Operation](#operation)
 - [Connectors](#connectors)
@@ -28,113 +65,160 @@ The guiding idea: **Postgres does everything that is hard.** The program passes 
 ## Guarantees
 
 - **Never a half-loaded or empty state.** For every table, consumers see the state before or after a run, nothing in between.
-- **Never two runs on the same target table.** This holds across machines, workers and submitters.
-- **Dead runs are detected** without heartbeats or deadlines, and retried up to the third attempt.
+- **Never two runs on the same target table.** This holds across machines and workers.
+- **Failed and dead runs are retried** without heartbeats or deadlines, after a pause that grows from one minute.
 - **Bounded memory.** Per table, a worker holds only a few chunks of a few thousand rows.
 - **One flow for everything.** Initial load, follow-up load and tables without a key take the same path.
 
 What it is not:
 
-- Not a scheduler. Someone else decides when to load.
+- Not a general scheduler. It knows how old a table may be and nothing else about time.
 - Not a transformation tool. Columns arrive the way the source delivers them.
 - Not a tool for targets other than PostgreSQL.
 
 ## Overview
 
-Whoever wants a load puts an order into Postgres. Workers fetch the work themselves, table by table. Every table is loaded on its own and published in its own transaction.
+The definition names every table and its maximum age. `rowvioli apply` writes it into the target. Workers know nothing but their connectors: they take the next due table from the target, load it and publish it in its own transaction.
 
 ```mermaid
 flowchart LR
-    subgraph Submitters
-        S[Scheduler]
-        W[Web UI]
-        M[Person at a terminal]
+    subgraph Deploy[Deployment of the definition]
+        D["sources/*.toml<br/>worker.pub"]
+        E["environment<br/>ERP_PASSWORD=…"]
+        A[rowvioli apply]
     end
     subgraph PG[Target Postgres]
-        O[("_rowvioli.orders<br/>orders")]
-        R[("_rowvioli.runs<br/>per table: waiting, running, ok, failed")]
+        S[("_rowvioli.sources<br/>type, encrypted connection")]
+        T[("_rowvioli.tables<br/>one row per table")]
         L[["table locks<br/>one per target table"]]
-        D[("raw_erp.*<br/>mirrors and change logs")]
+        M[("raw_erp.*<br/>mirrors and change logs")]
     end
-    subgraph Workers[Workers, any number]
+    subgraph Workers[Workers, any number, all alike]
         W1[Worker 1]
         W2[Worker 2]
         Wn[Worker n]
     end
     Q[(Sources)]
 
-    S -->|creates order| O
-    W -->|creates order| O
-    M -->|creates order| O
-    W1 -->|claims run| R
-    W2 -->|claims run| R
-    Wn -->|claims run| R
+    D --> A
+    E --> A
+    A -->|writes| S
+    A -->|writes| T
+    W1 -->|takes a due table| T
+    W2 -->|takes a due table| T
+    Wn -->|takes a due table| T
     Q -->|reads| W1
-    W1 -->|loads| D
+    W1 -->|loads| M
 ```
 
-Submitters and workers do not know each other. A submitter needs nothing but access to the database. A worker needs no address under which it can be reached.
+Whoever deploys the definition needs access to the target and nothing else: no driver, no route to a source. A worker needs no checkout, no configuration file and no address under which it can be reached.
 
 The terms are defined in the [glossary](GLOSSARY.md).
 
 ## Defining a source
 
-One file per source in the jobs repo:
+One file per source. It names the connector, the connection and every table.
 
 ```toml
 # sources/erp.toml
-[source]
-name              = "erp"
-type              = "odbc"
-connection_secret = "ERP_ODBC"
-target_schema     = "raw_erp"
-parallel          = 4
+[erp]
+type          = "odbc"
+target_schema = "raw_erp"
+max_age       = "1h"
+parallel      = 4
 
-include = ["dbo.*"]
-exclude = ["dbo.tmp_*", "dbo.*_backup"]
+[erp.connection]
+string = "Driver={ODBC Driver 18 for SQL Server};Server=sqlsrv01;Database=erp;UID=reader;PWD=$ERP_PASSWORD"
 
-# only what deviates from the defaults
-[tables."dbo.OrderLines"]
-key = ["order_no", "line_no"]
-log = true
+[erp.tables]
+"dbo.Customers"  = { key = ["customer_no"] }
+"dbo.Items"      = { key = ["item_no"], log = false }
+"dbo.Orders"     = { key = ["order_no"], max_age = "5m" }
+"dbo.OrderLines" = { key = ["order_no", "line_no"] }
 ```
 
 What follows from it:
 
-- Every table that matches `include` and not `exclude` gets a target table in `raw_erp`.
-- The key is taken from the primary key of the source unless it is overridden. It may consist of several columns.
+- Every listed table gets a target table in `raw_erp`. Nothing else is loaded. A new table in the source arrives when somebody adds its name.
+- `dbo.Orders` is never older than five minutes, the other tables never older than an hour.
 - At most four tables of this source load at the same time, across all workers.
-- The password is not in the file. `connection_secret` names the secret holding the connection string. The secret itself is stored encrypted in the target.
+- Every table with a key gets a change log, except `dbo.Items`, where it is switched off.
+- The password is not in the file. `$ERP_PASSWORD` is filled in from the environment when `apply` runs. The whole connection block is then encrypted and stored in the target.
 
 | Setting | Where | Default | Meaning |
 |---|---|---|---|
-| `name` | source | | Name of the source in orders and runs. |
-| `type` | source | | Connector: `postgres`, `odbc`, `file`, `rest`, `python`, or the name of an installed connector package. |
-| `connection_secret` | source | | Name of the secret holding the connection string. It is resolved when a run starts: first in the [secret store](#secrets), then as an environment variable of that name. |
+| `type` | source | | Connector: `postgres`, `odbc`, `file`, `rest`, or the name of an installed connector package. |
+| `connection` | source | | Everything the connector needs to reach the source. The fields are defined by the connector. Values may contain `$NAME` placeholders. See [Connections](#connections). |
+| `max_age` | source or table | | How old the mirror may get, for example `5m`, `1h`, `1d`. Required at source level. |
+| `tables` | source | | The tables to load, by name. |
 | `target_schema` | source | `raw_<name>` | Schema of the target tables. A schema belongs to exactly one source. |
 | `parallel` | source | 2 | Maximum number of tables of this source loading at the same time. |
-| `include`, `exclude` | source | everything, nothing | Patterns for table names of the source. |
-| `key` | table | primary key of the source | Columns that identify a row. Without a key the table is replaced as a whole. |
-| `log` | source or table | off | Keep a change log. Needs a key. |
+| `key` | table | none | Columns that identify a row. Without a key the table is replaced as a whole. |
+| `log` | source or table | on | Keep a change log. `log = false` switches it off. Tables without a key never have one. |
 | `max_delete_share` | source or table | 0.5 | The run aborts if a larger share of the rows would disappear. |
-| `max_seconds` | source or table | 3600 | A hanging run ends itself after this time. |
+| `max_seconds` | source or table | 3600 | A hanging run is ended after this time. |
 
-Any other key in the `[source]` section is passed to the connector unchanged, for example `url` for a REST connector.
+Any other key, at source or table level, is passed to the connector unchanged as an option, for example `path` for a REST connector.
+
+Nobody has to type 200 table names and keys. `rowvioli list erp` asks the source and prints them in this format, ready to paste. It is a helper for people. Nothing in the running system calls it.
+
+## When a table is loaded
+
+The target stores only facts per table. When a table is due is computed from them on every query.
+
+| Fact | Meaning | Written by |
+|---|---|---|
+| `max_age` | allowed maximum age | `apply` |
+| `loaded_at` | when the table was last published | the worker, inside the publishing transaction |
+| `attempted_at` | when the last run began | the worker, when it claims the table |
+| `attempts` | runs since the last success | the worker: plus one when claiming, zero on success |
+| `requested_at` | when somebody asked for a load now | a person or another system |
+
+```
+due_at =  at once                       if never attempted
+          requested_at                  if requested after the last run began
+          loaded_at + max_age           if the last run succeeded
+          attempted_at + pause          otherwise
+```
+
+- **Order.** A worker takes the table that is the most overdue measured against its own `max_age`. A five-minute table that is two minutes late overtakes hourly tables that are ten minutes late.
+- **Retry.** After a run that did not succeed, the pause is one minute, then 2, 4, 8 minutes and so on, but never longer than `max_age`. A success resets it. A nightly table that fails at 02:00 is tried again at 02:01, 02:03, 02:07, 02:15, 02:31, 03:03 and so on.
+- **A crash needs no bookkeeping.** The attempt was counted when the table was claimed and the success never came. The pause follows from that. A crashed worker and a failed check go through the same formula.
+- **A changed `max_age` takes effect at once**, because nothing derived is stored.
+- **All times come from the clock of the target.** Clocks of workers and callers do not matter.
+
+### Loading now
+
+For a load that should not wait, for example after the nightly batch of the ERP system has finished or after the cause of a failure has been fixed:
+
+```sql
+UPDATE _rowvioli.tables SET requested_at = now() WHERE source = 'erp';
+```
+
+`rowvioli run erp` does the same and then loads in its own process.
+
+| Requested | Consequence |
+|---|---|
+| before a worker starts | one run, however often it was requested |
+| while the table is loading | it loads once more afterwards, because the running read can be older than the request |
+| and the run fails | the normal retry with its pause takes over |
+
+Nobody ever resets `requested_at`. The formula only compares two points in time, so there is no flag that a worker could clear while somebody sets it.
 
 ## A run
 
-A run loads exactly one table. It uses a single connection to the target, the control connection. On it the run holds the table lock, fills the staging table, checks, compares and publishes.
+A run loads exactly one table, in a process of its own. It uses a single connection to the target, the control connection. On it the run holds the table lock, fills the staging table, checks, compares and publishes.
 
 ```mermaid
 flowchart TD
-    A["1 Claim<br/>take the table lock, run = running"] --> B["2 Read the source file, connect to the source<br/>from the checkout, only at this moment"]
+    A["1 Claim<br/>take the table lock, count the attempt"] --> B["2 Read the table's row, decrypt the connection<br/>hand it to the connector"]
     B --> C["3 Fill the staging table<br/>connector reads, COPY writes, chunk by chunk"]
     C --> D["4 Check<br/>schema, unique keys, safety limits"]
     D --> E["5 Compute the diff<br/>staging table against mirror, into a small table"]
-    E --> F["6 Publish<br/>one transaction: change log, mirror, run = ok"]
+    E --> F["6 Publish<br/>one transaction: change log, mirror, loaded_at"]
     F --> G["7 Close the connection<br/>lock released, staging table gone"]
 
-    B -.->|file or connection broken| X["run = failed<br/>target table unchanged"]
+    B -.->|connector missing or connection broken| X["run failed<br/>target table unchanged, retried after the pause"]
     C -.->|source drops out| X
     D -.->|check violated| X
     F -.->|SQL error, rollback| X
@@ -142,16 +226,26 @@ flowchart TD
 
 Until the COMMIT in step 6, consumers see the old state. Any abort before that leaves the target table unchanged.
 
-If the worker dies in the middle of a step, the run stays recorded as `running`. The table lock and the TEMP tables disappear with the connection. The next worker that claims a run detects it as dead.
+Three things hang on the control connection inside Postgres: the table lock, the TEMP tables and the open transaction. If the process dies in the middle of a step, Postgres removes all three. Nothing has to be cleaned up, and the run shows as dead until the retry.
 
 ### How the program works
 
 Heavily simplified:
 
 ```python
-def load(run, target):                            # target = control connection, lock already taken
-    source = read("sources/" + run.source + ".toml")
-    chunks = connector(source).read(run.table)     # yields chunk by chunk
+def work(slots):                                   # the whole server
+    while True:
+        if something_is_due() and a_slot_is_free():
+            start_process(load)                    # one process per table
+        else:
+            sleep(2)
+
+def load(target):                                  # target = control connection
+    table = target.claim()                         # most overdue table: lock taken, attempt counted
+    if table is None: return                       # another worker was faster
+
+    read   = connectors[table.type].read           # the only thing a worker brings along
+    chunks = read(decrypt(table.connection), table.name, table.options)
     target.copy_into_staging(chunks)               # writes chunk by chunk
 
     target.sql("check schema, keys, safety limits")
@@ -160,22 +254,26 @@ def load(run, target):                            # target = control connection,
     target.begin()
     target.sql("diff into the change log")
     target.sql("apply diff to the mirror")
-    target.sql("run = ok")
+    target.sql("loaded_at = now, attempts = 0")
     target.commit()                                # visible from here on
     target.close()                                 # lock released
 ```
 
 Data passes through the program only in the lines `read` and `copy_into_staging`. Everything else is SQL sent to the target. The program never learns which rows changed, only how many.
 
+`rowvioli run` is the same loop that ends when nothing is due any more.
+
 ### Checks in step 4
 
 | Check | Aborts if |
 |---|---|
 | Schema | a column is missing or has changed its type. A new column is added to the target. |
-| Key | a key combination occurs twice in the staging table or a key column is null. |
+| Key | a key combination occurs twice in the staging table, a key column is null, or the key in the definition differs from the primary key of the mirror. |
 | Safety limits | the source delivers zero rows, or more than `max_delete_share` of the rows would disappear. |
 
 The safety limits keep a broken source from emptying the mirror in a perfectly consistent way.
+
+A changed key is never converted. A person drops or renames the old mirror, and the next run builds it anew.
 
 ## Comparing in the target
 
@@ -208,10 +306,11 @@ Publishing itself:
 
 ```sql
 BEGIN;
-INSERT INTO raw_erp.customers__log SELECT :run, d.* FROM diff d;            -- only with log = true
+INSERT INTO raw_erp.customers__log SELECT :run, d.* FROM diff d;            -- unless log = false
 DELETE FROM raw_erp.customers m USING diff d
  WHERE d._op IN ('D','U') AND d.customer_no = m.customer_no;
 INSERT INTO raw_erp.customers SELECT customer_no, name, city FROM diff WHERE _op IN ('I','U');
+UPDATE _rowvioli.tables SET loaded_at = now(), attempts = 0 WHERE id = :table;
 UPDATE _rowvioli.runs SET status = 'ok', finished_at = now(), inserted = ..., updated = ..., deleted = ...
  WHERE run = :run;
 COMMIT;
@@ -223,7 +322,7 @@ Per target table:
 
 ```
 raw_erp.customers          mirror: columns of the source, primary key = key
-raw_erp.customers__log     change log, only with log = true
+raw_erp.customers__log     change log, unless log = false
   _run, _op                run and I, U or D
   ... all columns
 ```
@@ -233,15 +332,20 @@ Staging table and diff are TEMP tables on the control connection. They have no f
 Bookkeeping in the schema `_rowvioli`:
 
 ```
-sources   id, name, parallel
-tables    id, source, target_table, source_table, key, last_seen
-orders    order_id, source, table, status, created_at, created_by
-runs      run, order_id, source, table, status, attempt, step, worker,
-          started_at, finished_at, rows_read, inserted, updated, deleted, reason, version
-secrets   name, key_id, ciphertext, updated_at, updated_by
-status    view: runs, with "dead" computed on every query from the locks actually held
-meta      schema_version
+sources   id, name, type, parallel, options, connection (ciphertext), key_id, enabled
+tables    id, source, source_table, target_table, key, max_age, log, options, enabled,
+          loaded_at, attempted_at, attempts, requested_at, reason
+runs      run, table, worker, started_at, finished_at, status,
+          rows_read, inserted, updated, deleted, reason, definition
+status    view over tables: age, due_at and status, computed on every query
+meta      schema_version, max_running
 ```
+
+- `sources` and the first line of `tables` are the definition. Only `apply` writes them.
+- The second line of `tables` is what the workers experienced, plus `requested_at`.
+- `runs` is a log: one row per run. Nothing reads it to decide anything.
+- `status` is what people look at. It shows a table as `new`, `loading`, `ok` or `failed`, and a run as dead when it is recorded as running while nobody holds its table lock.
+- Progress is computed there too, for example `loading, 485,000 of about 1,000,000 rows`. The holder of the table lock is in `pg_locks`, its rows so far are in Postgres' own `pg_stat_progress_copy`, and the expected number is the row count of the last run. A worker writes nothing for it.
 
 Today's state is read from the mirror. What changed when is in the change log. Validity periods can be computed from it as a view.
 
@@ -256,19 +360,18 @@ id | city                        _run | _op | id | city
                                    42 | D   | 9  | Essen
 ```
 
-## Orders and workers
+## Workers
+
+A worker is stateless. It brings three things: its connectors, the address of the target and a key to decrypt connections. Everything else comes from the target. Scaling means starting another worker, and a crash loses nothing because nothing was kept in the worker.
 
 ```mermaid
 sequenceDiagram
-    participant G as Submitter
     participant P as Target Postgres
     participant A as Worker A
     participant B as Worker B
     participant C as Worker C
 
-    G->>P: order: load erp
-    A->>P: takes the order, lists the tables
-    Note over P: one waiting run per table
+    Note over P: customers, orders, order_lines and suppliers are due
     par
         A->>P: customers: claim, load, COMMIT
     and
@@ -279,89 +382,87 @@ sequenceDiagram
     B->>P: suppliers: claim
     Note over B: worker B drops out
     Note over P: lock released, run counts as dead
-    C->>P: suppliers: new attempt, load, COMMIT
-    P-->>G: order finished: 4 of 4
+    Note over P: one minute later suppliers is due again
+    C->>P: suppliers: claim, load, COMMIT
 ```
 
 If one table fails or dies, the others are published all the same. The price of this independence: for a short time `orders` can already be new while `customers` is still old.
 
-### Life of an order
-
-1. **Create.** A submitter writes one row into `_rowvioli.orders`: a source and optionally a single table.
-2. **List the tables.** The first free worker takes the order, asks the source for its tables, applies `include` and `exclude` and creates one waiting run per table. This happens in one transaction. If the worker dies meanwhile, the order is open again.
-3. **Load.** Every worker claims waiting runs as long as it has free slots.
-4. **Done.** The order is finished when none of its runs is waiting or running.
-
-### States of a run
+### States of a table
 
 ```mermaid
 stateDiagram-v2
-    [*] --> waiting
-    waiting --> running: a worker claims it
-    running --> ok: published
-    running --> failed: check, source or SQL
-    running --> dead: table lock is gone
-    dead --> waiting: new run, up to attempt 3
-    ok --> [*]
-    failed --> [*]
+    [*] --> due: apply creates the row
+    due --> loading: a worker claims it
+    loading --> fresh: published
+    loading --> pausing: failed or worker lost
+    fresh --> due: older than max_age, or requested
+    pausing --> due: pause is over, or requested
 ```
+
+None of these states is stored. They follow from the facts in the row and from the locks that are held at this moment.
 
 ### Rules
 
-- There is at most one waiting run per target table. A second order for the same table does not create another.
-- If the table is loading right now, a waiting run is created and comes next. Whoever submits an order during a run therefore gets a fresh state.
-- A run with status `failed` is not retried. The next order tries the table again.
-- A worker has a fixed number of slots (`--slots`). It limits what this machine loads at the same time. `parallel` limits what a source has to bear at the same time.
-- A worker needs one connection to the target per slot and one more for progress updates.
-- **A worker claims only what it can load.** Before claiming, it looks at its checkout and at the secret store and offers only the sources for which it has the source file and can decrypt the secret. A worker that has not pulled a new source yet leaves those runs to the others.
+- **One process per run.** The worker starts a process for every table it loads. A hanging run is ended after `max_seconds`, and a crashing driver takes only its own table with it.
+- **Three limits.** `--slots` limits what one machine loads at the same time. `parallel` limits what a source has to bear. `max_running` in `_rowvioli.meta` limits what the target has to bear. The last two are counted in the target, across all workers.
+- **Connections to the target.** One per running table, plus one per worker with which it looks for due tables.
+- **All workers on one target are equipped alike.** A worker takes any due table. If its connector is missing or the connection cannot be decrypted, the run fails with a reason that names the worker, for example `connector "sap" is not installed on worker etl-02`. Providing the connectors is the operator's task.
+- **The definition is read when a table starts.** A change made by `apply` never interrupts a running load.
 
 ## How Postgres counts
 
 There is no counter that is incremented and decremented. What is counted are the locks that are actually held at this moment.
 
-Every table lock has two numbers: that of the source and that of the target table. Postgres lists all held locks in the system view `pg_locks`. The number of tables of a source that are loading right now is the number of rows there carrying the number of that source.
+Every table lock has two numbers: that of the source and that of the target table. Postgres lists all held locks in the system view `pg_locks`. The number of tables of a source that are loading right now is the number of rows there carrying the number of that source. The number of all rows is what the target bears in total.
 
 ```sql
 BEGIN;
--- 1. Only one worker at a time may count and claim for this source.
-SELECT pg_advisory_xact_lock(0, :source);
+-- 1. Only one worker at a time may count and claim.
+SELECT pg_advisory_xact_lock(0, 0);
 
--- 2. Count: table locks of this source held in this database.
-SELECT count(*) FROM pg_locks
- WHERE locktype = 'advisory' AND classid = :source AND objsubid = 2 AND granted
-   AND database = (SELECT oid FROM pg_database WHERE datname = current_database());
+-- 2. Count: table locks held in this database, per source and in total.
+SELECT classid AS source, count(*) FROM pg_locks
+ WHERE locktype = 'advisory' AND classid <> 0 AND objsubid = 2 AND granted
+   AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+ GROUP BY classid;
 
--- 3. If the count is below parallel: take the table lock of the next waiting run.
+-- 3. If the total is below max_running: take the lock of the most overdue table
+--    whose source is below its parallel, and count the attempt.
 SELECT pg_try_advisory_lock(:source, :table);
-UPDATE _rowvioli.runs SET status = 'running', worker = :me, started_at = now() WHERE run = :run;
+UPDATE _rowvioli.tables SET attempted_at = now(), attempts = attempts + 1, reason = NULL WHERE id = :table;
+INSERT INTO _rowvioli.runs (run, "table", worker, started_at, status) VALUES (:run, :table, :me, now(), 'running');
 
 COMMIT;  -- releases only the counting lock from step 1, the table lock stays
 ```
 
 - **Step 1 prevents overtaking.** Without it, two workers could read "three of four" at the same time and both take a table.
 - **The count cannot drift.** If a worker dies, its lock disappears from `pg_locks` and no longer counts. Nobody has to book anything back.
-- **The same view detects dead runs.** A run recorded as `running` whose table lock is missing is dead. Every worker checks this before it claims, and creates a new waiting run up to the third attempt.
-- **Order when finishing.** A run first records its final status and then releases the lock. The other way round, a finished run would briefly look like a dead one.
+- **The same view detects dead runs.** A run recorded as `running` whose table lock is missing is dead. Nobody has to act on that: the table becomes due again when its pause is over.
+- **Order when finishing.** A run first records its result and then releases the lock. The other way round, a finished run would briefly look like a dead one.
 - **Number 0 is reserved.** It marks the counting lock. Sources get numbers from 1.
 
-The complete function as it was tried out is in [experiments/05_vergabe.sql](experiments/05_vergabe.sql). Result with 12 workers, 50 tables from two sources and the limits 4 and 2:
+A claim function was tried out in [experiments/05_vergabe.sql](experiments/05_vergabe.sql), in the earlier form: it handed out waiting runs and used one counting lock per source. The form above, with due tables, one counting lock and a total limit, is not tried out. Result of the earlier form with 12 workers, 50 tables from two sources and the limits 4 and 2:
 
 | Observation | Result |
 |---|---|
 | Highest concurrency per source | 4 and 2, exactly the limit |
 | Samples above the limit (600 samples, 20 ms apart) | 0 |
 | Tables with exactly one successful run | 50 of 50 |
-| Table of a worker that was killed | recorded as dead, loaded by another worker as attempt 2 |
+| Table of a worker that was killed | recorded as dead, loaded by another worker |
 
 ## Failures
 
 | What happens | Consequence | Lock released after |
 |---|---|---|
-| Worker crashes while Postgres waits for it | transaction discarded, run dead, new attempt | under 0.3 s (measured) |
+| Worker crashes while Postgres waits for it | transaction discarded, run dead, retried after the pause | under 0.3 s (measured) |
 | Worker crashes while Postgres is computing a statement | as above, as soon as Postgres notices the loss | under 4 s with a connection check every 2 s (measured), otherwise when the statement ends |
 | Machine or network drops out | as above, detected through TCP keepalive | about 60 s (not measured) |
-| Source stops answering | the run ends itself as `failed` after `max_seconds` | right after |
-| A table makes workers crash repeatedly | after three attempts the run stays dead | |
+| Source is unreachable for a moment | the run fails, the next one starts a minute later | right after |
+| Source stops answering | the worker ends the run's process after `max_seconds` | right after |
+| A table fails again and again | the pause doubles up to `max_age`. The status shows the reason and the number of attempts. | |
+| A connector is not installed on a worker | the run fails with a reason that names the worker | right after |
+| The target fails over to another node | connections drop, running loads end without publishing, the retry catches up | with the connection |
 | Target Postgres is unreachable | workers wait and retry. Nothing is loaded. | |
 
 In no case does anything half-done become visible: a COMMIT needs a command from the worker, and the worker is gone by then.
@@ -372,58 +473,80 @@ The program sets on its own connections:
 - `client_connection_check_interval = 2s`, so that Postgres looks for the client during a long statement too
 - `lock_timeout` for adding a column, so that a long-reading consumer cannot block the run forever
 
-The control connection must go to Postgres directly, not through a connection pooler in transaction mode. Two threads never share a control connection.
+The control connection must go to Postgres directly, not through a connection pooler in transaction mode.
 
-## Secrets
+## Connections
 
-Connection strings of the sources are stored in the target, encrypted. Every worker is connected to the target anyway, so a new password reaches all of them at once.
+A connection is everything a connector needs to reach its source: address, user, password or token. It is written as a block in the definition. Secrets appear in it only as placeholders.
+
+```toml
+[erp.connection]
+string = "Driver={ODBC Driver 18 for SQL Server};Server=sqlsrv01;Database=erp;UID=reader;PWD=$ERP_PASSWORD"
+
+[weather.connection]
+url   = "https://api.example.org"
+token = "$WEATHER_TOKEN"
+```
 
 ```mermaid
 flowchart LR
-    A[Person or web UI] -->|"encrypts with the public key"| S[("_rowvioli.secrets<br/>ciphertext only")]
-    P["keys/worker.pub<br/>in the jobs repo"] -.-> A
-    S -->|"reads ciphertext at the start of a run"| W[Worker]
-    K["worker.key<br/>file on the load host"] -.->|"decrypts in memory"| W
-    W -->|"connects"| Q[(Source)]
+    D["definition<br/>connection block with placeholders"] --> A[rowvioli apply]
+    E["environment at deploy time<br/>ERP_PASSWORD=…"] --> A
+    P["worker.pub<br/>next to the definition"] -.-> A
+    A -->|"one ciphertext per source"| S[("_rowvioli.sources")]
+    S -->|"read at the start of a run"| W[Worker]
+    K["worker.key<br/>file on the worker"] -.->|"decrypts in memory"| W
+    W -->|"hands the block to the connector"| Q[(Source)]
 ```
 
-Whoever sets a secret needs only the public key and can never read a secret back. Only a worker holds the private key.
+- **A person** writes the block and makes sure the variables are set when `apply` runs. A secret manager holds plain values such as a token or a password. Nobody builds a connection string by hand in a variable.
+- **`apply`** fills in the placeholders, encrypts the block as a whole with the public key and stores one ciphertext per source. It aborts if a variable is missing.
+- **The connector** receives the decrypted block as a dict. Which fields it expects is part of its documentation: `url` for `postgres`, `string` for `odbc`, `url` and `token` for `rest`, `path` for `file`.
+
+The address of a source is visible in the definition and in its review, and still encrypted in the target. Someone who can only write to the target cannot point a password at another server. If the source is a cluster, that is part of the connection string and nothing rowvioli has to know.
+
+For test and production with different addresses, the address becomes a placeholder too, for example `url = "$WEATHER_URL"`.
 
 ### How it is encrypted
 
-- **A standard construction, not a home-made one.** Secrets are encrypted as libsodium sealed boxes through PyNaCl: an X25519 key exchange with a one-time key, then authenticated encryption with XSalsa20-Poly1305. GitHub uses the same construction for repository secrets set through its API.
+- **A standard construction, not a home-made one.** Connections are encrypted as libsodium sealed boxes through PyNaCl: an X25519 key exchange with a one-time key, then authenticated encryption with XSalsa20-Poly1305. GitHub uses the same construction for repository secrets set through its API.
 - **Tampering is detected.** A single flipped bit makes decryption fail.
-- **Swapping is detected.** The name of the secret is encrypted together with its value. A ciphertext copied to another name is rejected.
-- **Equal values look different.** Encrypting the same value twice gives two different ciphertexts.
+- **Swapping is detected.** The name of the source is encrypted together with its connection. A ciphertext copied to another source is rejected.
+- **Equal values look different.** Encrypting the same connection twice gives two different ciphertexts. `apply` therefore writes a new ciphertext every time, with the same content.
 
-All four were tried out in [experiments/07_geheimnisse.py](experiments/07_geheimnisse.py).
+All four were tried out in [experiments/07_geheimnisse.py](experiments/07_geheimnisse.py), with a single value in place of a block.
 
 ### Where the keys live
 
+There is one key pair for all workers of a target.
+
 | Key | Where | Who may see it |
 |---|---|---|
-| Public key | `keys/worker.pub` in the jobs repo | everybody. It changes only through a merge request. |
-| Private key | a file on each load host, named by `ROWVIOLI_KEY_FILE`, mode 600 | the service user of the worker |
+| Public key | `worker.pub`, a file next to the definition | everybody. It changes only through a merge request. |
+| Private key | a file on each worker, named by `ROWVIOLI_KEY_FILE`, mode 600 | the service user of the worker |
 
 - The private key is never in the database, never in Git, and never passed as the value of an environment variable.
-- The public key is taken from the jobs repo, not from the database. Someone with write access to the database therefore cannot slip in a key of their own.
+- The public key is taken from the file next to the definition, not from the database. Someone with write access to the database therefore cannot slip in a key of their own.
 - A worker can hold several private keys, which is what makes rotation possible.
 
-### What happens to the decrypted value
+### What happens to the decrypted connection
 
-- It exists only in the memory of the worker, for the duration of a run.
+- It exists only in the memory of the run's process and of the connector.
 - It is never written to `_rowvioli.runs`, to the answer on stdout or to a log.
-- Database drivers like to quote the connection string in error messages. The program removes the secret from every error text before it stores or prints it.
+- Database drivers like to quote the connection string in error messages. The program removes the values of the connection from every error text before it stores or prints it.
 
 ### Rotation and loss
 
-1. `rowvioli key new` creates a new pair.
-2. The new private key is added to every load host, next to the old one.
-3. The new public key replaces the old one in the jobs repo.
-4. `rowvioli secret rekey`, run on a load host, re-encrypts all secrets.
-5. The old private key is removed.
+A new password: change the variable and run `apply` again.
 
-If the private key is lost, the secrets cannot be recovered and have to be set again.
+A new key pair:
+
+1. `rowvioli key new` creates a new pair.
+2. The new private key is added to every worker, next to the old one.
+3. The new public key replaces `worker.pub`. `apply` encrypts every connection anew.
+4. The old private key is removed.
+
+If the private key is lost, a new pair and one `apply` restore everything, because the definition and the environment still hold all values.
 
 ### What this protects against, and what not
 
@@ -431,33 +554,43 @@ If the private key is lost, the secrets cannot be recovered and have to be set a
 |---|---|
 | Someone reads the database, a backup or a replica | yes, they see ciphertext only |
 | Someone with write access changes or swaps a ciphertext | yes, decryption fails |
-| The web UI or a person setting secrets is compromised | yes for existing secrets, they cannot be read back |
-| A load host is compromised | **no**. It holds the private key and a database connection and can read every secret. |
-| Someone with write access puts back an older ciphertext of the same name | **no** |
+| Someone with write access changes a definition to redirect a connection | yes for the shipped connectors, the address is inside the ciphertext |
+| A worker is compromised | **no**. It holds the private key and a database connection and can read every connection. |
+| The place where `apply` runs is compromised | **no**. It holds every secret in its environment. |
+| Someone with write access puts back an older ciphertext of the same source | **no** |
 
-The encryption will not be the weak point. The private key file is. Two measures limit the damage if a load host is taken over: accounts in the source systems that may only read, and as few people as possible who can log in to a load host.
+The encryption will not be the weak point. The private key file and the deployment environment are. Two measures limit the damage: accounts in the source systems that may only read, and as few people as possible who can log in to a worker or change the deployment.
 
-### Without the secret store
-
-If the store has no entry for a name, the program uses the environment variable of that name. Whoever already has a secret manager that injects variables can keep using it.
+A connector is code the operator trusts. It receives the decrypted connection and can do with it what it wants. The promise above holds for the shipped connectors.
 
 ## Commands
 
 | Command | Does | Needs |
 |---|---|---|
-| `rowvioli init` | Creates the schema `_rowvioli` in the target. | target Postgres |
-| `rowvioli key new` | Creates a key pair: a private key file for the workers and a public key for the jobs repo. | nothing |
-| `rowvioli secret set ERP_ODBC` | Asks for the value, encrypts it with the public key and stores it. | jobs repo, target Postgres |
-| `rowvioli check erp` | Shows which tables match and with which key. Loads nothing. | jobs repo, source |
-| `rowvioli submit erp` | Creates an order. With `--wait` it waits for the order to finish. | target Postgres |
-| `rowvioli submit erp dbo.Customers` | Order for a single table. | target Postgres |
-| `rowvioli work --slots 4` | Runs permanently, claims waiting runs and loads up to four tables at a time. | jobs repo, sources, target Postgres |
-| `rowvioli run erp` | Creates the order and works it off in the same process. Claims only runs of this source and ends with the order. | jobs repo, source, target Postgres |
+| `rowvioli init` | Creates the schema `_rowvioli` in the target. | target |
+| `rowvioli key new` | Creates a key pair: a private key file for the workers and `worker.pub` for the definition. | nothing |
+| `rowvioli list erp` | Prints the tables of a source with their keys, ready to paste into the definition. | definition, environment, connector, source |
+| `rowvioli apply --check sources/` | Reads the definition and checks it. Writes nothing. Meant for a laptop and for the pipeline of a merge request. | definition |
+| `rowvioli apply sources/` | Writes the definition into the target: one row per source and table, connections encrypted. | definition, environment, `worker.pub`, target |
+| `rowvioli work --slots 4` | Runs permanently and loads whatever is due, up to four tables at a time. | connectors, private key, target |
+| `rowvioli run` | Loads everything that is due, once, and ends. | connectors, private key, target |
+| `rowvioli run erp` | Requests all tables of `erp` and loads until nothing of `erp` is due. | connectors, private key, target |
+| `rowvioli run erp dbo.Customers` | The same for a single table. | connectors, private key, target |
 
-Answer of `run` and `submit --wait` on stdout:
+Naming something means "this, now". `run` without a name means "whatever is due".
+
+`apply` in detail:
+
+- **Idempotent.** Applying the same definition twice gives the same state. Sources and tables are created or updated by name.
+- **It never touches what the workers experienced.** `loaded_at`, `attempted_at`, `attempts` and `requested_at` stay as they are. A deployment triggers no load and loses no request. A table that is new in the definition has never been attempted and is therefore due at once.
+- **The definition is always the whole.** `apply` gets a directory. What is no longer in it is disabled, never deleted, and its target table stays. Applying the wrong directory by mistake is undone by applying the right one.
+- **Disabling is the only way to stop a table.** Until then it is loaded and retried. A run that is loading the table when it is disabled finishes.
+- **One transaction.** If anything fails, for example a missing variable, nothing changes.
+
+Answer of `run` on stdout:
 
 ```json
-{"order": 17, "source": "erp", "seconds": 41.2,
+{"seconds": 41.2,
  "tables": {
   "raw_erp.customers": {"status": "ok", "inserted": 12, "updated": 3, "deleted": 1},
   "raw_erp.suppliers": {"status": "failed", "step": "check",
@@ -466,163 +599,177 @@ Answer of `run` and `submit --wait` on stdout:
 
 | Exit code | Meaning |
 |---|---|
-| 0 | No table of the order failed. |
-| 1 | At least one table failed or is finally dead, or the source file is broken. The other tables are published. |
-
-There is no code for "already running". A duplicate order queues up instead of being rejected.
-
-A submitter without the program installed creates the order as SQL:
-
-```sql
-INSERT INTO _rowvioli.orders (source) VALUES ('erp');
-```
+| 0 | No table failed. |
+| 1 | At least one table failed. The other tables are published. |
 
 ## Operation
 
-The same mechanism in three sizes:
+The same command at every size:
 
-| Size | Commands | What is added |
+| Size | What runs | What is added |
 |---|---|---|
-| One machine | `rowvioli run erp` | The scheduler starts this one command. No service, no second machine. |
-| One worker as a service | `rowvioli work --slots 4` and `rowvioli submit erp --wait` | The scheduler does not have to run on the load host and needs only access to the database. |
-| Several workers | `rowvioli work --slots 4` on more machines | Nothing else changes. |
+| One machine, no service | cron starts `rowvioli run` every minute | nothing |
+| One worker as a service | `rowvioli work --slots 4` | a service to supervise |
+| Several workers | the same on more machines | nothing else changes |
 
-### The jobs repo
+### The definition
 
 ```
-etl-jobs/
+etl-definition/
   sources/
     erp.toml
     crm.toml
-    files.toml
-  connectors/        custom connectors
-    weather.py
-  schedule/          the schedule in the scheduler's own format
-    crontab
-  bin/run            start scripts
-  bin/work
-  keys/worker.pub    public key for encrypting secrets
-  pyproject.toml     names the program as a dependency
+    weather.toml
+  worker.pub         public key for encrypting connections
+  pyproject.toml     names the program as a dependency, for apply
   uv.lock            pins its version
 ```
 
-- A merge request is the only way to change a source. CI runs `rowvioli check` on it.
-- The schedule lives in the same repo, in the scheduler's own format. The program never reads it.
-- Program version and source files are in the same commit.
-- Every run records the commit id of the checkout it ran with.
+- A merge request is the only way to change a source. Its pipeline runs `rowvioli apply --check sources/`.
+- The pipeline runs `rowvioli apply sources/` after the merge. The organisation's secret manager injects the secrets as environment variables.
+- The pipeline needs access to the target. It needs no driver and no route to any source.
+- Every run records a hash of the definition it ran with.
 
-### A load host
+### A worker
 
-To be set up once: Git, uv and the vendors' ODBC drivers.
+To be set up once: the program with its connectors, for example `uv tool install "rowvioli[odbc]"`, and the vendors' ODBC drivers.
 
 ```
-/opt/etl-jobs        checkout of the jobs repo
-/etc/etl/env         ROWVIOLI_TARGET_URL and ROWVIOLI_KEY_FILE
-/etc/etl/worker.key  the worker's private key, readable only by the service user
-```
-
-```sh
-# bin/run
-#!/bin/sh
-set -e
-cd /opt/etl-jobs
-. /etc/etl/env
-exec uv run rowvioli run "$1"
+/etc/rowvioli/env          ROWVIOLI_TARGET_URL and ROWVIOLI_KEY_FILE
+/etc/rowvioli/worker.key   the private key, readable only by the service user
 ```
 
 ```ini
 # systemd service for a worker
 [Service]
 User=etl
-ExecStart=/opt/etl-jobs/bin/work
+EnvironmentFile=/etc/rowvioli/env
+ExecStart=rowvioli work --slots 4
 Restart=always
 ```
 
-```
-# update, every five minutes
-*/5 * * * *  git -C /opt/etl-jobs pull -q --ff-only
-```
+- A worker has no checkout and no file that describes a source. A new source needs no change on any worker.
+- Source passwords are not on the worker. They are inside the encrypted connections in the target and are decrypted when a run starts.
+- Test and production are separate targets with their own workers, their own key pair and the same definition.
+- Whoever runs containers can build an image from the program and the drivers. It is not required.
 
-- The scheduler calls `/opt/etl-jobs/bin/run erp`. If it runs on another machine, it does so over SSH or creates the order directly in the database.
-- The scheduler manages no secrets.
-- **Source passwords are not on the load host.** They are in the secret store in the target and are decrypted when a run starts. A new source needs no change on any load host and no restart, whether the worker runs on a machine or in a container.
-- Test and production are separate machines with the same repo, a different `env` file and different keys.
-- Whoever runs containers anyway can build an image from the jobs repo. It is not required.
+### The target
+
+The target is exactly one database. Mirrors and bookkeeping have to be in the same database, because both are published in one transaction.
+
+- **A cluster with failover.** The address names all nodes and the worker connects to the one that accepts writes.
+- **Several target databases.** Each gets its own workers and its own definition.
+- **Consumers on replicas** see only published states.
+- **A connection pooler** in front of the target works in session mode only.
+
+Rights in the target:
+
+| Who | Needs |
+|---|---|
+| The pipeline that runs `apply` | to write the definition |
+| The workers | to read the definition, to write what they experienced, to create and write the mirrors |
+| Whoever may request a load, for example a web UI | to read the status view, to write `requested_at` and nothing else |
+| Consumers | to read the mirrors |
+
+The program creates no roles. Whoever can write the definition decides what is loaded, so that right belongs to the pipeline alone. A small set-up can use one user for everything.
 
 ### Deploying while loads are running
 
-A deployment is a `git pull`. It ends no process.
-
 | Change | Running tables | Takes effect from |
 |---|---|---|
-| New or changed source file | keep running untouched | the next table a worker starts. No restart. |
-| New custom connector | keep running untouched | the next table of that source. No restart. |
-| New source with a new password | keep running untouched | the next claim of each worker that has pulled the source file. The password reaches all workers at once. No restart. |
-| New program version | run to completion | the restart of the worker. It accepts nothing new, exits and starts with the new version. |
-
-Program versions are installed side by side and never overwritten in place, so that a running process keeps its version.
+| Changed definition | keep running untouched | the next table a worker starts |
+| New source or table | keep running untouched | at once. It has never been attempted and is therefore due. |
+| New password | keep running untouched | the next table of that source |
+| New connector | keep running untouched | when it is installed on every worker. Install first, then apply the source that uses it. |
+| New program version | run to completion | the restart of the worker. It accepts nothing new and exits. |
 
 ## Connectors
 
-The whole contract is two functions:
+The whole contract is one function:
 
 ```python
-def tables(cfg) -> list[Table]:
-    """Name, optionally columns, primary key."""
-
-def read(cfg, table) -> Iterable[Chunk]:
-    """Arrow batches or lists of dicts, chunk by chunk."""
+def read(connection: dict, table: str, options: dict) -> Iterator[pyarrow.RecordBatch]:
+    """Yield the rows of one table, chunk by chunk."""
 ```
 
-A connector does not deal with locks, staging, comparison, publishing, retries or parallelism. It has to keep three promises: deliver in chunks instead of all at once, keep column types stable, name a unique key.
+| Goes in | Meaning | From |
+|---|---|---|
+| `connection` | where the source is and how to get in | the decrypted connection of the source |
+| `table` | what to read there | the name in the definition |
+| `options` | how to read, for example a separator or a page size | the definition, nothing secret |
+
+Out come Arrow batches with a schema that stays the same, and nothing else. A connector never sees the target, a lock or another table. It has to keep two promises: deliver in chunks instead of all at once, and keep column types stable.
+
+A connector may offer a second function, `tables(connection)`, that lists the tables of the source with their keys. Only `rowvioli list` uses it. A worker never calls it.
 
 | Connector | Covers | Built on | Needed on the worker |
 |---|---|---|---|
 | `postgres` | PostgreSQL | ADBC | nothing |
 | `odbc` | MSSQL, Informix, any ODBC source | arrow-odbc | the vendor's ODBC driver |
 | `file` | CSV, Excel, Parquet, JSON files | DuckDB | access to the files |
-| `rest` | JSON over HTTP | Python generator | nothing |
-| `python` | anything else | your own file in the jobs repo | depends on the connector |
+| `rest` | flat JSON objects over HTTP, page by page | Python generator | nothing |
 
-### Three ways to get a connector
+### Two ways to get a connector
 
-| Way | Set-up | In the source file | Meant for |
+| Way | Set-up | In the definition | Meant for |
 |---|---|---|---|
 | Shipped | `pip install rowvioli[odbc]` | `type = "odbc"` | The connectors in the table above. The core stays small, heavy dependencies come only on request. |
-| Separate package | `pip install rowvioli-sap` | `type = "sap"` | Connectors shared by several teams or outside users. The package registers through an entry point. |
-| File in the jobs repo | nothing | `type = "python"` | A single interface inside your own organisation. |
+| Separate package | `pip install rowvioli-weather` | `type = "weather"` | Everything else. The package registers through an entry point. |
+
+Installing connectors on the workers is the operator's task.
 
 ### A custom connector, complete
 
 ```python
-# connectors/weather.py
+# rowvioli_weather.py
 import httpx
-from rowvioli import Table
+import pyarrow as pa
 
-def tables(cfg):
-    return [Table("readings", key=["station", "time"])]
+SCHEMA = pa.schema([("station", pa.string()),
+                    ("time", pa.timestamp("s", tz="UTC")),
+                    ("temp", pa.float64())])
 
-def read(cfg, table):
-    page = 1
-    while data := httpx.get(cfg["url"], params={"page": page}).json():
-        yield data        # a list of dicts
+def read(connection, table, options):
+    auth, page = {"Authorization": "Bearer " + connection["token"]}, 1
+    while rows := httpx.get(connection["url"] + options["path"], params={"page": page}, headers=auth).json():
+        yield pa.RecordBatch.from_pylist(rows, schema=SCHEMA)
         page += 1
 ```
 
 ```toml
+# pyproject.toml of the connector package
+[project.entry-points."rowvioli.connectors"]
+weather = "rowvioli_weather"
+```
+
+```toml
 # sources/weather.toml
-[source]
-name   = "weather"
-type   = "python"
-module = "connectors.weather"
-url    = "https://example.org/api/readings"
+[weather]
+type    = "weather"
+max_age = "1h"
+
+[weather.connection]
+url   = "https://api.example.org"
+token = "$WEATHER_TOKEN"
+
+[weather.tables]
+readings = { key = ["station", "time"], path = "/v1/readings" }
+```
+
+The shipped `rest` connector does the same without code for the simple case. The columns are then named in the definition:
+
+```toml
+[weather.tables.readings]
+key     = ["station", "time"]
+path    = "/v1/readings"
+columns = { station = "text", time = "timestamptz", temp = "float8" }
 ```
 
 ### Types
 
-The column types in the target follow from the Arrow schema the connector delivers. Two places need care:
+The column types in the target follow from the Arrow schema the connector delivers.
 
-- **Types from dicts are inferred.** The program derives them from the first chunk. If a column is null throughout that chunk, or a different type shows up later, the run aborts. To avoid this, name the columns explicitly in `Table`.
+- **Arrow only.** A connector names its schema. Types are never guessed from the first rows, so they cannot flip between two runs.
 - **Decimals from Postgres.** The ADBC driver reads `numeric` as text and cannot write text into a `numeric` column. The `postgres` connector therefore has to convert to `decimal128`. This was investigated in `data-extractor` (ADR-0014 there).
 
 ## Web UI
@@ -631,19 +778,18 @@ Everything a UI needs is in the target. It is a small application of its own wit
 
 | The UI should | From where | Possible |
 |---|---|---|
-| Show runs with status, duration, counts and failure reason | `_rowvioli.runs` | yes |
-| Tell running, waiting and dead runs apart | `_rowvioli.status` | yes |
-| Show all tables and how fresh they are | `_rowvioli.tables` and the last successful run | yes |
-| Show the progress of a running run | `runs.step`, `runs.rows_read` | yes, the worker writes every few seconds |
-| Show which rows a run changed | change log of the table | yes, with `log = true` |
-| Show which version of the definition a run used | `runs.version` | yes |
-| Load a source or table now | one row in `_rowvioli.orders` | yes |
-| Cancel a run | Postgres terminates the run's control connection | yes |
-| Set the password of a source | encrypt with the public key, write to `_rowvioli.secrets` | yes, without being able to read any secret |
-| Show the next scheduled time | scheduler | not from the target |
+| Show all tables with age, status and failure reason | `_rowvioli.status` | yes |
+| Show when a table is due next | `_rowvioli.status` | yes |
+| Tell loading, failed and dead apart | `_rowvioli.status` | yes |
+| Show past runs with duration and counts | `_rowvioli.runs` | yes |
+| Show which rows a run changed | change log of the table | yes, unless `log = false` |
+| Show which definition a run used | `runs.definition` | yes, as a hash |
+| Load a table now | `requested_at` in `_rowvioli.tables` | yes |
+| Show the progress of a running run | `_rowvioli.status` | yes, while the staging table is filled. Not tried with a role without special rights. |
+| Cancel a run | Postgres terminates the run's control connection | only for the moment: the retry starts it again after a minute |
+| Stop a table for good | | no. It is removed from the definition, and `apply` disables it. |
+| Change a source or its password | | no. That is the definition, and it changes through `apply`. |
 | Show complete log lines | the worker's log system | not from the target |
-
-Cancelling works because a run cannot publish anything without its control connection.
 
 ## Measurements
 
@@ -656,6 +802,7 @@ Short version. Set-up, all numbers and limitations are in [docs/measurements.md]
 | Publishing at 1 % changes | not measured | 17 s |
 | Compare and publish in one transaction (earlier variant) | 1.9 s | 59 s |
 | Without a key: replace everything | 2.9 s | 40 s |
+| Filling the staging table from a client through ADBC | 0.5 s | not measured |
 
 A table with 900 columns and 100,000 rows takes 5.7 s to compare.
 
@@ -672,10 +819,10 @@ In the intended working range of up to 10⁶ rows a table costs a few seconds. A
 | [docs/open-points.md](docs/open-points.md) | What is undecided, unverified or unbuilt |
 | [experiments/](experiments/README.md) | The scripts behind the measurements |
 
-Sketches from the discussion (private pages, in German; command and schema are still called `etl` and `_etl` there):
+Sketches from the first discussion (private pages, in German). They show the earlier model with orders, a jobs repo on every load host and an external scheduler, and the command and schema are still called `etl` and `_etl` there:
 
 - [The whole picture as a page with drawings](https://claude.ai/artifact/EgxJYvAXjTfhUVYVWe4vEh)
 - [Integration in a company](https://claude.ai/artifact/TpvxQYyxDKMhwY9EXgq2Ma)
-- [Flow and integration](https://claude.ai/artifact/VadCBs9SdqrodwTDqSPkSN) (older state, with exit code 75)
-- [One way into the target](https://claude.ai/artifact/YWwdsQGGbop5sYkk5sMqNg) (older state, with one shared transaction)
-- [Path of the job data](https://claude.ai/artifact/4jdjm3LEJpKWDfXCjUDqGb) (older state, with one file per table)
+- [Flow and integration](https://claude.ai/artifact/VadCBs9SdqrodwTDqSPkSN) (with exit code 75)
+- [One way into the target](https://claude.ai/artifact/YWwdsQGGbop5sYkk5sMqNg) (with one shared transaction)
+- [Path of the job data](https://claude.ai/artifact/4jdjm3LEJpKWDfXCjUDqGb) (with one file per table)

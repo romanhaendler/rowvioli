@@ -2,6 +2,8 @@
 
 Every decision of the concept with its reason, its price and what was rejected. The order follows the discussion of 2026-11-11, so the document also shows how the design got to where it is.
 
+There were two rounds on that day. Decisions 1 to 19 are the first round. The second round (decisions 20 to 30) replaced the model of orders, a jobs repo and an external scheduler with a maximum age per table, definitions in the target and stateless workers. Decisions of the first round that no longer hold are marked and kept, with their text unchanged.
+
 Evidence refers to `docs/measurements.md` and to the earlier projects `hpdl`, `data-extractor` and `dataly` in the same workspace.
 
 ## Starting point
@@ -12,7 +14,7 @@ The first idea for a new attempt was a very fast Rust program. The discussion sh
 
 ## 1. PostgreSQL is the only target and the only place of coordination
 
-**Decision.** The program loads into PostgreSQL only. Orders, runs, locks and status live in the target database. There is no other state: no state file, no broker, no service that has to be reachable.
+**Decision.** The program loads into PostgreSQL only. Definitions, runs, locks and status live in the target database. There is no other state: no state file, no broker, no service that has to be reachable.
 
 **Why.** All earlier projects loaded into Postgres. Session locks, transactions and the system view `pg_locks` give locking, dead-run detection and counting without building anything.
 
@@ -46,6 +48,8 @@ The first idea for a new attempt was a very fast Rust program. The discussion sh
 - *Views that switch to a published run number.* Only needed when several transactions write the same table in parallel, which this design does not do.
 
 ## 4. Mirror plus change log instead of a history table
+
+> **Changed by decision 31.** The change log is on unless it is switched off.
 
 **Decision.** The target table is an exact mirror. An optional second table records per run what was inserted, updated and deleted, and only ever grows.
 
@@ -95,6 +99,8 @@ The first idea for a new attempt was a very fast Rust program. The discussion sh
 
 ## 9. One file per source with include and exclude
 
+> **Changed by decision 21.** One file per source stays. Tables are named one by one, there are no patterns.
+
 **Decision.** A source file holds the connection once, patterns for tables, and overrides for single tables.
 
 **Why.** With 200 tables in an ERP system, one file per table means 200 near-identical files and soon a wish for defaults and inheritance. `hpdl` already had layered settings for that reason.
@@ -104,6 +110,8 @@ The first idea for a new attempt was a very fast Rust program. The discussion sh
 **Rejected.** *One file per table*, the earlier draft.
 
 ## 10. Orders in Postgres, workers pull
+
+> **Replaced by decision 20.** Workers still pull. There are no orders and no submitters any more.
 
 **Decision.** A submitter writes an order into a table. Workers claim waiting runs themselves. `run` is the small case: it creates the order and works it off in the same process.
 
@@ -144,6 +152,8 @@ This is not a scheduler. Nothing in the program knows about time.
 
 ## 13. A connector is two functions, reachable in three ways
 
+> **Changed by decision 27.** One function, Arrow only, and no connector file in a repo. Entry points and optional extras stay.
+
 **Decision.** `tables(cfg)` and `read(cfg, table)`. `read` may yield Arrow batches or lists of dicts. Connectors are found through Python entry points; the shipped ones use the same mechanism. Heavy dependencies are optional extras. A file in the jobs repo works without any packaging.
 
 **Why.** Not everybody needs every connector. Writing one must be possible in a few lines.
@@ -154,6 +164,8 @@ This is not a scheduler. Nothing in the program knows about time.
 
 ## 14. Definitions in a Git repo, delivered by `git pull`
 
+> **Replaced by decision 22.** The definition is still kept in Git. It reaches the workers through the target, not through a checkout.
+
 **Decision.** Source files, custom connectors, the schedule and the pinned program version live in one repository. A load host has a checkout that is updated every few minutes.
 
 **Why.** The scheduler only has to be able to start a command. Program version and source files are in the same commit. A deployment ends no process: a worker reads the source file only when it starts a table, so a new source never interrupts a running load. Only a new program version needs a restart, and that happens between two tables.
@@ -163,6 +175,8 @@ This is not a scheduler. Nothing in the program knows about time.
 **Rejected.** *A container image as the unit of delivery.* The scheduler would have to pull and start images, which is not a given.
 
 ## 15. Source secrets are stored in the target, encrypted for the workers
+
+> **Changed by decision 26.** The encryption and the key pair stay. Named secrets, the commands that set them and the fallback to environment variables on the worker are gone.
 
 **Decision.** A source file names a secret. The connection string is stored in `_rowvioli.secrets`, encrypted as a libsodium sealed box with a public key. Only workers hold the private key, as a file on the load host. The public key is in the jobs repo. If the store has no entry, the environment variable of that name is used.
 
@@ -211,6 +225,8 @@ This is not a scheduler. Nothing in the program knows about time.
 
 ## 19. A worker claims only what it can load
 
+> **Dropped by decision 27.** A worker takes any due table. What it cannot load fails with a reason.
+
 **Decision.** Before claiming, a worker determines the sources for which it has the source file in its checkout and a secret it can decrypt. It passes this list to the claim, which hands out only runs of those sources.
 
 **Why.** After a new source is merged, workers pull it at different moments. Without this rule, a worker that is behind would claim a table of the new source and fail it. With it, adding a source needs no restart and no coordination: each worker starts serving the source as soon as it has both parts.
@@ -220,6 +236,207 @@ It also allows workers that reach only some sources, for example one inside a se
 **Price.** If no worker has both parts, the runs wait without any error. The status view has to show waiting runs that no running worker offers to load.
 
 **Evidence.** None yet. The claim function in experiment 5 has no such filter.
+
+## Second round
+
+The first round was designed from the hardest case: several workers, a scheduler on another machine, a web UI. Every question got another concept as its answer: orders, waiting runs, a run that lists tables, a rule for duplicates, a rule for precedence. The owner stopped this: if that much has to be explained, the design is wrong, and a reader of the repo should think "so that is how it can be done".
+
+The second round therefore looked for ideas that make rules disappear instead of adding them.
+
+## 20. A maximum age per table instead of orders
+
+**Decision.** The definition says how old each table may be (`max_age`). A worker loads whatever is older than allowed, starting with the table that misses its target the most. There are no orders, no queue and no submitters. `rowvioli run` loads what is due once, `rowvioli work` does not stop.
+
+**Why.**
+- A table is either fresh enough or not. Nothing can be submitted twice, so the rule against duplicates and the question which order a run belongs to are gone.
+- A table to be loaded every five minutes next to tables loaded hourly is two lines in the definition. It overtakes the others by itself, because it becomes overdue faster.
+- Single execution and server are the same loop. One ends, the other does not.
+- Load on the source spreads over time instead of arriving on the hour.
+
+**Price.** This reverses the statement of decision 10 that nothing in the program knows about time. A process has to run permanently, or cron starts `rowvioli run` every minute. "Load at six" cannot be said. "Load now" needs the request of decision 23.
+
+**Rejected.**
+- *Orders with waiting runs*, decision 10. A second order for a table that already waits needed either a mapping of orders to runs, an incomplete answer or a double load.
+- *Runs written one by one, with a run that lists the tables of a source.* Simpler than orders, but a table submitted every five minutes queued up behind 200 hourly ones and needed a rule for precedence.
+- *A stored flag "requested" on every table.* Removed the queue but kept the external scheduler.
+
+The idea is not new. Snowflake does the same with `TARGET_LAG` for dynamic tables.
+
+## 21. Tables are named in the definition
+
+**Decision.** The definition lists every table with its key. Nothing scans a source while the system runs. `rowvioli list <source>` prints the tables and keys of a source in the format of the definition. It is a helper for people.
+
+**Why.** Explicit is better than implicit here. The table in the target holds exactly what the definition holds, every change passes a review, and nothing arrives without somebody's doing. `apply` needs no access to any source. A worker has one job: transport.
+
+**Price.** 200 names in a file for a large ERP system. New tables of the source do not arrive by themselves. This reverses the proposal of the first round to let `include = ["dbo.*"]` pick them up.
+
+**Rejected.**
+- *A worker resolves patterns on every load.* The table list would be known only after a scan.
+- *A scan on its own schedule.* A second schedule, and tables that vanished fail until the next scan.
+- *The scheduler scans.* Scanning needs the connector, a route to the source and the decrypted connection. Whoever scans is a load host.
+
+Patterns can be added later as a second job of the worker without changing the model.
+
+## 22. The definition lives in the target, workers are stateless
+
+**Decision.** `rowvioli apply <directory>` writes the definition into the target: one row per source, one row per table. A worker brings its connectors, the address of the target and the private key, and nothing else. It has no checkout and no file that describes a source.
+
+`apply` is idempotent, never touches what the workers experienced, treats the directory as the whole definition and runs in one transaction. What is no longer in the directory is disabled, never deleted.
+
+**Why.** All workers see the same definition at the same moment. The minutes of different states from decision 14 are gone, and so are the checkout, the `git pull` and the question how a worker notices a new program version. A new program version is an ordinary restart of the service. The pipeline that deploys the definition needs access to the target and nothing else.
+
+**Price.** Whoever can write to the definition tables in the target can change what is loaded. Before, only a merge request could. Write access to them should be limited to the role that runs `apply`.
+
+**Rejected.** *A checkout on every load host*, decision 14.
+
+## 23. Facts are stored, the due time is computed
+
+**Decision.** Per table the target stores `max_age`, `loaded_at`, `attempted_at`, `attempts` and `requested_at`. When a table is due is computed from them in a view on every query. Workers and people ask the same view. A load that should not wait is requested by setting `requested_at`.
+
+**Why.** A due time is a derived value, and the concept avoids those elsewhere too: running tables are counted from held locks, not from a counter (decision 11). A changed `max_age` or a changed retry rule takes effect at once. `apply` needs no exception for it. A crashed worker has to write nothing: the attempt was counted when the table was claimed.
+
+`requested_at` is a point in time that nobody ever resets. The formula compares it with the start of the last run, so there is no flag that a worker could clear while somebody sets it.
+
+**Price.** The formula is SQL, not Python. Changing it changes the schema.
+
+**Rejected.**
+- *A stored column "due from"*, set by workers after success and failure and by people for "now". It needed an exception in `apply` for a shortened `max_age`.
+- *"Load now" only as the command `rowvioli run <source>`*, without a column. Whoever wants a load now would need a machine with connectors, and a button in a web UI would be impossible.
+
+## 24. Retry with a growing pause
+
+**Decision.** After a run that did not succeed, the next one starts after one minute, then after 2, 4, 8 minutes and so on, never later than one `max_age`. A success resets the pause. Failed checks, broken sources and crashed workers are treated alike.
+
+**Why.** A short network failure must not postpone a nightly table until the next night. A table that is broken for good must not hammer the source.
+
+**Price.** A table that stays broken reads the source about ten times on the first day.
+
+**Rejected.**
+- *Counting `max_age` from the last attempt.* A nightly table would be retried the next night.
+- *Three attempts for dead runs, none for failed ones*, the first round. Two rules where one is enough, and a failed table waited for the next order.
+
+## 25. One process per run
+
+**Decision.** A worker starts a process for every table it loads.
+
+**Why.** A Python thread cannot be ended, so a hanging run could not end itself after `max_seconds`. A crashing driver would take all tables of the worker with it. With a process per run, process, run and control connection end together.
+
+**Price.** About half a second to start Python and import the libraries, per table.
+
+**Rejected.** *Threads.*
+
+## 26. The connection is a block in the definition, encrypted as a whole
+
+**Decision.** A source has a `connection` block in the definition. Its values may contain `$NAME` placeholders. `apply` fills them in from its environment, encrypts the whole block with the public key and stores one ciphertext per source. The connector receives the decrypted block as a dict and defines its fields. There is one key pair for all workers of a target. The public key is a file next to the definition.
+
+**Why.**
+- Nobody builds a connection string by hand in an environment variable. The secret manager holds plain values such as a token or a password.
+- The address of a source is visible in the definition and its review and still encrypted in the target. Someone who can only write to the target cannot point a password at another server.
+- A source that needs more than one value, such as a URL and a token, needs no special case.
+- A new password is a changed variable and one `apply`. `apply` encrypts everything anew every time, so no command for re-encrypting is needed.
+- The word "secret" no longer fit: the block contains the address, which is not secret.
+
+**Price.** The place where `apply` runs holds every secret in its environment. The ciphertext changes on every `apply` although its content is the same. A wrongly built connection shows only when a table is loaded, as a failure on its row. For test and production with different addresses, the address has to be a placeholder too and is then no longer visible in the file.
+
+**Rejected.**
+- *Named secrets set with `rowvioli secret set`*, decision 15. Whoever sets them has to know the format the connector expects.
+- *The address in the definition in clear, only the password encrypted.* Visible and reviewable, but a writer to the target could redirect a password.
+- *Environment variables on the workers.* Every worker would have to know every password and restart for a new source.
+
+## 27. A connector is one function and trusted code
+
+**Decision.**
+
+```python
+def read(connection: dict, table: str, options: dict) -> Iterator[pyarrow.RecordBatch]:
+```
+
+Nothing else goes in or out. A connector may offer `tables(connection)` for `rowvioli list`. A worker never calls it. Connectors are installed on the workers by the operator, as an optional extra of the core package or as a package of their own. A worker takes any due table. If its connector is missing or the connection cannot be decrypted, the run fails with a reason that names the worker.
+
+**Why.**
+- All data enters through one fixed interface. The connector sees no target, no lock and no other table.
+- A rule that connectors must take the address from the connection only could not be enforced: a connector's code can fetch credentials from anywhere. It is therefore not a rule but a promise for the shipped connectors. Everything else is code the operator trusts.
+- Lists of dicts with guessed types were a known weak spot, because guessed types can flip between two runs. With Arrow only, the connector names its schema.
+- The key is in the definition, so a worker needs no second function to ask the source for it.
+- Without the filter of decision 19, a run never waits silently for a worker that could load it.
+
+**Price.** All workers on one target have to be equipped alike. A worker that reaches only some sources, for example in a separate network zone, would take runs it cannot load. When rolling out, the connector has to be installed on every worker before the source is applied. A connector that reads JSON needs two more lines to name its schema.
+
+**Rejected.**
+- *The claim filter*, decision 19.
+- *A connector as a file in the repo of the definition*, `type = "python"`. The worker has no checkout. Code stored in the target would give everybody with write access to it code execution on the workers.
+
+If network zones are needed later, `rowvioli work --sources erp,crm` is the smallest way there.
+
+## 28. ADBC alone carries the control connection
+
+**Decision.** The core uses the ADBC driver for PostgreSQL for everything on the control connection. There is no second Postgres driver.
+
+**Why.** Lock, TEMP tables and transaction have to be on the same connection, so two drivers side by side are not possible: it is one or the other. Experiment 8 played a complete run through ADBC: the session lock survives COMMIT and ROLLBACK and ends with the connection, the staging table is a TEMP table on that connection, the driver streams, nothing is visible before COMMIT, and errors arrive with their SQLSTATE.
+
+**Price.** The driver wraps every query that returns rows into `COPY`. `SHOW` fails because of that and has to be written as `current_setting(...)`. The driver decides the column types of the staging table.
+
+**Rejected.**
+- *psycopg 3, row by row.* Passes every row through Python objects and takes eight times as long to fill the staging table.
+- *psycopg 3 with pgpq.* As fast as ADBC, but two more dependencies and a type table of our own.
+
+**Evidence.** Experiment 8.
+
+## 29. A total limit, counted from held locks
+
+**Decision.** `max_running` in `_rowvioli.meta` limits the number of tables loading at the same time in a target. When claiming, Postgres counts all held table locks. If the number is reached, nobody gets another one.
+
+**Why.** Until now nothing limited the target: every additional worker added connections. This is the mechanism of `parallel`, counted once over everything, so both limits rest on one mechanism.
+
+**Price.** One counting lock for the whole target instead of one per source. It limits loading tables, not connections: there is one more connection per worker.
+
+**Rejected.** *A connection limit on the database role of the workers.* No code, but a second mechanism and an error path for refused connections.
+
+**Evidence.** None. Experiment 5 counted per source only.
+
+## 30. The target is exactly one database
+
+**Decision.** Mirrors and bookkeeping are in the same database. A worker brings the address of that database. The address may name several nodes of a cluster.
+
+**Why.** Publishing writes the mirror and the bookkeeping in one transaction.
+
+**Price.** Several target databases need their own workers and their own definition each.
+
+**Evidence.** None for an address with several nodes through ADBC.
+
+## 31. Smaller decisions of the second round
+
+Decided by the owner on the proposals in `docs/open-points.md`:
+
+- **The change log is on by default.** Every table with a key gets one unless the definition says `log = false`. The first round proposed the opposite. The price: every mirror has a second table that only ever grows, and nothing prunes it.
+- **A table is stopped through `apply` only.** It is loaded and retried until it is removed from the definition and `apply` disables it. Terminating a run's connection ends that run and nothing more.
+- **`rowvioli apply --check`** reads and checks a definition without writing anything. It runs locally and needs no target.
+- **`work` is part of the first version.** It is the loop of `run` without the end.
+- **A worker asks every two seconds** whether something is due. No `LISTEN`/`NOTIFY`.
+- **Tables of a source are published independently.** Decision 8 stays as it is.
+- **`max_age` is required** at source level.
+- **A changed key stops the run.** If the key in the definition differs from the primary key of the mirror, the run fails and says so. A person drops or renames the old mirror, and the next run builds it anew. This follows decision 17: only additions happen automatically.
+- **Progress is computed, not written.** The status view finds the holder of the table lock in `pg_locks` and its rows so far in `pg_stat_progress_copy`. The row count of the last run serves as the expected number. This is the pattern of decisions 11 and 23. It covers filling the staging table, not the steps after it.
+- **The program creates no database roles.** The README lists the rights each party needs. The operator sets them up.
+
+## Changes of the second round
+
+| Point | First round | Now |
+|---|---|---|
+| When a table is loaded | when somebody creates an order | when it is older than its `max_age`, or requested |
+| Who decides the time | an external scheduler | nobody. The definition states the freshness. |
+| Which tables | patterns, resolved by a worker for every order | named in the definition |
+| Where a worker finds the definition | checkout of a jobs repo, updated by `git pull` | in the target, written by `apply` |
+| Unit of work | order, then one waiting run per table | the table itself |
+| Retry | dead runs up to the third attempt, failed runs not at all | every unsuccessful run, after a growing pause |
+| Slot | a thread | a process |
+| Secrets | named, set one by one, a table of their own | part of the connection block, filled in by `apply` |
+| Connector contract | `tables` and `read`, Arrow batches or lists of dicts | `read`, Arrow batches |
+| Key | primary key of the source unless overridden | named in the definition |
+| A worker that cannot load a table | does not claim it | takes it and fails with a reason |
+| Limits | per source, per worker | per source, per worker, per target |
+| Driver of the control connection | open | ADBC alone |
+| Commands | `init`, `check`, `submit`, `work`, `run`, `key new`, `secret set`, `secret rekey` | `init`, `key new`, `list`, `apply`, `work`, `run` |
 
 ## Not examined
 

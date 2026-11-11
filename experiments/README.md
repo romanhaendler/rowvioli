@@ -28,6 +28,11 @@ docker exec rowvioli-exp psql -U postgres -q -v n=10000000 -f /exp/06_temp_stagi
 docker rm -f rowvioli-exp
 
 uv run --with pynacl python 07_geheimnisse.py     # needs no database
+
+docker run -d --name rowvioli-exp8 -e POSTGRES_PASSWORD=x -p 54408:5432 postgres:16-alpine
+sleep 6
+uv run --with adbc-driver-postgresql --with pyarrow --with "psycopg[binary]" --with pgpq python 08_treiber.py
+docker rm -f rowvioli-exp8
 ```
 
 Several scripts create tables and schemas with the same names. Restart the container or create a fresh database before each script.
@@ -42,7 +47,8 @@ Several scripts create tables and schemas with the same names. Restart the conta
 | `04_harter_abbruch.sh` | When does Postgres release the lock of a client ended with `kill -9`? | at once, or when the running statement ends |
 | `05_vergabe.sql`, `05_vergabe.sh` | Does the per-source limit hold with 12 concurrent workers? Is a dead run retried? | yes, yes |
 | `06_temp_staging.sql` | What does a TEMP staging table cost? Does `ROW(...)` compare by position or by name? | no multi-core compare; by position |
-| `07_geheimnisse.py` | Does sealed-box encryption have the properties the secret store relies on? | yes, all six |
+| `07_geheimnisse.py` | Does sealed-box encryption have the properties the encrypted connections rely on? | yes, all six |
+| `08_treiber.py` | Can ADBC alone carry the control connection, or is a second Postgres driver needed? | ADBC alone can |
 
 ## Known quirks
 
@@ -50,4 +56,6 @@ Several scripts create tables and schemas with the same names. Restart the conta
 - `02` ends with a shared-memory error when the container runs without `--shm-size 1g`. The numbers before it are valid.
 - `03` fails at its final equality check without `--shm-size 1g`. The same check passes in `06`.
 - `05_vergabe.sh` writes many syntax errors to `/tmp/err*`. They come from idle rounds in which a worker got nothing and are harmless.
+- `05` shows the claim of the first round: waiting runs and one counting lock per source. The concept now claims due tables with one counting lock for the whole target.
 - `06` ends with an error on purpose: the last query shows that `ROW(b.*)` does not work when the column order differs.
+- `08` connects from the host to port 54408 and takes the number of rows as an optional argument, one million by default.

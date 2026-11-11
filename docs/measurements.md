@@ -7,7 +7,7 @@ All numbers were taken on 2026-11-11 with the scripts in `experiments/`.
 - PostgreSQL 16 (`postgres:16-alpine`) in a Docker container on macOS, limited to 2 CPUs and 2 to 4 GB of memory.
 - No tuning unless stated. `work_mem` is the default 4 MB in experiments 01 and 02 and 256 MB in 03 and 06.
 - Every number is a single measurement. Expect a spread of well over 10 %.
-- Everything runs inside the database. Reading from a source, the network and the COPY from a client are **not** included. "Filling the staging table" is an `INSERT ... SELECT` inside Postgres and only stands in for the write cost of a COPY.
+- Experiments 1 to 6 run inside the database. Reading from a source, the network and the COPY from a client are **not** included there. "Filling the staging table" is an `INSERT ... SELECT` inside Postgres and only stands in for the write cost of a COPY. Experiment 8 is the exception: it fills the staging table from a Python client on the same machine.
 - The test table has 16 columns (integers, decimals, dates, short texts), shaped after the `lineitem` table of the `hpdl` benchmark. A change set is 1 % updated, 0.1 % deleted and 0.1 % inserted rows.
 
 ## 1. Compare and publish in one transaction
@@ -87,7 +87,7 @@ Experiment `05_vergabe.sql` and `05_vergabe.sh`. Two sources with `parallel` 4 a
 | Tables with exactly one successful run | 50 of 50 |
 | The killed worker's table | recorded as dead, loaded by another worker as attempt 2 |
 
-Not tested: the limit of three attempts, listing tables from an order, and `submit --wait`.
+This is the claim of the first round: it hands out waiting runs and uses one counting lock per source. The second round claims due tables with one counting lock for the whole target and adds a total limit (decisions 20 and 29). That form is not tested. What the experiment still shows is the mechanism: limits counted from held locks hold under concurrency, and a run whose lock is gone is recognised.
 
 ## 6. Staging as a TEMP table
 
@@ -110,7 +110,7 @@ The same script shows how `ROW(...)` compares:
 
 ## 7. Encrypting secrets
 
-Experiment `07_geheimnisse.py`, PyNaCl 1.6.2. Not a timing but a check of the properties the secret store relies on.
+Experiment `07_geheimnisse.py`, PyNaCl 1.6.2. Not a timing but a check of the properties the encrypted connections rely on. The experiment encrypts a single named value. The design now encrypts a whole connection block under the name of its source (decision 26).
 
 | Property | Result |
 |---|---|
@@ -122,6 +122,36 @@ Experiment `07_geheimnisse.py`, PyNaCl 1.6.2. Not a timing but a check of the pr
 | Another private key | decryption fails with `CryptoError` |
 
 A 54-byte plaintext becomes a 102-byte ciphertext.
+
+## 8. The driver of the control connection
+
+Experiment `08_treiber.py`, adbc-driver-postgresql 1.13.0, pyarrow 26.0.1, psycopg 3.3.8, Python client on macOS against `postgres:16-alpine` in Docker without limits. The question: can ADBC alone do everything a run needs on one connection, or is a second Postgres driver necessary?
+
+Each variant plays two complete runs on a single connection: take a session-level advisory lock, fill a TEMP staging table with 10⁶ rows of 8 columns (integer, text, decimal, timestamp with time zone, date, boolean, float, a column of nulls), compute the diff, publish in a transaction. The second run changes 1 % of the rows. A second connection watches.
+
+| Check | ADBC alone | psycopg 3, row by row | psycopg 3 with pgpq |
+|---|---|---|---|
+| Session lock taken, visible in `pg_locks` | yes | yes | yes |
+| Staging table is a TEMP table, invisible to the second connection | yes | yes | yes |
+| Before COMMIT the second connection sees the old state, after it the new one | yes | yes | yes |
+| Lock still held after COMMIT and after ROLLBACK | yes | yes | yes |
+| ROLLBACK leaves the mirror unchanged | yes | yes | yes |
+| A unique violation arrives with SQLSTATE 23505, connection usable afterwards | yes | yes | yes |
+| Lock gone 0.3 s after closing the connection | yes | yes | yes |
+| Filling the staging table, 10⁶ rows | 0.5 s | 4.1 s | 0.5 s |
+| Publishing the initial load, 10⁶ rows | 1.8 s | 1.5 s | 1.6 s |
+| Computing the diff at 1 % changes | 2.3 s | 1.0 s | 1.0 s |
+
+What the numbers say:
+
+- **ADBC can carry the control connection alone.** Lock, TEMP tables and transaction have to be on one connection, so a second driver could not share the work anyway.
+- **ADBC streams.** A query on `pg_stat_progress_copy` from the second connection, issued when the reader had handed over half of the batches, found 485,000 rows already processed by the server.
+- **ADBC wraps every query that returns rows into `COPY (...) TO STDOUT`.** `SHOW lock_timeout` fails with a syntax error for that reason. `SELECT current_setting('lock_timeout')` works.
+- **ADBC decides the column types of the staging table.** `decimal128(12, 2)` becomes `numeric` without precision. The comparison is not affected.
+- **psycopg row by row** passes every value through a Python object and takes eight times as long to fill the staging table.
+- **psycopg with pgpq** is as fast as ADBC and needs two more dependencies and a type table from Arrow to Postgres of our own.
+
+Limitations: one measurement each. The diff at 1 % changes took 2.3 s through ADBC against 1.0 s through psycopg, which was not investigated. Not tested: a Linux client, a real network between client and server, the row counts the driver itself reports, and a target address with several nodes.
 
 ## Reference: hpdl
 
@@ -148,7 +178,9 @@ The bottleneck in `hpdl` was never the Python worker: source CPU on unchanged ru
 | Consumers never see an empty table | follows from one transaction and MVCC. Not tested with a concurrent reader. |
 | The row comparison scales with the amount of data, not abruptly with the column count | experiment 2 |
 | The per-source limit holds under concurrency | experiment 5 |
-| A dead run is detected and retried | experiment 5 |
+| A dead run is detected | experiment 5. The retry after a growing pause is not tested. |
+| One driver can do everything a run needs on one connection | experiment 8 |
+| Nothing is visible to another connection before the COMMIT | experiment 8, without a reader running alongside |
 | A killed process releases its lock | experiment 4 |
-| Secrets cannot be read without the private key, and tampering is detected | experiment 7 |
+| Connections cannot be read without the private key, and tampering is detected | experiment 7, with a single value in place of a block |
 | A killed process cannot publish | follows from the transaction ending with the connection. Not tested as such. |

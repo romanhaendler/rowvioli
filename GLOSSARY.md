@@ -4,40 +4,49 @@ The binding vocabulary of the concept. If a term changes, it changes here and in
 
 | Term | Meaning |
 |---|---|
-| **Source** | A source system with a connection and a selection of tables. One file `sources/<name>.toml` in the jobs repo. |
+| **Source** | A source system with a connection and a list of tables. One file `sources/<name>.toml` in the definition. |
 | **Source table** | A table, file or endpoint of the source that a connector delivers as rows. |
+| **Target** | The one PostgreSQL database that holds the mirrors and the bookkeeping. The word is used for nothing else. |
 | **Target table** | The table in the target that exactly one source table is loaded into. It belongs to exactly one source. |
 | **Mirror** | The content of the target table: what the source table looked like at the last successful run. |
-| **Change log** | Optional second table `<target table>__log`. Every run appends what was inserted (`I`), updated (`U`) or deleted (`D`). Nothing is ever removed from it. |
-| **Key** | The columns that identify a row. Defaults to the primary key of the source. |
-| **Staging table** | TEMP table of a run holding the current content of the source table. Visible only on the run's connection. |
-| **Diff** | TEMP table of a run holding the rows that differ between staging table and mirror, each marked `I`, `U` or `D`. |
-| **Order** | The request to load a source or a single table. One row in `_rowvioli.orders`. |
-| **Run** | Loading one table for one order. One row in `_rowvioli.runs`. |
-| **Run status** | `waiting`, `running`, `ok`, `failed` or `dead`. |
-| **Attempt** | Counter of a run. After a dead run, a new waiting run is created with the next attempt, up to the third. |
-| **Worker** | A process that claims waiting runs and executes them. |
+| **Change log** | Second table `<target table>__log`, kept for every table with a key unless switched off. Every run appends what was inserted (`I`), updated (`U`) or deleted (`D`). Nothing is ever removed from it. |
+| **Key** | The columns that identify a row. Named in the definition. |
+| **Definition** | The directory of source files plus the public key. It names every table. `apply` writes it into the target. |
+| **Connection** | Everything a connector needs to reach its source: address, user, password or token. A block in the definition, stored in the target as one ciphertext per source. |
+| **Secret** | A single value that must not be in the definition, such as a password or a token. It comes from the environment when `apply` runs and replaces a `$NAME` placeholder in a connection. |
+| **Worker key** | The key pair for connections. The public key is a file next to the definition and encrypts. The private key is a file on each worker and decrypts. |
+| **Maximum age** | `max_age`: how old a mirror may get. Set per source or per table. |
+| **Age** | The time since a table was last published. |
+| **Due** | A table is due when the time computed from its facts has come: at once if never attempted, at the request if one came after the last run began, one maximum age after the last success, or one pause after the last unsuccessful run. Computed on every query, never stored. |
+| **Pause** | The wait after a run that did not succeed: one minute, then doubling, never longer than the maximum age. |
+| **Request** | Asking for a load now by setting `requested_at` on a table. |
+| **Run** | Loading one table once, in a process of its own. One row in `_rowvioli.runs`. |
+| **Run status** | `running`, `ok`, `failed` or `dead`. |
+| **Table status** | `new`, `loading`, `ok` or `failed`. Computed in the view `_rowvioli.status`. |
+| **Attempts** | Counter on a table: runs since the last success. |
+| **Worker** | A process that looks for due tables and starts a run for each. It is stateless and brings only its connectors, the address of the target and the private key. |
 | **Slot** | One table a worker can load at a time. The number of slots per worker is `--slots`. |
 | **Control connection** | The one connection to the target on which a run does everything: hold the lock, fill the staging table, check, compare, publish. |
 | **Table lock** | A session-level advisory lock in Postgres per target table, held on the control connection. It ends with the connection. |
-| **Counting lock** | A short lock per source that makes sure only one worker at a time counts and claims. |
-| **Claim** | The step in which a worker detects dead runs, counts the running tables of a source and takes the table lock of the next waiting run. |
-| **Publish** | The one transaction that writes the diff to the change log, applies it to the mirror and marks the run `ok`. |
+| **Counting lock** | A short lock that makes sure only one worker at a time counts and claims. |
+| **Claim** | The step in which a run counts the running tables, takes the table lock of the most overdue table and counts the attempt. |
+| **Staging table** | TEMP table of a run holding the current content of the source table. Visible only on the run's connection. |
+| **Diff** | TEMP table of a run holding the rows that differ between staging table and mirror, each marked `I`, `U` or `D`. |
+| **Publish** | The one transaction that writes the diff to the change log, applies it to the mirror and records the success. |
 | **Dead** | A run that is recorded as `running` while nobody holds its table lock. |
-| **Submitter** | Whoever creates an order: a scheduler, a web UI or a person. |
-| **Jobs repo** | The Git repository with source files, custom connectors, the schedule and the pinned program version. |
-| **Load host** | A machine with a checkout of the jobs repo, an environment file, drivers and the program. |
-| **Secret** | A named value a source needs to connect, usually a connection string with a password. |
-| **Secret store** | The table `_rowvioli.secrets` in the target. It holds secrets as ciphertext only. |
-| **Worker key** | The key pair of the secret store. The public key is in the jobs repo and encrypts. The private key is a file on each load host and decrypts. |
-| **Connector** | Two functions, `tables` and `read`, that attach one kind of source. |
-| **Chunk** | A portion of a few thousand rows that a connector delivers and that is written to the staging table as a whole. |
+| **Connector** | One function, `read`, that attaches one kind of source. Installed on the workers by the operator. |
+| **Chunk** | A portion of a few thousand rows that a connector delivers as an Arrow batch and that is written to the staging table as a whole. |
 
 ## Terms deliberately avoided
 
 | Not | But | Reason |
 |---|---|---|
-| Job | source, order or run | "Job" meant all three at different points in the discussion. |
+| Job | source, table or run | "Job" meant all three at different points in the discussion. |
+| Order, queue, waiting | due | Nothing waits in a queue. A table is due or it is not. |
+| Schedule, scheduler | maximum age | The definition says how old, not when. |
+| Scan, pattern | list of tables | Tables are named. Nothing is discovered while the system runs. |
+| Secret store | connection | There is no table of secrets. A source has one encrypted connection. |
+| Destination | address of the source | "Target" means the Postgres database only. |
 | Mode, load strategy | (none) | There is only one flow. |
 | Hash | (none) | Rows are compared column by column in the target. |
 | Heartbeat, lease, fencing | table lock | The connection itself is the sign of life. |
