@@ -55,6 +55,7 @@ def test_a_run_that_exceeds_max_seconds_is_ended_and_the_status_shows_why(ready)
 def test_one_slot_loads_the_tables_in_the_order_of_how_far_they_miss_their_maximum_age(ready):
     for name in ("a", "b", "c"):
         ready.source(f"create table {name} (id int primary key)")
+        ready.source(f"insert into {name} values (1)")
     apply(ready, source(ready, "erp", "parallel = 3", '"public.a" = { key = ["id"] }\n'
                         '"public.b" = { key = ["id"], max_age = "10m" }\n"public.c" = { key = ["id"] }'))
     ok(ready)
