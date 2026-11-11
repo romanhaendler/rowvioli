@@ -1,0 +1,53 @@
+# Experiments
+
+The scripts behind the numbers in `docs/measurements.md`. Each runs in a throwaway Postgres and needs only Docker.
+
+The scripts are kept exactly as they were run. Their comments, output and status values are German, and they use the schema `_etl` where the concept says `_rowvioli`:
+
+| In the scripts | In the docs |
+|---|---|
+| `wartet`, `läuft`, `ok`, `gestorben` | `waiting`, `running`, `ok`, `dead` |
+| `lauf`, `auftrag`, `quelle_id`, `tabelle_id`, `versuch` | `run`, `order_id`, source, table, `attempt` |
+| `_etl` | `_rowvioli` |
+
+## Running them
+
+```sh
+cd rowvioli/experiments
+docker run -d --name rowvioli-exp --cpus 2 --memory 4g --shm-size 1g \
+  -e POSTGRES_PASSWORD=x -v "$PWD":/exp:ro postgres:16-alpine -c work_mem=256MB
+sleep 6
+
+docker exec rowvioli-exp psql -U postgres -q -v n=1000000 -f /exp/01_veroeffentlichen.sql
+docker exec rowvioli-exp psql -U postgres -q -f /exp/02_breite_tabelle.sql
+docker exec rowvioli-exp psql -U postgres -q -v n=10000000 -f /exp/03_unterschiede_vorab.sql
+docker exec rowvioli-exp sh /exp/04_harter_abbruch.sh
+docker exec rowvioli-exp psql -U postgres -q -f /exp/05_vergabe.sql && docker exec rowvioli-exp sh /exp/05_vergabe.sh
+docker exec rowvioli-exp psql -U postgres -q -v n=10000000 -f /exp/06_temp_staging.sql
+
+docker rm -f rowvioli-exp
+
+uv run --with pynacl python 07_geheimnisse.py     # needs no database
+```
+
+Several scripts create tables and schemas with the same names. Restart the container or create a fresh database before each script.
+
+## What each script shows
+
+| Script | Question | Result |
+|---|---|---|
+| `01_veroeffentlichen.sql` | How long do compare and apply take in one transaction? | 1.9 s at 10⁶ rows, 59 s at 10⁷ |
+| `02_breite_tabelle.sql` | Does the row comparison hold up at 900 columns? | 5.7 s for 100,000 rows |
+| `03_unterschiede_vorab.sql` | What is gained by computing the diff before the transaction? | 26 to 40 s compare, 15 s transaction |
+| `04_harter_abbruch.sh` | When does Postgres release the lock of a client ended with `kill -9`? | at once, or when the running statement ends |
+| `05_vergabe.sql`, `05_vergabe.sh` | Does the per-source limit hold with 12 concurrent workers? Is a dead run retried? | yes, yes |
+| `06_temp_staging.sql` | What does a TEMP staging table cost? Does `ROW(...)` compare by position or by name? | no multi-core compare; by position |
+| `07_geheimnisse.py` | Does sealed-box encryption have the properties the secret store relies on? | yes, all six |
+
+## Known quirks
+
+- `01` was measured with the default `work_mem = 4MB`, without the `-c work_mem=256MB` switch from the call above.
+- `02` ends with a shared-memory error when the container runs without `--shm-size 1g`. The numbers before it are valid.
+- `03` fails at its final equality check without `--shm-size 1g`. The same check passes in `06`.
+- `05_vergabe.sh` writes many syntax errors to `/tmp/err*`. They come from idle rounds in which a worker got nothing and are harmless.
+- `06` ends with an error on purpose: the last query shows that `ROW(b.*)` does not work when the column order differs.
