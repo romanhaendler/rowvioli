@@ -1,0 +1,19 @@
+[project]
+name = "rowvioli"
+version = "0.0.0"
+description = "Throwaway prototype of the rowvioli freshness model"
+requires-python = ">=3.11"
+dependencies = ["pyarrow", "adbc-driver-postgresql", "pynacl"]
+
+[project.scripts]
+rowvioli = "rowvioli.cli:main"
+
+[dependency-groups]
+dev = ["pytest", "psycopg[binary]"]
+
+[build-system]
+requires = ["uv_build>=0.8,<0.12"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

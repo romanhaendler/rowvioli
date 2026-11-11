@@ -19,3 +19,16 @@ Spec: `.scratch/prototype/spec.md`. Behaviour reference: `README.md`, `GLOSSARY.
 - [ ] `init` twice leaves the same schema, `meta` holds a schema version and `max_running` = 20.
 - [ ] The view `status` returns `new` / `ok` / `failed` (`worker lost` without a reason) and the `due_at` and pause rules of the spec for rows inserted by the test with SQL (spec tests 11 pause arithmetic, 20, 22 as far as possible without a run).
 - [ ] `key new` writes both files, private one with mode 600.
+
+## Comments
+
+Deviations from README "Target schema" made by the implementation (impl-01):
+
+- `sources` has three columns the README does not list: `target_schema`, `max_delete_share`, `max_seconds`. The README's list has only `options` for them, but `options` is what goes to the connector unchanged, so rowvioli's own settings needed columns.
+- `tables.source` holds the source's name, not its id, because the README's request example filters `WHERE source = 'erp'`. The table lock uses `sources.id`, so the claim and the view join on the name.
+- `meta` is one row with the columns `schema_version` and `max_running`, not key/value pairs.
+- The view `status` has more columns than the README names (age, due_at, status): also `id`, `source_id` (the two lock numbers), `source`, `source_table`, `target_table` qualified with the schema, `max_age`, `loaded_at`, `attempted_at`, `requested_at`, `attempts`, `reason`. It shows only enabled tables of enabled sources.
+- The exponent of the pause is capped at 30 doublings, so a table with very many attempts cannot overflow the interval. The cap at `max_age` applies long before.
+- `init` drops and recreates the view each time. The tables are created only if missing and are never migrated.
+- `key new` writes `worker.key` and `worker.pub` into the current directory, both base64, and refuses to overwrite an existing file. The README does not name the private key file or say what happens to an existing one.
+- `key_id` exists in `sources`, but nothing fills it yet.
