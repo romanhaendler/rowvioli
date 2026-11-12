@@ -3,8 +3,6 @@ from datetime import timedelta
 
 import pytest
 
-pytestmark = pytest.mark.skip(reason="ticket 02: apply")
-
 ERP = """
 [erp]
 type = "postgres"
@@ -35,8 +33,8 @@ def apply(rv, files, env=ENV):
 
 
 def tables(rv):
-    return rv.target("""select t.id, t.source, source_table, target_table, key, max_age, t.enabled,
-                               loaded_at, attempted_at, attempts, requested_at, reason
+    return rv.target("""select t.id, t.source, source_table, target_table, key, max_age, log, max_delete_share,
+                               max_seconds, options, t.enabled, loaded_at, attempted_at, attempts, requested_at, reason
                           from _rowvioli.tables t order by source_table""")
 
 
@@ -56,8 +54,7 @@ def test_apply_twice_gives_the_same_rows_and_keeps_what_the_workers_experienced(
     assert apply(ready, {"erp.toml": ERP}).returncode == 0
     ready.target("""update _rowvioli.tables set loaded_at = '2026-01-01 00:00Z', attempted_at = '2026-01-01 00:05Z',
                            attempts = 2, requested_at = '2026-01-01 00:06Z', reason = 'zero rows'""")
-    sources = "select id, name, type, target_schema, parallel, max_delete_share, max_seconds, key_id, enabled " \
-              "from _rowvioli.sources"
+    sources = "select id, name, type, target_schema, parallel, options, key_id, enabled from _rowvioli.sources"
     before = tables(ready), ready.target(sources)
     r = apply(ready, {"erp.toml": ERP})
     assert r.returncode == 0, r.stderr

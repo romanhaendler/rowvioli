@@ -1,7 +1,7 @@
 """The commands: arguments, the answer on stdout, the exit code."""
 import argparse
 
-from . import seal, target
+from . import apply, definition, seal, target
 
 
 def main():
@@ -25,7 +25,12 @@ def main():
         target.connect(init=True)
     elif a.command == "key":
         seal.new_key()
+    elif a.command == "apply" and a.check:
+        definition.read(a.directory)
+        print("the definition is valid")
+    elif a.command == "apply":
+        apply.apply(a.directory, a.key)
     else:
-        if a.command in ("apply", "run", "work") and not getattr(a, "check", False):
+        if a.command in ("run", "work"):
             target.connect()
         raise SystemExit(f"rowvioli {a.command}: not built yet")

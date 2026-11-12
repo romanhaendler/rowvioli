@@ -38,13 +38,13 @@ def sql(conn, query, params=None):
         return c.fetchall() if c.description else None
 
 
-def transaction(conn, script):
-    """Runs the statements of a script (separated by `;` at a line end) in one transaction."""
+def transaction(conn, script, params=None):
+    """Runs the statements of a script (separated by `;` at a line end) in one transaction, each with params."""
     sql(conn, "BEGIN")
     try:
         for statement in script.split(";\n"):
             if statement.strip():
-                sql(conn, statement)
+                sql(conn, statement, params)
         sql(conn, "COMMIT")
     except BaseException:
         sql(conn, "ROLLBACK")
