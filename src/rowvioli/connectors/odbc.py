@@ -11,10 +11,10 @@ PLAIN = re.compile(r"\w+(\.\w+)*")
 def read(connection, table, options):
     if not PLAIN.fullmatch(table):
         raise Exception(f"{table}: an odbc table name is dotted parts of letters, digits and underscores")
+    # shortcut: 1 MiB per text value, a longer one fails the run; when sources hold more, add an option
     return arrow_odbc.read_arrow_batches_from_odbc(
         "SELECT * FROM " + table, connection["string"],
-        max_bytes_per_batch=16 * 2**20,
-        max_text_size=2**20)  # shortcut: 1 MiB per text value, a longer one fails the run; when sources hold more, add an option.into_pyarrow_record_batch_reader()
+        max_bytes_per_batch=16 * 2**20, max_text_size=2**20).into_pyarrow_record_batch_reader()
 
 
 def tables(connection):
