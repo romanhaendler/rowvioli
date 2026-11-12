@@ -12,4 +12,4 @@ def connector(type, where=""):
     try:
         return next(iter(found)).load()
     except (ImportError, OSError) as e:  # a shipped connector without its extra, or without the library it loads
-        raise SystemExit(f'connector "{type}" is not installed{where}: {e}')
+        raise SystemExit(f'connector "{type}" cannot be loaded{where}: {e}')

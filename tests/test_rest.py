@@ -12,6 +12,10 @@ READINGS = [
     [{"station": "b", "time": "2026-01-01T11:00:00+01:00", "day": "2026-01-02", "ok": False, "n": 2}],
     [{"station": "c", "time": "2026-01-01T12:00:00Z", "temp": 3.0, "day": "2026-01-03", "ok": True, "n": 3}],
 ]
+BAD = {"/bad": [{"station": "a", "n": "abc"}], "/fraction": [{"station": "a", "n": 1.5}],
+       "/bool-int": [{"station": "a", "n": True}], "/bool-float": [{"station": "a", "temp": True}],
+       "/zone": [{"station": "a", "at": "2026-01-01T10:00:00Z"}], "/html": "<html>no json</html>",
+       "/int-float": [{"station": "a", "temp": 2}]}
 COLUMNS = ('{ station = "text", time = "timestamptz", temp = "float8", day = "date", ok = "bool", n = "int8", '
            'at = "timestamp" }')
 
@@ -37,11 +41,11 @@ def api(rv):
                 code = 401
             elif url.path == "/object":
                 body = {"data": []}
-            elif url.path == "/bad":
-                body = [{"station": "a", "n": "abc"}]
+            elif url.path in BAD:
+                body = BAD[url.path]
             self.send_response(code)
             self.end_headers()
-            self.wfile.write(json.dumps(body).encode())
+            self.wfile.write(body.encode() if isinstance(body, str) else json.dumps(body).encode())
 
         def log_message(self, *args):
             pass
@@ -116,11 +120,23 @@ def test_a_refusal_fails_the_run_with_status_and_path_and_no_token(api):
     ('path = "/open", columns = { station = "wide" }', "text"),
     ('path = "/bad", columns = { station = "text", n = "int8" }', "n"),
     ('path = "/object", columns = { station = "text" }', "array"),
+    ('path = "/html", columns = { station = "text" }', "array of flat objects"),
+    ('path = "/fraction", columns = { station = "text", n = "int8" }', "n"),
+    ('path = "/bool-int", columns = { station = "text", n = "int8" }', "n"),
+    ('path = "/bool-float", columns = { station = "text", temp = "float8" }', "temp"),
+    ('path = "/zone", columns = { station = "text", at = "timestamp" }', "at"),
+    ('columns = { station = "text" }', "option path"),
+    ('path = "/open"', "option columns"),
 ])
 def test_bad_types_values_and_responses_fail_the_run_naming_the_cause(api, options, cause):
     r, _ = load(api, f'a = {{ key = ["station"], {options} }}')
     assert r.returncode == 1
     assert cause in reason(api)
+
+
+def test_an_int_into_float8_is_fine(api):
+    r, _ = load(api, 'a = { key = ["station"], path = "/int-float", columns = { station = "text", temp = "float8" } }')
+    assert r.returncode == 0, r.stdout
 
 
 def test_list_says_the_connector_cannot_list_tables(api):

@@ -16,37 +16,54 @@ def _timestamptz(text):
     return t if t.tzinfo else t.replace(tzinfo=timezone.utc)  # shortcut: no zone means UTC, when sources differ add an option
 
 
-PARSE = {"date": date.fromisoformat, "timestamp": datetime.fromisoformat, "timestamptz": _timestamptz}
+def _timestamp(text):
+    t = datetime.fromisoformat(text)
+    if t.tzinfo:
+        raise ValueError(f"{text} carries a zone, use timestamptz")
+    return t
+
+
+PARSE = {"date": date.fromisoformat, "timestamp": _timestamp, "timestamptz": _timestamptz}
 
 
 def read(connection, table, options):
+    for option in ("path", "columns"):
+        if option not in options:
+            raise Exception(f"{table}: the option {option} is missing")
     columns = options["columns"]
     for name, type in columns.items():
         if type not in TYPES:
             raise Exception(f"{table}: column {name}: {type} is not a type, use {', '.join(TYPES)}")
     schema = pa.schema([(name, TYPES[type]) for name, type in columns.items()])
     headers = {"Authorization": f"Bearer {connection['token']}"} if connection.get("token") else {}
-    path, page = options["path"], 1
+    path, paged, page = options["path"], "page" in options, 1
     while True:
-        response = httpx.get(connection["url"] + path, params={options["page"]: page} if "page" in options else None,
+        response = httpx.get(connection["url"] + path, params={options["page"]: page} if paged else None,
                              headers=headers)
-        if response.status_code != 200:
+        if not response.is_success:
             raise Exception(f"{table}: {path} answered {response.status_code}")
-        rows = response.json()
+        try:
+            rows = response.json()
+        except ValueError:
+            rows = None
         if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
             raise Exception(f"{table}: {path} must answer a JSON array of flat objects")
-        if "page" in options and not rows:
+        if paged and not rows:
             return
         arrays = []
         for name, type in columns.items():
             try:
                 values = [r.get(name) for r in rows]
+                for v in values:  # pyarrow would truncate 1.5 and take True for a number
+                    if (type == "int8" and v is not None and v.__class__ is not int) or (
+                            type == "float8" and v.__class__ is bool):
+                        raise ValueError(f"{v!r} does not fit")
                 parse = PARSE.get(type)
                 arrays.append(pa.array([None if v is None else parse(v) for v in values] if parse else values,
                                        TYPES[type]))
             except Exception as e:
                 raise Exception(f"{table}: column {name} is not {type}: {e}") from None
         yield pa.RecordBatch.from_arrays(arrays, schema=schema)
-        if "page" not in options:
+        if not paged:
             return
         page += 1

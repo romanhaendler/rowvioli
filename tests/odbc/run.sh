@@ -5,5 +5,5 @@
 set -e
 cd "$(dirname "$0")/../.."
 docker build -q -t rowvioli-odbc-test tests/odbc
-docker run --rm -e ROWVIOLI_TEST_HOST=host.docker.internal -v /var/run/docker.sock:/var/run/docker.sock \
+docker run --rm --add-host=host.docker.internal:host-gateway -e ROWVIOLI_TEST_HOST=host.docker.internal -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$PWD:/repo" -w /repo rowvioli-odbc-test uv run --locked pytest -p no:cacheprovider tests/test_odbc.py "$@"
