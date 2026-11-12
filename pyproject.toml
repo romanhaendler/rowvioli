@@ -15,7 +15,7 @@ file = ["duckdb"]
 rowvioli = "rowvioli.cli:main"
 
 [dependency-groups]
-dev = ["pytest", "psycopg[binary]"]
+dev = ["pytest", "psycopg[binary]", "rowvioli[file]"]
 
 [build-system]
 requires = ["uv_build>=0.8,<0.12"]
@@ -26,3 +26,4 @@ testpaths = ["tests"]
 
 [project.entry-points."rowvioli.connectors"]
 postgres = "rowvioli.connectors.postgres"
+file = "rowvioli.connectors.file"
