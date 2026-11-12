@@ -21,7 +21,7 @@ These follow from the design or from documentation and were not tried out. The p
 From the second round:
 
 - **A target address with several nodes** through ADBC, and the behaviour during a failover.
-- **The quickstart and CI on Linux.** The tests and the quickstart are set up to run on Linux in CI (`.github/workflows/tests.yml`), but the repo has no remote, so that has never run. The whole suite has passed in a Linux container on an arm64 Mac (`tests/odbc/run.sh tests`), so ADBC works from a Linux client.
+- **The quickstart and CI on Linux.** The tests and the quickstart are set up to run on Linux in CI (`.github/workflows/tests.yml`), but the repo has no remote, so that has never run. The whole suite has passed in a Linux container on an arm64 Mac (`tests/odbc/run.sh tests`), so ADBC works from a Linux client. The quickstart has passed with Docker Desktop on the same Mac.
 
 Unchanged from the first round:
 
