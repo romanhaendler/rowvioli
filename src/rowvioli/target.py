@@ -19,7 +19,7 @@ NO_SCHEMA = "the target has no schema _rowvioli: run `rowvioli init` first"
 def connect(init=False, versioned=True):
     """Opens the control connection and refuses a target without `_rowvioli` or with another schema version.
     With init=True a missing `_rowvioli` is created instead. With versioned=False only the status view must
-    exist: a role that may only read it cannot read `meta` (README "Who may do what")."""
+    exist: a role that may only read it cannot read `meta` (README "The target")."""
     url = os.environ.get("ROWVIOLI_TARGET_URL")
     if not url:
         raise SystemExit("ROWVIOLI_TARGET_URL is not set")

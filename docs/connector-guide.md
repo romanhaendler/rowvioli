@@ -49,7 +49,7 @@ rowvioli status
 The commands were run with PostgreSQL behind the open psqlODBC driver. SQL Server and Informix are untested. Check these four things on your source before you rely on it:
 
 - **Types.** After the first run, look at the target table (`\d raw_erp.customers` in psql). Decimals should arrive as `numeric`, dates as `date`, timestamps as `timestamp`. Look closely at SQL Server's `datetime2` and `datetimeoffset` and at Informix `DATETIME` and `MONEY`.
-- **Unbounded text.** arrow-odbc needs a size limit for columns like `varchar(max)`, and the connector sets none. What happens with such a column is untested.
+- **Unbounded text.** arrow-odbc needs a size limit for columns like `varchar(max)`; the connector allows 1 MiB per value, and a longer one fails the run. Neither is tested.
 - **`list`.** It reads `INFORMATION_SCHEMA`. SQL Server has it, Informix does not. Without it, write the tables block by hand.
 - **Error messages.** Apply once with a wrong password, run, and search the output of `run` and `status` for it. It should not be there: rowvioli removes `PWD=` and `Password=` from every reason, whatever the driver quotes. You see whether your driver quotes more than that.
 

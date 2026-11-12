@@ -57,14 +57,16 @@ rowvioli/
     definition.py       read and check the source files, fill in placeholders
     apply.py            write the definition into the target
     seal.py             encrypt and decrypt connections
-    target.py           control connection: keepalive, lock, COPY, SQL
+    target.py           control connection: keepalive, schema version, SQL
     load.py             one run: staging, checks, diff, publishing
     work.py             the loop: look for claimable tables, start a process per run
     contract.py         connector contract
     connectors/
       postgres.py
       file.py
-    sql/                schema with the status view, claim, diff
+      odbc.py
+      rest.py
+    sql/                schema with the status view, what is claimable, apply
   tests/                against a real Postgres
   bench/                reproduces the measurements
   examples/
