@@ -78,9 +78,7 @@ The program. A throwaway prototype (`.scratch/prototype/`, code on branch `proto
 - `list`, `apply --check`, decisions 32 to 35,
 - adding a new column to the mirror, `log = false`, table-level `max_delete_share` and `max_seconds`, connector options,
 - the `odbc`, `file` and `rest` connectors,
-- the web UI,
-- the example definition,
-- the benchmark.
+- the web UI.
 
 ## Not examined
 
