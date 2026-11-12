@@ -245,6 +245,8 @@ The second round therefore looked for ideas that make rules disappear instead of
 
 ## 20. A maximum age per table instead of orders
 
+> **Changed by decision 36.** A table may name times of day as well.
+
 **Decision.** The definition says how old each table may be (`max_age`). A worker loads whatever is older than allowed, starting with the table that misses its target the most. There are no orders, no queue and no submitters. `rowvioli run` loads what is due once, `rowvioli work` does not stop.
 
 **Why.**
@@ -253,7 +255,7 @@ The second round therefore looked for ideas that make rules disappear instead of
 - Single execution and server are the same loop. One ends, the other does not.
 - Load on the source spreads over time instead of arriving on the hour.
 
-**Price.** This reverses the statement of decision 10 that nothing in the program knows about time. A process has to run permanently, or cron starts `rowvioli run` every minute. "Load at six" cannot be said. "Load now" needs the request of decision 23.
+**Price.** This reverses the statement of decision 10 that nothing in the program knows about time. A process has to run permanently, or cron starts `rowvioli run` every minute. "Load at six" could not be said until decision 36. "Load now" needs the request of decision 23.
 
 **Rejected.**
 - *Orders with waiting runs*, decision 10. A second order for a table that already waits needed either a mapping of orders to runs, an incomplete answer or a double load.
@@ -291,7 +293,7 @@ Patterns can be added later as a second job of the worker without changing the m
 
 ## 23. Facts are stored, the due time is computed
 
-**Decision.** Per table the target stores `max_age`, `loaded_at`, `attempted_at`, `attempts` and `requested_at`. When a table is due is computed from them in a view on every query. Workers and people ask the same view. A load that should not wait is requested by setting `requested_at`.
+**Decision.** Per table the target stores `max_age`, the load times (`at`) and their time zone (`timezone`) as definition, and `loaded_at`, `attempted_at`, `attempts` and `requested_at` as facts. When a table is due is computed from them in a view on every query. Workers and people ask the same view. A load that should not wait is requested by setting `requested_at`.
 
 **Why.** A due time is a derived value, and the concept avoids those elsewhere too: running tables are counted from held locks, not from a counter (decision 11). A changed `max_age` or a changed retry rule takes effect at once. `apply` needs no exception for it. A crashed worker has to write nothing: the attempt was counted when the table was claimed.
 
@@ -483,6 +485,24 @@ On 2026-11-12 a throwaway prototype tried out the model of the second round as a
 **Why.** The README said that a schema belongs to exactly one source, but nothing checked it, so the mirrors of two sources could collide. One check in `apply` turns the rule into a fact.
 
 **Price.** Two sources cannot share a schema even when their table names would never collide.
+
+## Fourth round: load times
+
+On 2026-11-12 the owner asked for tables that are loaded at a fixed time of day (`.scratch/load-times/spec.md`).
+
+## 36. A load time is a request the clock makes
+
+**Decision.** A table may name times of day (`at`) in a time zone (`timezone`). It is due at its next load time after the last run began, or by its maximum age, whichever comes first. The times are part of the definition. The due time is still computed from stored facts on every query.
+
+**Why.** The owner needs tables that are loaded at a fixed time. A daily maximum age wanders, and a cron that sets `requested_at` keeps the time outside the definition and does not catch up. The rule is the request's rule with the clock as the one who asks, so it brings no new concept: no schedule, no stored next time, nothing to reset, no process that knows about time beyond the view.
+
+**Price.** The sentence "you state the freshness, not the time" is no longer the whole truth: you may state both. The target needs to know time zones, and a wrong zone on a row breaks the view. Load on the source arrives at the named minute again for the tables that use it, which decision 20 had spread out. `parallel` and `max_running` still bound it.
+
+**Rejected.**
+- *A cron outside that sets `requested_at`.* Works today and stays the right answer for "load when the source's batch is done". For a time of day it keeps the time out of the definition and loses a missed run.
+- *Aligning `max_age` to a grid* ("daily, anchored at 14:00"). A second meaning for the one setting everybody knows, and it cannot say 06:00 and 14:00.
+- *Cron syntax or weekdays.* A schedule language where a list of times answers what was asked.
+- *A default time zone.* 14:00 that silently means UTC is a mistake found in production.
 
 ## Corrections after the prototype
 
