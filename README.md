@@ -685,7 +685,7 @@ KillMode=mixed        # SIGTERM to the worker only, so its run processes are not
 
 The target is exactly one database. Mirrors and bookkeeping have to be in the same database, because both are published in one transaction.
 
-- **A cluster with failover.** The address names all nodes and the worker connects to the one that accepts writes.
+- **A cluster with failover.** The address names all nodes and asks for the one that accepts writes: `postgresql://etl@pg01,pg02/dwh?target_session_attrs=read-write`. Without `target_session_attrs` libpq takes the first node that answers, a standby too.
 - **Several target databases.** Each gets its own workers and its own definition.
 - **Consumers on replicas** see only published states.
 - **A connection pooler** in front of the target works in session mode only.
