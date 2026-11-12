@@ -27,6 +27,14 @@ def pause(rv, id):
     return row(rv, id, "due_at - attempted_at")[0]
 
 
+def test_the_view_has_the_columns_people_look_at(rv, table):
+    table()
+    cols = {r[0] for r in rv.target("select column_name from information_schema.columns"
+                                    " where table_schema = '_rowvioli' and table_name = 'status'")}
+    assert {"source", "source_table", "target_table", "max_age", "age", "due_at", "status", "attempts",
+            "reason"} <= cols
+
+
 def test_never_attempted_is_new_and_due_now(rv, table):
     id = table()
     assert row(rv, id, "status, reason, due_at = now()") == ("new", None, True)

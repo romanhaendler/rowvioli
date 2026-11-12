@@ -73,7 +73,7 @@ Unchanged from the first round:
 
 ## Not built
 
-The program. A throwaway prototype (`.scratch/prototype/`, code in `src/rowvioli/`) played the model to answer seven questions: `init`, `key new`, `apply`, `run`, `work`, the schema, the status view and the `postgres` connector. It is not the start of the program. Not built even there:
+The program. A throwaway prototype (`.scratch/prototype/`, code on branch `prototype-impl`) played the model to answer seven questions: `init`, `key new`, `apply`, `run`, `work`, the schema, the status view and the `postgres` connector. It is not the start of the program. Not built even there:
 
 - `list`, `apply --check`, decisions 32 to 35,
 - adding a new column to the mirror, `log = false`, table-level `max_delete_share` and `max_seconds`, connector options,

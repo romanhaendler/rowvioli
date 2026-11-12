@@ -1,6 +1,6 @@
 # Package and first version
 
-A proposal. Nothing here is built.
+A proposal, being built as version 0.1 (`.scratch/v0.1/spec.md`).
 
 ## What the package is
 

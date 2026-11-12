@@ -345,7 +345,7 @@ tables    id, source, source_table, target_table, key, max_age, log, options, en
 runs      run, table, worker, started_at, finished_at, status,
           rows_read, inserted, updated, deleted, reason, definition
 status    view over tables: age, due_at and status, computed on every query
-meta      schema_version, max_running
+meta      schema_version, max_running, definition (hash of the definition last applied)
 ```
 
 - `sources` and the first line of `tables` are the definition. Only `apply` writes them.

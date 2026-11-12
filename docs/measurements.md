@@ -155,7 +155,7 @@ Limitations: one measurement each. The diff at 1 % changes took 2.3 s through AD
 
 ## 9. The prototype
 
-Source: `.scratch/prototype/findings.md`, with the code in `src/rowvioli/` and its tests in `tests/` (62 passed). A laptop with Apple Silicon against `postgres:16` in Docker, Python 3.13, adbc-driver-postgresql 1.13.0, pyarrow 26.0.1, PyNaCl 1.6.2. The prototype plays the whole model: `init`, `key new`, `apply`, `run`, `work`, the status view, the claim, both limits and the pause.
+Source: `.scratch/prototype/findings.md`, with the code and its tests on branch `prototype-impl` (62 passed). A laptop with Apple Silicon against `postgres:16` in Docker, Python 3.13, adbc-driver-postgresql 1.13.0, pyarrow 26.0.1, PyNaCl 1.6.2. The prototype plays the whole model: `init`, `key new`, `apply`, `run`, `work`, the status view, the claim, both limits and the pause.
 
 A process per run, 10 repetitions each, median. A 100-row table with a key, nothing changed:
 

@@ -1,9 +1,15 @@
 [project]
 name = "rowvioli"
-version = "0.0.0"
-description = "Throwaway prototype of the rowvioli freshness model"
+version = "0.1.0"
+description = "Mirrors tables from source systems into PostgreSQL, as fresh as each table's maximum age"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = ["pyarrow", "adbc-driver-postgresql", "pynacl"]
+
+[project.optional-dependencies]
+file = ["duckdb"]
 
 [project.scripts]
 rowvioli = "rowvioli.cli:main"
