@@ -29,6 +29,8 @@ def main():
     sp.add_argument("table", nargs="?")
     sub.add_parser("work", help="load what is due, permanently").add_argument("--slots", type=int, default=4)
     a = p.parse_args()
+    if getattr(a, "slots", 1) < 1:  # with no slot `run` would wait forever for what is due
+        p.error("--slots must be at least 1")
 
     if a.command == "init":
         target.connect(init=True)

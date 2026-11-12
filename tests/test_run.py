@@ -211,6 +211,13 @@ def test_run_and_work_name_a_missing_variable_at_start(rv, command, variable):
     assert r.returncode != 0 and variable in r.stderr
 
 
+@pytest.mark.parametrize("command", ["run", "work"])
+def test_run_and_work_refuse_fewer_than_one_slot(rv, command):
+    # with no slot nothing can start, so `run` would wait forever for what is due
+    r = rv.run(command, "--slots", "0", timeout=10)
+    assert r.returncode == 2 and "--slots must be at least 1" in r.stderr
+
+
 @pytest.mark.parametrize("name", [("erp", "public.nosuch"), ("nosuch", "public.customers"), ("erp", "public.notes"),
                                   ("nosuch",)])
 def test_run_with_an_unknown_or_disabled_name_exits_1_and_loads_nothing(erp, name):
