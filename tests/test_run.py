@@ -185,3 +185,58 @@ def test_a_source_with_reordered_columns_still_gives_a_correct_mirror_and_change
     second = erp.target("select max(run) from _rowvioli.runs")[0][0]
     assert erp.target("select _op, customer_no, name, city from raw_erp.customers__log where _run = %s "
                       "order by customer_no", [second]) == [("U", 1, "Anna", "Köln"), ("I", 4, "Dora", "Bonn")]
+
+
+@pytest.mark.parametrize("command", ["run", "work"])
+@pytest.mark.parametrize("variable", ["ROWVIOLI_TARGET_URL", "ROWVIOLI_KEY_FILE"])
+def test_run_and_work_name_a_missing_variable_at_start(rv, command, variable):
+    r = rv.run(command, env={variable: ""}, timeout=10)
+    assert r.returncode != 0 and variable in r.stderr
+
+
+@pytest.mark.parametrize("name", [("erp", "public.nosuch"), ("nosuch", "public.customers"), ("erp", "public.notes"),
+                                  ("nosuch",)])
+def test_run_with_an_unknown_or_disabled_name_exits_1_and_loads_nothing(erp, name):
+    apply(erp, definition(erp, NOTES))
+    apply(erp, definition(erp))  # notes disabled, customers due
+    r = erp.run("run", *name)
+    assert r.returncode == 1 and " ".join(name) in r.stderr
+    assert erp.target("select count(*) from _rowvioli.runs") == [(0,)]
+
+
+def test_log_false_gives_no_change_log(erp):
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], log = false }\n'))
+    ok(erp)
+    erp.source("update customers set city = 'Köln' where customer_no = 1")
+    assert run(erp, "erp")[1]["tables"] == {
+        "raw_erp.customers": {"status": "ok", "inserted": 0, "updated": 1, "deleted": 0}}
+    assert rows(erp.target, "select * from raw_erp.customers") == rows(erp.source, "select * from customers")
+    assert erp.target("select to_regclass('raw_erp.customers__log')") == [(None,)]
+
+
+def test_a_composite_key_mirrors_and_logs_correctly(erp):
+    erp.source("create table lines (order_no int, line_no int, item text, primary key (order_no, line_no))")
+    erp.source("insert into lines values (1, 1, 'a'), (1, 2, 'b'), (2, 1, 'c')")
+    apply(erp, definition(erp, '"public.lines" = { key = ["order_no", "line_no"] }\n'))
+    ok(erp)
+    erp.source("update lines set item = 'B' where order_no = 1 and line_no = 2")
+    erp.source("delete from lines where order_no = 2 and line_no = 1")
+    # each new row shares one key column with a row that is there or was there
+    erp.source("insert into lines values (2, 2, 'd'), (3, 1, 'a')")
+    assert run(erp, "erp")[1]["tables"] == {
+        "raw_erp.lines": {"status": "ok", "inserted": 2, "updated": 1, "deleted": 1}}
+    assert rows(erp.target, "select * from raw_erp.lines") == rows(erp.source, "select * from lines")
+    second = erp.target("select max(run) from _rowvioli.runs")[0][0]
+    assert erp.target("select _op, order_no, line_no, item from raw_erp.lines__log where _run = %s "
+                      "order by order_no, line_no", [second]) == [
+        ("U", 1, 2, "B"), ("D", 2, 1, "c"), ("I", 2, 2, "d"), ("I", 3, 1, "a")]
+
+
+def test_every_run_carries_the_hash_of_the_definition_applied_before_it(erp):
+    ok(erp)
+    first = erp.target("select definition from _rowvioli.meta")[0][0]
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], max_age = "2h" }\n'))
+    second = erp.target("select definition from _rowvioli.meta")[0][0]
+    ok(erp, "erp")
+    assert erp.target("select definition from _rowvioli.runs order by run") == [(first,), (second,)]
+    assert first and second and first != second

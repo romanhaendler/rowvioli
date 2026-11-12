@@ -161,7 +161,7 @@ What follows from it:
 | `max_delete_share` | source or table | 0.5 | The run aborts if a larger share of the rows would disappear. Without a key: if the table would shrink by more. |
 | `max_seconds` | source or table | 3600 | A hanging run is ended after this time. |
 
-Any other key, at source or table level, is passed to the connector unchanged as an option, for example `path` for a REST connector.
+Any other key, at source or table level, is passed to the connector unchanged as an option, for example `path` for a REST connector. A table's option overrides the source's of the same name.
 
 Nobody has to type 200 table names and keys. `rowvioli list erp` asks the source and prints them in this format, ready to paste. It is a helper for people. Nothing in the running system calls it.
 
