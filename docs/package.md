@@ -1,6 +1,6 @@
 # Package and first version
 
-A proposal, being built as version 0.1 (`.scratch/v0.1/spec.md`).
+The package as built in version 0.1, not yet published (`.scratch/v0.1/spec.md`).
 
 ## What the package is
 
@@ -13,8 +13,8 @@ A proposal, being built as version 0.1 (`.scratch/v0.1/spec.md`).
 
 | Part | In 0.1 | Later |
 |---|---|---|
-| Commands | `init`, `key new`, `list`, `apply` with `--check`, `run`, `work` | `request` as a shortcut for setting `requested_at` |
-| Connectors | `postgres`, `file` (CSV, Excel, Parquet) | `odbc`, `rest`, entry points for outside packages |
+| Commands | `init`, `key new`, `list`, `apply` with `--check`, `run`, `work`, `status` | `request` as a shortcut for setting `requested_at` |
+| Connectors | `postgres`, `file` (CSV, Excel, Parquet) | `odbc`, `rest`, JSON files in `file` |
 | Core | table lock, staging, checks, diff, publishing, mirror and change log, encrypted connections, the status view, retry | reading only rows from a timestamp on, patterns for table names |
 | Limits | per worker, per source, per target | workers that serve only some sources |
 
