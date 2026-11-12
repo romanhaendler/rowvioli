@@ -21,6 +21,21 @@ def read(connection, table, options):
     return pa.RecordBatchReader.from_batches(schema, batches())
 
 
+def tables(connection):
+    """Every table outside the system schemas as `schema.table`, with its primary key in key order or None."""
+    with adbc.connect(connection["url"]) as conn, conn.cursor() as cur:
+        cur.execute(r"""
+            SELECT n.nspname || '.' || c.relname,
+                   (SELECT array_agg(a.attname::text ORDER BY k.ord)
+                      FROM pg_index i, unnest(i.indkey) WITH ORDINALITY k(attnum, ord), pg_attribute a
+                     WHERE i.indrelid = c.oid AND i.indisprimary AND a.attrelid = c.oid AND a.attnum = k.attnum)
+              FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE c.relkind IN ('r', 'p') AND NOT c.relispartition
+               AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\_%'
+             ORDER BY 1""")
+        return dict(cur.fetchall())
+
+
 def _is_numeric(field):
     return (field.metadata or {}).get(b"POSTGRESQL:type") == b"numeric"
 

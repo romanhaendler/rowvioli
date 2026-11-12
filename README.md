@@ -568,7 +568,7 @@ A connector is code the operator trusts. It receives the decrypted connection an
 |---|---|---|
 | `rowvioli init` | Creates the schema `_rowvioli` in the target. | target |
 | `rowvioli key new` | Creates a key pair in the current directory: `worker.key` for the workers and `worker.pub` for the definition. Overwrites neither. | nothing |
-| `rowvioli list erp` | Prints the tables of a source with their keys, ready to paste into the definition. | definition, environment, connector, source |
+| `rowvioli list erp` | Prints the tables of a source with their keys, ready to paste into its `tables` block. Reads the definition from `sources/` (or `--definition <dir>`). | definition, environment, connector, source |
 | `rowvioli apply --check sources/` | Reads the definition and checks it. Writes nothing. Meant for a laptop and for the pipeline of a merge request. | definition |
 | `rowvioli apply sources/` | Writes the definition into the target: one row per source and table, connections encrypted. | definition, environment, `worker.pub` (or `--key <file>`), target |
 | `rowvioli work --slots 4` | Runs permanently and loads whatever is due, up to four tables at a time. | connectors, private key, target |

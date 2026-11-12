@@ -1,9 +1,10 @@
 """The commands: arguments, the answer on stdout, the exit code."""
 import argparse
+import json
 import os
 import sys
 
-from . import apply, definition, seal, target, work
+from . import apply, contract, definition, load, seal, target, work
 
 
 def main():
@@ -11,7 +12,9 @@ def main():
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("init", help="create the schema _rowvioli in the target")
     sub.add_parser("key", help="create a key pair").add_argument("action", choices=["new"])
-    sub.add_parser("list", help="print the tables of a source").add_argument("source")
+    lp = sub.add_parser("list", help="print the tables of a source")
+    lp.add_argument("source")
+    lp.add_argument("--definition", default="sources", help="directory of the definition")
     ap = sub.add_parser("apply", help="write the definition into the target")
     ap.add_argument("directory")
     ap.add_argument("--check", action="store_true", help="only read and check the definition")
@@ -32,6 +35,8 @@ def main():
         print("the definition is valid")
     elif a.command == "apply":
         apply.apply(a.directory, a.key)
+    elif a.command == "list":
+        print_tables(a.definition, a.source)
     elif a.command in ("run", "work"):
         for variable in ("ROWVIOLI_TARGET_URL", "ROWVIOLI_KEY_FILE"):
             if not os.environ.get(variable):
@@ -39,5 +44,23 @@ def main():
         if a.command == "run":
             sys.exit(work.run(a.source or "", a.table or "", a.slots))
         work.loop(a.slots)
-    else:
-        raise SystemExit(f"rowvioli {a.command}: not built yet")
+
+
+def print_tables(directory, name):
+    """The tables of a source from its connector's `tables`, as lines for the source's tables block."""
+    sources, _, _ = definition.read(directory, os.environ)
+    s = next((s for s in sources if s["name"] == name), None)
+    if s is None:
+        raise SystemExit(f"{directory} has no source {name}")
+    connector = contract.connector(s["type"])
+    if connector is None:
+        raise SystemExit(f'connector "{s["type"]}" is not installed')
+    if not hasattr(connector, "tables"):
+        raise SystemExit(f"connector {s['type']} of source {name} cannot list tables")
+    try:
+        tables = connector.tables(s["connection"])
+    except Exception as e:  # a driver may quote the connection in its message
+        raise SystemExit(load.scrub({"secrets": load.secrets(s["connection"])}, str(e) or type(e).__name__))
+    for table, key in tables.items():
+        # a JSON string and a JSON list of strings are TOML as well
+        print(f"{json.dumps(table)} = {{ key = {json.dumps(key)} }}" if key else f"{json.dumps(table)} = {{}}")
