@@ -9,7 +9,6 @@ import pytest
 from conftest import until
 from test_run import apply, definition, ok, rows
 
-pytestmark = pytest.mark.skip(reason="ticket 06: crashes")
 
 SOURCE = """
 create table customers (customer_no int primary key, name text);

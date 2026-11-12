@@ -254,7 +254,10 @@ def main(worker, source, table):
     except BaseException as e:  # everything, so no unscrubbed traceback reaches stderr (open point F4)
         answer = {"reason": scrub(t, str(e) or type(e).__name__)}
     if "reason" in answer:  # outside the except, so a failing fail() cannot print the unscrubbed error with it
-        answer = fail(conn, t, answer["reason"])
+        try:
+            answer = fail(conn, t, answer["reason"])
+        except Exception:  # the target dropped the connection: the lock went with it, nothing can be stored
+            answer = {"status": "failed", "reason": "connection to the target lost"}
     say(table=t["name"], **answer)
     conn.close()
 
