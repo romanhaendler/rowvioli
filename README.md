@@ -480,7 +480,7 @@ The program sets on its own connections:
 
 - Keepalive: `keepalives_idle=30`, `keepalives_interval=10`, `keepalives_count=3`, `tcp_user_timeout=60000`
 - `client_connection_check_interval = 2s`, so that Postgres looks for the client during a long statement too
-- `lock_timeout` for adding a column, so that a long-reading consumer cannot block the run forever
+- `lock_timeout = 10s` for adding a column, so that a long-reading consumer cannot block the run forever. The run then fails with `lock timeout` and loads after its pause; meanwhile new readers of that table wait behind it for up to 10 s.
 
 The control connection must go to Postgres directly, not through a connection pooler in transaction mode.
 

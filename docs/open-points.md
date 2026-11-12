@@ -32,7 +32,6 @@ Unchanged from the first round:
 - **Wide tables with many rows.** 900 columns were measured with 100,000 rows only.
 - **A view that computes validity periods from the change log**, and its speed on a long history.
 - **The COPY from a client over a real network.** Experiment 8 filled the staging table from a client on the same machine.
-- **Adding a column inside the publishing transaction** while consumers read.
 
 ## Known limits
 

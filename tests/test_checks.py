@@ -1,4 +1,7 @@
 """Checks, schema changes, failure reasons and secrets (spec tests 12, 13, 15, 16, 17, 18)."""
+import time
+
+import psycopg
 import pytest
 
 from test_run import apply, definition, erp, ok, rows, run  # noqa: F401 (erp is a fixture)
@@ -60,6 +63,22 @@ def test_a_new_source_column_appears_in_the_mirror_and_the_change_log_with_value
     # a row whose new column is null equals its mirror row, so only Anna changed
     assert erp.target("select _op, customer_no, name, phone from raw_erp.customers__log where _run = "
                       "(select max(run) from _rowvioli.runs)") == [("U", 1, "Anna", "0228")]
+
+
+def test_a_new_column_waits_10s_for_a_reading_consumer_then_fails_and_loads_once_the_reader_is_done(erp):
+    ok(erp)
+    before = rows(erp.target, MIRROR)
+    erp.source("alter table customers add column phone text")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    with psycopg.connect(erp.target_url) as consumer:  # a long read: its transaction holds the mirror
+        consumer.execute(MIRROR)
+        started = time.monotonic()
+        reason = failed(erp)
+        assert "lock timeout" in reason and time.monotonic() - started >= 10
+    assert rows(erp.target, MIRROR) == before
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
 
 
 def test_a_table_without_a_key_fails_when_it_would_shrink_by_more_than_max_delete_share(erp):
