@@ -9,6 +9,8 @@ import subprocess
 import sys
 import time
 
+import adbc_driver_postgresql.dbapi as adbc
+
 from . import target
 from .target import CLAIMABLE, sql
 
@@ -32,12 +34,21 @@ def loop(slots, source="", table="", once=False):
         signal.signal(signal.SIGTERM, lambda *_: stopping.append(True))
     conn = target.connect()
     while True:
-        while ended:
-            record(conn, ended[0])
-            ended.pop(0)
-        claimable, busy = sql(conn, ASK, [source, table])[0]
+        try:
+            conn = conn or target.connect()
+            while ended:
+                record(conn, ended[0])
+                ended.pop(0)
+            claimable, busy = sql(conn, ASK, [source, table])[0]
+        except adbc.Error as e:  # the target is unreachable: try again in two seconds (open point E11)
+            if once:
+                raise
+            if conn:
+                print(f"the target is unreachable, connecting again every two seconds: {e}", file=sys.stderr)
+            conn, claimable = None, 0
         if (once and not runs and (crashed or not busy)) or (stopping and not runs):
-            conn.close()
+            if conn:
+                conn.close()
             return answers, crashed
         for _ in range(0 if stopping or (once and crashed) else min(claimable, slots - len(runs))):
             runs[subprocess.Popen([sys.executable, "-m", "rowvioli.load", worker, source, table],

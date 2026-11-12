@@ -4,7 +4,7 @@ import signal
 import time
 
 import pytest
-from conftest import until
+from conftest import _query, until
 from test_run import apply, ok, run
 
 
@@ -124,3 +124,38 @@ def test_work_on_sigterm_lets_the_run_publish_starts_nothing_new_and_exits_0(rea
     assert worker.wait(timeout=20) == 0
     assert sorted(ready.target("select status from _rowvioli.status")) == [("new",), ("ok",)]
     assert ready.target("select count(*) from _rowvioli.runs") == [(1,)]
+
+
+def test_with_the_limits_full_the_targets_connections_stay_at_the_running_tables_plus_one_per_worker(ready):
+    tables = "\n".join(f'"public.slow{i}" = {{ key = ["id"] }}' for i in range(4))
+    for i in range(4):
+        slow(ready, f"slow{i}", 30, 1)
+    apply(ready, source(ready, "erp", "parallel = 4", tables))
+    ready.target("update _rowvioli.meta set max_running = 2")
+    for _ in range(3):
+        ready.start("work", "--slots", "4")
+    until(lambda: ready.target("select count(*) from _rowvioli.status where status = 'loading'") == [(2,)])
+    connections = """select count(*) from pg_stat_activity
+                      where datname = current_database() and pid <> pg_backend_pid()"""
+    seen, end = set(), time.monotonic() + 8  # four polling intervals
+    while time.monotonic() < end:
+        seen.add(ready.target(connections)[0][0])
+        time.sleep(0.02)
+    assert seen == {2 + 3}
+
+
+def test_a_worker_survives_an_unreachable_target_and_loads_again_once_it_accepts_connections(ready):
+    ready.source("create table customers (id int primary key)")
+    ready.source("insert into customers values (1)")
+    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
+    worker = ready.start("work")
+    until(lambda: ready.target("select status from _rowvioli.status") == [("ok",)])
+    db = ready.target("select current_database()")[0][0]
+    other = ready.target_url.rsplit("/", 1)[0] + "/postgres"
+    _query(other, f"alter database {db} allow_connections false")
+    _query(other, "select pg_terminate_backend(pid) from pg_stat_activity where datname = %s", [db])
+    time.sleep(5)  # more than two of the worker's polling intervals
+    assert worker.poll() is None
+    _query(other, f"alter database {db} allow_connections true")
+    ready.target("update _rowvioli.tables set requested_at = now()")
+    until(lambda: ready.target("select count(*) from _rowvioli.runs where status = 'ok'") == [(2,)])
