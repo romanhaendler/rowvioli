@@ -8,6 +8,7 @@ import itertools
 import json
 import os
 import sys
+from urllib.parse import unquote, urlsplit
 
 import pyarrow as pa
 
@@ -114,6 +115,7 @@ def stage(conn, t):
         connection = seal.unseal(os.environ["ROWVIOLI_KEY_FILE"], t["key_id"], t["source"], t["connection"])
     except Exception as e:
         raise Exception(f"the connection of source {t['source']} cannot be decrypted on worker {t['worker']}: {e}")
+    t["secrets"] = secrets(connection)
     batches = connector.read(connection, t["source_table"], t["options"])
     with conn.cursor() as c:
         return c.adbc_ingest("_stage", stream(batches), mode="create", temporary=True)
@@ -202,6 +204,25 @@ def widen(conn, table, staged, existing):
             sql(conn, f"ALTER TABLE {table} ADD COLUMN {quote(name)} {type}")
 
 
+def secrets(value):
+    """Every text of a connection, and the password of a URL in it as written and decoded, since a driver may quote
+    either (README "What happens to the decrypted connection")."""
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in secrets(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in secrets(v)]
+    if not isinstance(value, str):
+        return []
+    password = urlsplit(value).password if "://" in value else None
+    return [value] + ([password, unquote(password)] if password else [])
+
+
+def scrub(t, text):
+    for secret in sorted(filter(None, t.get("secrets", [])), key=len, reverse=True):  # a whole URL before its parts
+        text = text.replace(secret, "***")
+    return text
+
+
 def rowcount(conn, query):
     with conn.cursor() as c:
         c.execute(query)
@@ -230,8 +251,10 @@ def main(worker, source, table):
     say(claimed=t["name"], run=t["run"], max_seconds=t["max_seconds"])
     try:
         answer = load(conn, t)
-    except Exception as e:
-        answer = fail(conn, t, str(e))
+    except BaseException as e:  # everything, so no unscrubbed traceback reaches stderr (open point F4)
+        answer = {"reason": scrub(t, str(e) or type(e).__name__)}
+    if "reason" in answer:  # outside the except, so a failing fail() cannot print the unscrubbed error with it
+        answer = fail(conn, t, answer["reason"])
     say(table=t["name"], **answer)
     conn.close()
 

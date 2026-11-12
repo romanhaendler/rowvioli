@@ -3,7 +3,6 @@ import pytest
 
 from test_run import apply, definition, erp, ok, rows, run  # noqa: F401 (erp is a fixture)
 
-secrets = pytest.mark.skip(reason="ticket 05: secrets and keys")
 
 
 def failed(rv, *args):
@@ -82,7 +81,7 @@ def test_max_delete_share_of_a_table_overrides_the_sources(erp):
     assert answer["tables"]["raw_erp.customers"]["deleted"] == 2
 
 
-@secrets
+
 def test_an_unknown_connector_type_fails_with_a_reason_naming_the_type_and_the_worker(erp):
     apply(erp, definition(erp).replace('type = "postgres"', 'type = "nosuch"'))
     reason = failed(erp)
@@ -90,7 +89,7 @@ def test_an_unknown_connector_type_fails_with_a_reason_naming_the_type_and_the_w
     assert "nosuch" in reason and worker in reason
 
 
-@secrets
+
 def test_a_worker_with_the_wrong_private_key_fails_the_run_with_a_reason(erp):
     (erp.dir / "worker.key").rename(erp.dir / "old.key")
     (erp.dir / "worker.pub").rename(erp.dir / "old.pub")
@@ -128,14 +127,14 @@ def leaks(rv, password, *outputs):
     return [s for s in seen if password in s]
 
 
-@secrets
+
 def test_the_stored_connection_does_not_contain_the_password(secret):
     apply_with(secret, PASSWORD)
     assert secret.target("select count(*) from _rowvioli.sources where position(convert_to(%s, 'UTF8') in connection) > 0",
                          [PASSWORD]) == [(0,)]
 
 
-@secrets
+
 def test_a_ciphertext_copied_to_another_source_is_rejected(secret):
     apply_with(secret, PASSWORD)
     secret.target("update _rowvioli.sources set connection = (select connection from _rowvioli.sources where name = 'erp')"
@@ -144,7 +143,7 @@ def test_a_ciphertext_copied_to_another_source_is_rejected(secret):
     assert run(secret, "erp")[0] == 0
 
 
-@secrets
+
 def test_the_password_appears_nowhere_when_a_run_fails(secret):
     out = [apply_with(secret, PASSWORD)]
     apply_with(secret, PASSWORD)
@@ -156,7 +155,7 @@ def test_the_password_appears_nowhere_when_a_run_fails(secret):
     assert leaks(secret, PASSWORD, *out) == []
 
 
-@secrets
+
 def test_the_password_appears_nowhere_when_the_source_refuses_the_login(secret):
     out = [apply_with(secret, WRONG), secret.run("run", "erp")]
     assert out[-1].returncode == 1
@@ -164,10 +163,18 @@ def test_the_password_appears_nowhere_when_the_source_refuses_the_login(secret):
     assert leaks(secret, WRONG, *out) == []
 
 
-@secrets
-def test_the_password_appears_nowhere_when_the_driver_quotes_it(secret):
-    garbled = "Prozent%zz-4711"  # libpq rejects the URL and quotes the token: invalid percent-encoded token
-    out = [apply_with(secret, garbled), secret.run("run", "erp")]
+
+def test_a_password_with_at_and_percent_written_plainly_loads_and_leaks_nowhere_when_refused(secret):
+    plain = "Sesam@Torweg%zz-0815"
+    role = "reader_" + secret.source_url.rsplit("/", 1)[1]
+    secret.source(f"alter role {role} password '{plain}'")
+    out = [apply_with(secret, plain), secret.run("run", "erp")]
+    assert out[-1].returncode == 0, out[-1].stdout + out[-1].stderr
+    secret.source(f"alter role {role} password '{WRONG}'")
+    secret.target("update _rowvioli.tables set requested_at = now()")
+    out.append(secret.run("run", "erp"))
     assert out[-1].returncode == 1
-    assert "percent-encoded" in secret.target("select reason from _rowvioli.runs")[0][0]
-    assert leaks(secret, garbled, *out) == []
+    reason = secret.target("select reason from _rowvioli.runs where status = 'failed'")[0][0]
+    assert "password authentication failed" in reason
+    for part in (plain, "Sesam", "Torweg", "zz-0815", "Sesam%40Torweg%25zz-0815"):
+        assert leaks(secret, part, *out) == [], part

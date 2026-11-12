@@ -1,0 +1,13 @@
+[project]
+name = "rowvioli-testing"
+version = "0"
+description = "A foreign connector for the tests, registered under the type `testing` as any other package would be"
+requires-python = ">=3.11"
+dependencies = ["pyarrow"]
+
+[project.entry-points."rowvioli.connectors"]
+testing = "rowvioli_testing"
+
+[build-system]
+requires = ["uv_build>=0.8,<0.12"]
+build-backend = "uv_build"

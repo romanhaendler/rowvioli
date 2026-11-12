@@ -44,6 +44,6 @@ def unseal(key_file, key_id_, source, ciphertext):
         if key_id(private.public_key) == key_id_:
             sealed = json.loads(SealedBox(private).decrypt(ciphertext))
             if sealed["source"] != source:
-                raise ValueError(f"it was sealed for source {sealed['source']}")
+                raise ValueError(f"it was sealed for another source, {sealed['source']}")
             return sealed["connection"]
     raise ValueError(f"{key_file} holds no private key {key_id_}")
