@@ -11,6 +11,8 @@ jobs:
       - run: uv sync --locked
       # the odbc tests reach the Postgres source through psqlODBC; neither is a dependency of rowvioli
       - run: sudo apt-get update && sudo apt-get install -y unixodbc odbc-postgresql
+      # without the driver the odbc tests would skip silently
+      - run: odbcinst -q -d | grep -q "PostgreSQL Unicode"
       # the harness starts its own Postgres containers with the runner's Docker
       - run: uv run pytest
 

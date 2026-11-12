@@ -13,7 +13,8 @@ def read(connection, table, options):
         raise Exception(f"{table}: an odbc table name is dotted parts of letters, digits and underscores")
     return arrow_odbc.read_arrow_batches_from_odbc(
         "SELECT * FROM " + table, connection["string"],
-        max_bytes_per_batch=16 * 2**20).into_pyarrow_record_batch_reader()
+        max_bytes_per_batch=16 * 2**20,
+        max_text_size=2**20)  # shortcut: 1 MiB per text value, a longer one fails the run; when sources hold more, add an option.into_pyarrow_record_batch_reader()
 
 
 def tables(connection):
@@ -31,8 +32,8 @@ def tables(connection):
                AND UPPER(t.TABLE_SCHEMA) NOT IN ('INFORMATION_SCHEMA', 'PG_CATALOG', 'SYS')
              ORDER BY k.ORDINAL_POSITION""")
     except arrow_odbc.Error as e:
-        raise Exception(f"the source has no INFORMATION_SCHEMA to list tables from, write the tables block by hand"
-                        f" ({e})")
+        raise Exception(f"the tables could not be read from INFORMATION_SCHEMA, write the tables block by hand;"
+                        f" loading is not affected ({e})")
     found = {}
     for batch in reader:
         for schema, table, column in zip(*batch.to_pydict().values()):

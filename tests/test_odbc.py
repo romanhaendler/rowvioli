@@ -121,4 +121,18 @@ def test_without_an_odbc_driver_manager_a_source_of_type_odbc_fails_as_a_missing
     code, answer = run(ready)
     assert code == 1
     [reason] = [a["reason"] for a in answer["tables"].values()]
-    assert reason.startswith('connector "odbc" is not installed on worker ')
+    assert reason.startswith('connector "odbc" cannot be loaded on worker ')
+
+
+@needs_driver
+def test_a_text_value_longer_than_the_driver_reports_fails_the_run_and_one_within_the_limit_arrives_whole(ready):
+    ready.source("create table notes (id int primary key, body text);"
+                 "insert into notes select 1, repeat('x', 100000)")
+    erp(ready, '"public.notes" = { key = ["id"] }')  # psqlODBC reports text as 8190 bytes at most
+    assert ready.run("run").returncode == 1
+    erp(ready, '"public.notes" = { key = ["id"] }', odbc_string(ready.source_url) + ";MaxLongVarcharSize=1048576")
+    assert ready.run("run", "erp").returncode == 0
+    assert ready.target("select length(body) from raw_erp.notes") == [(100000,)]
+    ready.source("update notes set body = repeat('y', 2000000)")
+    assert ready.run("run", "erp").returncode == 1
+    assert ready.target("select length(body) from raw_erp.notes") == [(100000,)]
