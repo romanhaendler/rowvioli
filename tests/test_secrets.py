@@ -52,7 +52,7 @@ def test_the_password_inside_an_odbc_connection_string_leaks_nowhere(erp, pwd):
     assert leaks(erp, "Odbc-geheim-77", *out) == []
 
 
-def test_a_connector_printing_its_connection_to_stderr_leaks_nothing(erp):
+def test_a_connector_printing_to_stderr_and_stdout_leaks_nothing_and_disturbs_no_run(erp):
     out = [lab(erp, "print = true"), erp.run("run", "lab")]
     assert out[-1].returncode == 0, out[-1].stdout
     for value in (PASSWORD, TOKEN):

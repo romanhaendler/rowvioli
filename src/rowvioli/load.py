@@ -250,7 +250,10 @@ def fail(conn, t, reason):
 
 
 def say(**line):
-    print(json.dumps(line), flush=True)
+    print(json.dumps(line), file=CHANNEL, flush=True)
+
+
+CHANNEL = sys.stdout  # the line to the worker; main takes it away from fd 1
 
 
 def orphaned(parent):
@@ -262,6 +265,10 @@ def orphaned(parent):
 
 
 def main(worker, source, table):
+    global CHANNEL
+    # a library may write to stdout, DuckDB its progress bar: only say() reaches the worker, the rest is dropped
+    CHANNEL = os.fdopen(os.dup(1), "w")
+    os.dup2(os.open(os.devnull, os.O_WRONLY), 1)
     threading.Thread(target=orphaned, args=[os.getppid()], daemon=True).start()
     conn = target.connect()
     t = claim(conn, worker, source, table)
