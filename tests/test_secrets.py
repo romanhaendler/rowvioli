@@ -1,5 +1,6 @@
 """A foreign connector, connection values in its failures, key rotation (spec tests 6, 16, 20)."""
 import pytest
+from conftest import until
 
 from test_checks import leaks
 from test_run import erp, ok, rows  # noqa: F401 (erp is a fixture)
@@ -60,3 +61,16 @@ def test_key_rotation_with_old_and_new_private_key_in_the_file(erp):
     r = erp.run("run", env={"ROWVIOLI_KEY_FILE": str(erp.dir / "old.key")})
     assert r.returncode == 1
     assert "cannot be decrypted" in erp.target("select reason from _rowvioli.status")[0][0]
+
+
+def test_the_lines_of_work_leak_no_connection_value(erp):
+    import signal
+    from types import SimpleNamespace
+    lab(erp, 'fail = "deep"')
+    worker = erp.start("work")
+    until(lambda: erp.target("select count(*) from _rowvioli.status where status = 'failed'") == [(1,)])
+    worker.send_signal(signal.SIGTERM)
+    out, err = worker.communicate(timeout=20)
+    assert "cannot connect" in err
+    for value in (PASSWORD, TOKEN, "Kenn%40wort%2542-geheim", "Kenn", "wort%"):
+        assert leaks(erp, value, SimpleNamespace(stdout=out, stderr=err)) == [], value

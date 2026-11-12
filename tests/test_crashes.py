@@ -193,3 +193,15 @@ def test_a_reader_never_sees_an_empty_or_half_loaded_mirror(slow):
         reader.join()
     counts = {n for _, n in states.values()}
     assert {c for c, _ in seen} == counts and {n for _, n in seen} == counts
+
+
+def test_a_run_killed_after_its_claim_gives_a_worker_lost_line(slow):
+    with psycopg.connect(slow.target_url) as holder:
+        holder.execute("lock table raw_erp.slow in access exclusive mode")
+        worker = slow.start("run")
+        until(lambda: waiting_on(slow, "raw_erp.slow"))
+        slow.kill_runs(worker)
+        _, err = worker.communicate(timeout=20)
+        holder.rollback()
+    assert "raw_erp.slow started" in err
+    assert "raw_erp.slow failed after" in err and err.rstrip().endswith("worker lost")

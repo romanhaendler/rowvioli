@@ -257,3 +257,10 @@ def test_every_run_carries_the_hash_of_the_definition_applied_before_it(erp):
     ok(erp, "erp")
     assert erp.target("select definition from _rowvioli.runs order by run") == [(first,), (second,)]
     assert first and second and first != second
+
+
+def test_run_says_start_and_end_on_stderr_and_stdout_stays_one_answer(erp):
+    r = erp.run("run")
+    assert json.loads(r.stdout)["tables"]["raw_erp.customers"]["status"] == "ok"
+    assert "raw_erp.customers started, run 1" in r.stderr
+    assert "raw_erp.customers ok after" in r.stderr and "started with" not in r.stderr
