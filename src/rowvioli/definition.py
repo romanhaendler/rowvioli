@@ -56,7 +56,8 @@ def read(directory, env=None):
                 key = t.get("key")
                 if key is not None and not (key and all(isinstance(c, str) and c for c in key)):
                     raise SystemExit(f"{at}: key must be a list of column names")
-                target = table.rsplit(".", 1)[-1].lower()
+                # a file's extension is not a name part: `customers.csv` becomes `customers`
+                target = (Path(table).stem if s["type"] == "file" else table.rsplit(".", 1)[-1]).lower()
                 if target in seen:
                     raise SystemExit(f"{at}: {seen[target]} and {table} both become target table {target}")
                 seen[target] = table

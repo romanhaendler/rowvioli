@@ -142,7 +142,7 @@ string = "Driver={ODBC Driver 18 for SQL Server};Server=sqlsrv01;Database=erp;UI
 
 What follows from it:
 
-- Every listed table gets a target table in `raw_erp`. Nothing else is loaded. A new table in the source arrives when somebody adds its name.
+- Every listed table gets a target table in `raw_erp`, named after the last part of its name in lower case: `dbo.Customers` becomes `raw_erp.customers`. A file loses its extension: `customers.csv` becomes `customers`. Nothing else is loaded. A new table in the source arrives when somebody adds its name.
 - `dbo.Orders` is never older than five minutes, the other tables never older than an hour.
 - At most four tables of this source load at the same time, across all workers.
 - Every table with a key gets a change log, except `dbo.Items`, where it is switched off.

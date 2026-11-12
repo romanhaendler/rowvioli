@@ -142,7 +142,7 @@ The vocabulary follows `GLOSSARY.md`. Decisions referred to by number are in `do
 - One TOML file per source by convention, several sources per file allowed. Settings as in the README's table under "Defining a source". `max_age` is required at source level, a whole number with `s`, `m`, `h` or `d`.
 - A placeholder is `$` followed by an upper-case name; `$$` is a literal `$`. Placeholders are filled in only in the string values of the `connection` block.
 - **Percent-encoding (decision 32).** When a placeholder lands in the user-info part of a URL value (`scheme://user:pass@host`), its value is percent-encoded before sealing.
-- The target table is the last part of the source table's name in lower case, inside `target_schema` (default `raw_<source>`).
+- The target table is the last part of the source table's name in lower case, inside `target_schema` (default `raw_<source>`). For a file it is the file name without its extension in lower case (`customers.csv` becomes `customers`).
 - `apply` fails, changing nothing, on: a missing variable; two tables of a source with the same target table; two sources with the same `target_schema` (decision 35); a target without `_rowvioli`, with the message to run `rowvioli init` first.
 - `apply` writes sources and tables by name in one transaction, updates only the definition's columns, and disables what is missing. A source or table that comes back is enabled again with its old id.
 - `apply --check` reads and checks the definition without a target and without the environment: syntax, required settings, units, keys, duplicate target tables, shared target schemas, well-formed placeholders. It never fills in a placeholder.

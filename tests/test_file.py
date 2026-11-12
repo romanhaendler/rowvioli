@@ -17,14 +17,14 @@ def files(rv):
     assert rv.run("key", "new").returncode == 0
     d = rv.dir / "files"
     d.mkdir()
-    (d / "customers.csv").write_text("customer_no;name;balance\n1;Anna;2.5\n2;Ben;\n3;Cleo;10.0\n")
+    (d / "customers_csv.csv").write_text("customer_no;name;balance\n1;Anna;2.5\n2;Ben;\n3;Cleo;10.0\n")
     table = pa.table({"customer_no": [r[0] for r in CUSTOMERS], "name": [r[1] for r in CUSTOMERS],
                       "balance": [r[2] for r in CUSTOMERS]})
-    pq.write_table(table, d / "customers.parquet")
+    pq.write_table(table, d / "customers_parquet.parquet")
     db = duckdb.connect()
     db.execute("INSTALL excel; LOAD excel")
     db.register("customers", table)
-    db.execute(f"COPY customers TO '{d / 'customers.xlsx'}' (FORMAT xlsx, HEADER true)")
+    db.execute(f"COPY customers TO '{d / 'customers_xlsx.xlsx'}' (FORMAT xlsx, HEADER true)")
     return rv
 
 
@@ -51,34 +51,35 @@ def types(rv, table):
 
 
 def test_a_csv_an_excel_and_a_parquet_file_are_mirrored(files):
-    code, answer = load(files, '"customers.csv" = { key = ["customer_no"], sep = ";" }\n'
-                               '"customers.xlsx" = { key = ["customer_no"] }\n'
-                               '"customers.parquet" = { key = ["customer_no"] }\n')
+    code, answer = load(files, '"customers_csv.csv" = { key = ["customer_no"], sep = ";" }\n'
+                               '"customers_xlsx.xlsx" = { key = ["customer_no"] }\n'
+                               '"customers_parquet.parquet" = { key = ["customer_no"] }\n')
     assert code == 0, answer
-    assert {t: a["inserted"] for t, a in answer.items()} == {"raw_files.csv": 3, "raw_files.xlsx": 3,
-                                                             "raw_files.parquet": 3}
+    assert {t: a["inserted"] for t, a in answer.items()} == {
+        "raw_files.customers_csv": 3, "raw_files.customers_xlsx": 3, "raw_files.customers_parquet": 3}
     as_text = [("1", "Anna", "2.5"), ("2", "Ben", None), ("3", "Cleo", "10.0")]
-    assert files.target("select * from raw_files.csv order by 1") == as_text
-    assert files.target("select * from raw_files.xlsx order by 1") == as_text
-    assert files.target("select * from raw_files.parquet order by 1") == CUSTOMERS
+    assert files.target("select * from raw_files.customers_csv order by 1") == as_text
+    assert files.target("select * from raw_files.customers_xlsx order by 1") == as_text
+    assert files.target("select * from raw_files.customers_parquet order by 1") == CUSTOMERS
 
 
 def test_csv_and_excel_arrive_as_text_and_parquet_keeps_its_types(files):
-    code, answer = load(files, '"customers.csv" = { sep = ";" }\n"customers.xlsx" = {}\n"customers.parquet" = {}\n')
+    code, answer = load(files, '"customers_csv.csv" = { sep = ";" }\n"customers_xlsx.xlsx" = {}\n'
+                               '"customers_parquet.parquet" = {}\n')
     assert code == 0, answer
     text = [("customer_no", "text"), ("name", "text"), ("balance", "text")]
-    assert types(files, "csv") == text
-    assert types(files, "xlsx") == text
-    assert types(files, "parquet") == [("customer_no", "bigint"), ("name", "text"),
-                                       ("balance", "double precision")]
+    assert types(files, "customers_csv") == text
+    assert types(files, "customers_xlsx") == text
+    assert types(files, "customers_parquet") == [("customer_no", "bigint"), ("name", "text"),
+                                                 ("balance", "double precision")]
 
 
 def test_columns_names_types_for_csv_and_excel(files):
     named = 'columns = { customer_no = "integer", balance = "decimal(10,2)" }'
-    code, answer = load(files, f'"customers.csv" = {{ key = ["customer_no"], sep = ";", {named} }}\n'
-                               f'"customers.xlsx" = {{ key = ["customer_no"], {named} }}\n')
+    code, answer = load(files, f'"customers_csv.csv" = {{ key = ["customer_no"], sep = ";", {named} }}\n'
+                               f'"customers_xlsx.xlsx" = {{ key = ["customer_no"], {named} }}\n')
     assert code == 0, answer
-    for table in ("csv", "xlsx"):
+    for table in ("customers_csv", "customers_xlsx"):
         assert types(files, table) == [("customer_no", "integer"), ("name", "text"), ("balance", "numeric")]
         assert files.target(f"select customer_no, balance from raw_files.{table} order by 1") == [
             (1, Decimal("2.5")), (2, None), (3, Decimal("10"))]
@@ -86,20 +87,46 @@ def test_columns_names_types_for_csv_and_excel(files):
 
 def test_the_separator_option_is_passed_to_duckdb(files):
     # a wrong separator proves the option is not sniffed away: the whole line becomes one column
-    code, answer = load(files, '"customers.csv" = {}\n', options='sep = ","')
+    code, answer = load(files, '"customers_csv.csv" = {}\n', options='sep = ","')
     assert code == 0, answer
-    assert types(files, "csv") == [("customer_no;name;balance", "text")]
+    assert types(files, "customers_csv") == [("customer_no;name;balance", "text")]
 
 
 def test_a_missing_file_fails_the_run_with_a_reason(files):
     code, answer = load(files, '"orders.csv" = { key = ["order_no"] }\n')
     assert code == 1
-    assert answer["raw_files.csv"]["status"] == "failed"
-    assert "orders.csv" in answer["raw_files.csv"]["reason"]
+    assert answer["raw_files.orders"]["status"] == "failed"
+    assert "orders.csv" in answer["raw_files.orders"]["reason"]
     assert files.target("select status from _rowvioli.status") == [("failed",)]
 
 
 def test_a_column_type_that_is_not_a_type_name_fails_and_reaches_no_query(files):
-    code, answer = load(files, '"customers.csv" = { sep = ";", columns = { name = "text) AS name, 1 AS x --" } }\n')
+    code, answer = load(files, '"customers_csv.csv" = { sep = ";", '
+                               'columns ={ name = "text) AS name, 1 AS x --" } }\n')
     assert code == 1
-    assert "is not a column type" in answer["raw_files.csv"]["reason"]
+    assert "is not a column type" in answer["raw_files.customers_csv"]["reason"]
+
+
+def test_two_csv_files_of_a_source_become_two_target_tables_named_after_the_files(files):
+    (files.dir / "files" / "Orders.csv").write_text("order_no;customer_no\n7;1\n")
+    code, answer = load(files, '"customers_csv.csv" = { key = ["customer_no"], sep = ";" }\n'
+                               '"Orders.csv" = { key = ["order_no"], sep = ";" }\n')
+    assert code == 0, answer
+    assert {t: a["inserted"] for t, a in answer.items()} == {"raw_files.customers_csv": 3, "raw_files.orders": 1}
+    assert files.target("select * from raw_files.orders") == [("7", "1")]
+
+
+def test_a_csv_and_an_excel_file_of_the_same_name_fail_apply_as_one_target_table(files):
+    files.definition({"files.toml": f"""
+[files]
+type = "file"
+max_age = "1h"
+[files.connection]
+path = "{files.dir / 'files'}"
+[files.tables]
+"customers.csv" = {{}}
+"customers.xlsx" = {{}}
+"""})
+    r = files.run("apply", "sources")
+    assert r.returncode == 1
+    assert "both become target table customers" in r.stderr
