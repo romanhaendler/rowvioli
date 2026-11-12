@@ -63,7 +63,7 @@ def test_a_request_during_a_run_causes_one_more_run_afterwards(erp):
     with psycopg.connect(erp.target_url) as holder:
         holder.execute("lock table raw_erp.customers in access exclusive mode")  # holds the run at the diff
         worker = erp.start("run")
-        until(lambda: waiting_on(erp, "CREATE TEMP TABLE _diff"))
+        until(lambda: waiting_on(erp, "raw_erp.customers"))
         request(erp)
         holder.rollback()
     assert worker.wait(timeout=30) == 0

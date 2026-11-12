@@ -114,7 +114,7 @@ def publish(conn, t, rows_read):
             sql(conn, f"CREATE TABLE {t['log']} (_run bigint, _op text, LIKE {t['mirror']})")
     if t["key"]:
         on = " AND ".join(f"d.{quote(k)} = m.{quote(k)}" for k in t["key"])
-        sql(conn, f"INSERT INTO {t['log']} SELECT $1, _op, {names} FROM _diff", [t["run"]])
+        sql(conn, f"INSERT INTO {t['log']} (_run, _op, {names}) SELECT $1, _op, {names} FROM _diff", [t["run"]])
         sql(conn, f"DELETE FROM {t['mirror']} m USING _diff d WHERE d._op IN ('D', 'U') AND {on}")
         sql(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _diff WHERE _op IN ('I', 'U')")
     else:  # without a key: replaced as a whole, no change log

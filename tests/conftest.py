@@ -61,7 +61,7 @@ def servers():
             _wait(_url(n))
         yield names
     finally:
-        subprocess.run(["docker", "rm", "-f", *names.values()], capture_output=True)
+        subprocess.run(["docker", "rm", "-f", "-v", *names.values()], capture_output=True)
 
 
 def _query(url, sql, params=None):

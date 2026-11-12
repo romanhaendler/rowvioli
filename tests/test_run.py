@@ -166,3 +166,21 @@ def test_a_disabled_table_is_not_loaded_again_and_its_mirror_stays(erp):
     assert erp.target("select count(*) from _rowvioli.runs r join _rowvioli.tables t on t.id = r.table "
                       "where t.source_table = 'public.customers'") == [(1,)]
     assert rows(erp.target, "select * from raw_erp.customers") == rows(erp.source, "select * from customers")
+
+
+def test_a_source_with_reordered_columns_still_gives_a_correct_mirror_and_change_log(erp):
+    ok(erp)
+    # same names and types, the two text columns swapped
+    erp.source("create table c2 (customer_no int primary key, city text, name text)")
+    erp.source("insert into c2 select customer_no, city, name from customers")
+    erp.source("drop table customers")
+    erp.source("alter table c2 rename to customers")
+    erp.source("update customers set city = 'Köln' where customer_no = 1")
+    erp.source("insert into customers values (4, 'Bonn', 'Dora')")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    assert rows(erp.target, "select customer_no, name, city from raw_erp.customers") == rows(
+        erp.source, "select customer_no, name, city from customers")
+    second = erp.target("select max(run) from _rowvioli.runs")[0][0]
+    assert erp.target("select _op, customer_no, name, city from raw_erp.customers__log where _run = %s "
+                      "order by customer_no", [second]) == [("U", 1, "Anna", "Köln"), ("I", 4, "Dora", "Bonn")]

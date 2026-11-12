@@ -46,10 +46,12 @@ def held_table_locks(rv):
                           and database = (select oid from pg_database where datname = current_database())""")[0][0]
 
 
-def waiting_on(rv, statement):
-    """The run's target backend waits for a lock while running `statement`."""
-    return rv.target("""select count(*) from pg_stat_activity where datname = current_database()
-                          and wait_event_type = 'Lock' and query like %s""", [statement + "%"])[0][0]
+def waiting_on(rv, table, mode="AccessShareLock"):
+    """The pid of a backend (the run's) that waits for a `mode` lock on `table`, or None."""
+    pids = rv.target("""select pid from pg_locks where not granted and mode = %s and relation = to_regclass(%s)
+                          and database = (select oid from pg_database where datname = current_database())""",
+                     [mode, table])
+    return pids[0][0] if pids else None
 
 
 def kill_and_check(rv, worker):
@@ -76,24 +78,23 @@ def test_a_run_killed_while_filling_leaves_the_mirror_and_releases_its_lock(slow
     slow.source("insert into customers select i, repeat('x', 10000) from generate_series(1000, 3500) i")
     slow.source("update delay set seconds = 1, after = 3400")
     worker = slow.start("run")
-    # held inside COPY into a staging table that already has rows
-    until(lambda: slow.target("""select count(*) from pg_stat_activity a, pg_class c
-                                   where a.datname = current_database() and a.query like 'COPY %_stage%'
-                                     and c.relname = '_stage' and pg_relation_size(c.oid) > 0""")[0][0], timeout=30)
+    # held while filling a staging table (a temp table) that already has rows
+    until(lambda: slow.target("""select count(*) from pg_class where relpersistence = 't' and relkind = 'r'
+                                   and pg_relation_size(oid) > 0""")[0][0], timeout=30)
     kill_and_check(slow, worker)
     assert mirror(slow) == before
 
 
-@pytest.mark.parametrize("mode, statement", [
-    ("access exclusive", "CREATE TEMP TABLE _diff"),  # blocks reads: held at the diff
-    ("exclusive", "DELETE FROM"),  # blocks only writes: held at publishing, change log rows already inserted
+@pytest.mark.parametrize("mode, waits_for", [
+    ("access exclusive", "AccessShareLock"),  # blocks reads: held at the diff
+    ("exclusive", "RowExclusiveLock"),  # blocks only writes: held at publishing, change log rows already inserted
 ])
-def test_a_run_killed_at_the_diff_or_while_publishing_leaves_the_mirror_and_releases_its_lock(slow, mode, statement):
+def test_a_run_killed_at_the_diff_or_while_publishing_leaves_the_mirror_and_releases_its_lock(slow, mode, waits_for):
     before = mirror(slow)
     with psycopg.connect(slow.target_url) as holder:
         holder.execute(f"lock table raw_erp.slow in {mode} mode")
         worker = slow.start("run")
-        until(lambda: waiting_on(slow, statement))
+        until(lambda: waiting_on(slow, "raw_erp.slow", waits_for))
         kill_and_check(slow, worker)  # while the mirror is still locked
         holder.rollback()
     assert mirror(slow) == before
@@ -105,9 +106,7 @@ def test_a_run_whose_server_process_is_killed_fails_and_run_says_so(slow):
     with psycopg.connect(slow.target_url) as holder:
         holder.execute("lock table raw_erp.slow in access exclusive mode")
         worker = slow.start("run")
-        until(lambda: waiting_on(slow, "CREATE TEMP TABLE _diff"))
-        slow.target("""select pg_terminate_backend(pid) from pg_stat_activity
-                        where datname = current_database() and query like 'CREATE TEMP TABLE _diff%'""")
+        slow.target("select pg_terminate_backend(%s)", [until(lambda: waiting_on(slow, "raw_erp.slow"))])
         out, err = worker.communicate(timeout=20)
         holder.rollback()
     assert worker.returncode == 1

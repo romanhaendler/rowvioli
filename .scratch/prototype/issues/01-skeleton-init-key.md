@@ -32,3 +32,4 @@ Deviations from README "Target schema" made by the implementation (impl-01):
 - `init` drops and recreates the view each time. The tables are created only if missing and are never migrated.
 - `key new` writes `worker.key` and `worker.pub` into the current directory, both base64, and refuses to overwrite an existing file. The README does not name the private key file or say what happens to an existing one.
 - `key_id` exists in `sources`, but nothing fills it yet.
+- Review: the control connection's settings cannot be observed from the target side without importing the program. The keepalive values are libpq options on the client's socket, which the server does not show, and another session's `client_connection_check_interval` is not readable (`pg_settings`/`current_setting` show only one's own session). Its effect is tested instead: `test_crashes.py` kills a run waiting for a lock and sees the table lock released while the test still holds the mirror lock.
