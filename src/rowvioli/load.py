@@ -142,7 +142,7 @@ def diff(conn, t, staged, mirror):
     if not mirror:
         sql(conn, f"CREATE TEMP TABLE _diff AS SELECT 'I'::text AS _op, {s} FROM _stage s")
     else:
-        sql(conn, f"""CREATE TEMP TABLE _diff AS
+        sql(conn, f"""CREATE TEMP TABLE _diff (_op, {', '.join(quote(c) for c, _ in staged)}) AS
             SELECT 'D'::text AS _op, {m} FROM {t['mirror']} m WHERE NOT EXISTS (SELECT FROM _stage s WHERE {on})
             UNION ALL
             SELECT CASE WHEN m.{key[0]} IS NULL THEN 'I' ELSE 'U' END, {s}
