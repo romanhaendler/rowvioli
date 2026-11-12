@@ -1,6 +1,6 @@
 # Version 0.1: the program
 
-Status: ready-for-agent
+Status: resolved
 
 ## Problem Statement
 
