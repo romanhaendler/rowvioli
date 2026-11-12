@@ -54,6 +54,7 @@ Unchanged from the first round:
 - **Removing secrets from error texts is best effort.** A driver can reformat a connection string or quote part of a value in ways the program does not recognise.
 - **The private key file has to reach every worker** once, by whatever the organisation uses for that.
 - **No common point in time in the source.** Two tables are not read at the same moment.
+- **A table with a key cannot have a column `_op`**, nor `_run` with a change log. The diff and the change log use these names.
 - **Tables without a key** are replaced as a whole on every run, have no change log, and bloat until autovacuum has run.
 - **Advisory locks share one number space per database.** Another application using two-key advisory locks in the same database could collide.
 - **An idle worker keeps one connection to the target open**, with which it asks whether something is claimable.

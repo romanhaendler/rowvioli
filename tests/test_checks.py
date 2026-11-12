@@ -28,6 +28,8 @@ MIRROR = "select * from raw_erp.customers"
     ("delete from customers where customer_no <> 1", "67 % of the rows would be deleted"),
     ("alter table customers drop column city", "column city is missing"),
     ("alter table customers alter customer_no type bigint", "column customer_no has changed its type"),
+    ("alter table customers add column _op text", "column _op is a name of the change log"),
+    ("alter table customers add column _run int", "column _run is a name of the change log"),
 ])
 def test_a_check_fails_the_run_and_leaves_the_mirror_unchanged(erp, change, expected):
     ok(erp)

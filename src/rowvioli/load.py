@@ -90,6 +90,10 @@ def check(conn, t, staged, mirror):
         if primary_key != key:
             raise Exception(f"the key {key} differs from the mirror's primary key {primary_key}")
     if key:
+        # the diff and the change log carry them beside the table's columns
+        for name in ["_op", "_run"] if t["log"] else ["_op"]:
+            if name in types:
+                raise Exception(f"column {name} is a name of the change log, so a table with a key cannot have it")
         names = ", ".join(quote(k) for k in key)
         if sql(conn, f"SELECT 1 FROM _stage WHERE {' OR '.join(quote(k) + ' IS NULL' for k in key)} LIMIT 1"):
             raise Exception(f"a key column of ({names}) is null")
