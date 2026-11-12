@@ -4,7 +4,7 @@ from importlib.resources import files
 
 import adbc_driver_postgresql.dbapi as adbc
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # README "Failures": a dead client or network is noticed by Postgres within seconds to a minute
 KEEPALIVE = "keepalives_idle=30&keepalives_interval=10&keepalives_count=3&tcp_user_timeout=60000"

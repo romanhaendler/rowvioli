@@ -1,4 +1,4 @@
--- The bookkeeping schema, version 1 (README "Target schema"). Run once by `init`, in one transaction.
+-- The bookkeeping schema, version 2 (README "Target schema"). Run once by `init`, in one transaction.
 CREATE SCHEMA _rowvioli;
 
 CREATE TABLE _rowvioli.sources (
@@ -20,6 +20,8 @@ CREATE TABLE _rowvioli.tables (
     key              text[],
     -- a table's settings, with the source's filled in by `apply`
     max_age          interval NOT NULL,
+    at               time[],
+    timezone         text,
     log              boolean NOT NULL DEFAULT true,
     max_delete_share numeric NOT NULL DEFAULT 0.5,
     max_seconds      int NOT NULL DEFAULT 3600,
@@ -51,7 +53,7 @@ CREATE TABLE _rowvioli.meta (
     max_running    int NOT NULL DEFAULT 20,
     definition     text);
 
-INSERT INTO _rowvioli.meta (schema_version) VALUES (1);
+INSERT INTO _rowvioli.meta (schema_version) VALUES (2);
 
 CREATE VIEW _rowvioli.status AS
 SELECT t.id, s.id AS source_id, t.source, t.source_table,
@@ -65,13 +67,20 @@ SELECT t.id, s.id AS source_id, t.source, t.source_table,
          ORDER BY r.run DESC LIMIT 1) AS rows_last_run
   FROM _rowvioli.tables t
   JOIN _rowvioli.sources s ON s.name = t.source
- CROSS JOIN LATERAL (SELECT CASE
+ CROSS JOIN LATERAL (SELECT least(CASE
          WHEN t.attempted_at IS NULL THEN now()
          WHEN t.requested_at > t.attempted_at THEN t.requested_at
          WHEN t.attempts = 0 THEN t.loaded_at + t.max_age
          -- the pause: one minute, doubled per further attempt, never longer than max_age
          ELSE t.attempted_at + least(interval '1 minute' * power(2, least(t.attempts - 1, 30)), t.max_age)
-       END AS due_at) d
+       END,
+       -- the next load time: a request the clock makes, so it counts in every state (decision 36).
+       -- The day the last run began and the day after hold every candidate.
+       (SELECT min(c.at)
+          FROM unnest(t.at) a, generate_series(0, 1) day,
+               LATERAL (SELECT ((t.attempted_at AT TIME ZONE t.timezone)::date + day + a)
+                               AT TIME ZONE t.timezone AS at) c
+         WHERE c.at > t.attempted_at)) AS due_at) d
  -- loading means: somebody holds the table lock (source id, table id) in this database
   LEFT JOIN LATERAL (SELECT l.pid FROM pg_locks l
                       WHERE l.locktype = 'advisory' AND l.objsubid = 2 AND l.granted
