@@ -741,6 +741,16 @@ A connector may offer a second function, `tables(connection)`, that lists the ta
 
 Version 0.1 ships `postgres` and `file` (without JSON). `odbc` and `rest` come with 0.2.
 
+### Licences
+
+rowvioli ships only code written for it and dependencies under a permissive licence; everything under another licence is installed by the operator or lives in a separate package. Three consequences follow for you:
+
+- A connector's code is written from the source's public documentation, never taken from another project.
+- Vendor drivers, SDKs and specification files are not in the package. You install them under the vendor's licence and accept its terms yourself; rowvioli accepts none for you. For `odbc` that is the ODBC driver.
+- A connector that needs a GPL library or a vendor SDK is a separate package with its own licence.
+
+The reasons are in decision 38. It is the project's rule, not legal advice.
+
 ### Two ways to get a connector
 
 | Way | Set-up | In the definition | Meant for |
