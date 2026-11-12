@@ -1,6 +1,6 @@
 # 04: Documents and version
 
-**Blocked by:** 01, 02, 03, 05
+**Blocked by:** 01, 02, 03
 
 **Status:** ready-for-agent
 
