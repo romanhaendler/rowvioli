@@ -3,8 +3,6 @@ import json
 
 import pytest
 
-pytestmark = pytest.mark.skip(reason="ticket 03: run")
-
 SOURCE = """
 create table customers (customer_no int primary key, name text, city text);
 insert into customers values (1, 'Anna', 'Bonn'), (2, 'Ben', 'Essen'), (3, 'Cleo', null);
@@ -164,7 +162,8 @@ def test_a_disabled_table_is_not_loaded_again_and_its_mirror_stays(erp):
     erp.target("update _rowvioli.tables set requested_at = now()")  # even a request does not load it
     code, answer = run(erp)
     assert code == 0 and list(answer["tables"]) == ["raw_erp.notes"]
-    assert run(erp, "erp", "public.customers")[1]["tables"] == {}
+    r = erp.run("run", "erp", "public.customers")
+    assert r.returncode == 1 and "public.customers" in r.stderr
     assert erp.target("select count(*) from _rowvioli.runs r join _rowvioli.tables t on t.id = r.table "
                       "where t.source_table = 'public.customers'") == [(1,)]
     assert rows(erp.target, "select * from raw_erp.customers") == rows(erp.source, "select * from customers")

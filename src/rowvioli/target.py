@@ -9,6 +9,9 @@ SCHEMA_VERSION = 1
 # README "Failures": a dead client or network is noticed by Postgres within seconds to a minute
 KEEPALIVE = "keepalives_idle=30&keepalives_interval=10&keepalives_count=3&tcp_user_timeout=60000"
 
+# what a worker may start and a run may claim, asked with the same counts by both (decision 34)
+CLAIMABLE = files(__package__).joinpath("sql/claimable.sql").read_text()
+
 
 def connect(init=False):
     """Opens the control connection and refuses a target without `_rowvioli` or with another schema version.
@@ -29,6 +32,10 @@ def connect(init=False):
     if version != SCHEMA_VERSION:
         raise SystemExit(f"the target has schema version {version}, this program works with version {SCHEMA_VERSION}")
     return conn
+
+
+def quote(name):
+    return '"' + name.replace('"', '""') + '"'
 
 
 def sql(conn, query, params=None):

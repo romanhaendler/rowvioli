@@ -1,7 +1,9 @@
 """The commands: arguments, the answer on stdout, the exit code."""
 import argparse
+import os
+import sys
 
-from . import apply, definition, seal, target
+from . import apply, definition, seal, target, work
 
 
 def main():
@@ -30,7 +32,12 @@ def main():
         print("the definition is valid")
     elif a.command == "apply":
         apply.apply(a.directory, a.key)
+    elif a.command in ("run", "work"):
+        for variable in ("ROWVIOLI_TARGET_URL", "ROWVIOLI_KEY_FILE"):
+            if not os.environ.get(variable):
+                raise SystemExit(f"{variable} is not set")
+        if a.command == "run":
+            sys.exit(work.run(a.source or "", a.table or "", a.slots))
+        work.loop(a.slots)
     else:
-        if a.command in ("run", "work"):
-            target.connect()
         raise SystemExit(f"rowvioli {a.command}: not built yet")

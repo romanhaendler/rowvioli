@@ -34,3 +34,16 @@ def key_id(public_key):
 def seal(public_key, source, connection):
     """The source name is sealed with its connection, so a ciphertext copied to another source is rejected."""
     return SealedBox(public_key).encrypt(json.dumps({"source": source, "connection": connection}).encode())
+
+
+def unseal(key_file, key_id_, source, ciphertext):
+    """Decrypts a source's connection with the private key in key_file whose key_id matches. The file holds one
+    private key per line, so old and new key can be held side by side while the key pair is rotated."""
+    for line in Path(key_file).read_bytes().split():
+        private = PrivateKey(line, Base64Encoder)
+        if key_id(private.public_key) == key_id_:
+            sealed = json.loads(SealedBox(private).decrypt(ciphertext))
+            if sealed["source"] != source:
+                raise ValueError(f"it was sealed for source {sealed['source']}")
+            return sealed["connection"]
+    raise ValueError(f"{key_file} holds no private key {key_id_}")
