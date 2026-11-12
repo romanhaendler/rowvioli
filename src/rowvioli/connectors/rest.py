@@ -1,7 +1,7 @@
 """The rest connector: expects `url` and, optionally, `token` (sent as a Bearer header). A table is an endpoint: the
 option `path` is appended to `url`, `columns` names every column with a type (text, int8, float8, bool, date, timestamp,
-timestamptz) and `page` names a query parameter that counts from 1 until a page comes back empty. Each response is a
-JSON array of flat objects and becomes one batch."""
+timestamptz) and `page` names a query parameter that counts from 1 until a page comes back empty; a page equal to the one
+before fails the run. Each response is a JSON array of flat objects and becomes one batch."""
 from datetime import date, datetime, timezone
 
 import httpx
@@ -36,7 +36,7 @@ def read(connection, table, options):
             raise Exception(f"{table}: column {name}: {type} is not a type, use {', '.join(TYPES)}")
     schema = pa.schema([(name, TYPES[type]) for name, type in columns.items()])
     headers = {"Authorization": f"Bearer {connection['token']}"} if connection.get("token") else {}
-    path, paged, page = options["path"], "page" in options, 1
+    path, paged, page, previous = options["path"], "page" in options, 1, None
     while True:
         response = httpx.get(connection["url"] + path, params={options["page"]: page} if paged else None,
                              headers=headers)
@@ -50,6 +50,9 @@ def read(connection, table, options):
             raise Exception(f"{table}: {path} must answer a JSON array of flat objects")
         if paged and not rows:
             return
+        if rows == previous:  # an API that ignores the page would otherwise be asked until max_seconds
+            raise Exception(f"{table}: {path} answered page {page} like page {page - 1}, so it does not page")
+        previous = rows
         arrays = []
         for name, type in columns.items():
             try:
