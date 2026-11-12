@@ -4,7 +4,7 @@ The binding vocabulary of the concept. If a term changes, it changes here and in
 
 | Term | Meaning |
 |---|---|
-| **Source** | A source system with a connection and a list of tables. One file `sources/<name>.toml` in the definition. |
+| **Source** | A source system with a connection and a list of tables. By convention one file `sources/<name>.toml` in the definition. |
 | **Source table** | A table, file or endpoint of the source that a connector delivers as rows. |
 | **Target** | The one PostgreSQL database that holds the mirrors and the bookkeeping. The word is used for nothing else. |
 | **Target table** | The table in the target that exactly one source table is loaded into. It belongs to exactly one source. |
@@ -21,10 +21,10 @@ The binding vocabulary of the concept. If a term changes, it changes here and in
 | **Pause** | The wait after a run that did not succeed: one minute, then doubling, never longer than the maximum age. |
 | **Request** | Asking for a load now by setting `requested_at` on a table. |
 | **Run** | Loading one table once, in a process of its own. One row in `_rowvioli.runs`. |
-| **Run status** | `running`, `ok`, `failed` or `dead`. |
+| **Run status** | `running`, `ok` or `failed`, as stored in `_rowvioli.runs`. `dead` is never stored: it is computed. |
 | **Table status** | `new`, `loading`, `ok` or `failed`. Computed in the view `_rowvioli.status`. |
 | **Attempts** | Counter on a table: runs since the last success. |
-| **Worker** | A process that looks for due tables and starts a run for each. It is stateless and brings only its connectors, the address of the target and the private key. |
+| **Worker** | A process that looks for claimable tables (due, and within `parallel` and `max_running`) and starts a run for each. It is stateless and brings only its connectors, the address of the target and the private key. |
 | **Slot** | One table a worker can load at a time. The number of slots per worker is `--slots`. |
 | **Control connection** | The one connection to the target on which a run does everything: hold the lock, fill the staging table, check, compare, publish. |
 | **Table lock** | A session-level advisory lock in Postgres per target table, held on the control connection. It ends with the connection. |
@@ -33,9 +33,9 @@ The binding vocabulary of the concept. If a term changes, it changes here and in
 | **Staging table** | TEMP table of a run holding the current content of the source table. Visible only on the run's connection. |
 | **Diff** | TEMP table of a run holding the rows that differ between staging table and mirror, each marked `I`, `U` or `D`. |
 | **Publish** | The one transaction that writes the diff to the change log, applies it to the mirror and records the success. |
-| **Dead** | A run that is recorded as `running` while nobody holds its table lock. |
+| **Dead** | A run that is recorded as `running` while nobody holds its table lock. Its table shows as `failed` with the reason `worker lost`. |
 | **Connector** | One function, `read`, that attaches one kind of source. Installed on the workers by the operator. |
-| **Chunk** | A portion of a few thousand rows that a connector delivers as an Arrow batch and that is written to the staging table as a whole. |
+| **Chunk** | A portion of rows, as large as the connector makes it (about 16 MB with ADBC), that a connector delivers as an Arrow batch and that is written to the staging table as a whole. |
 
 ## Terms deliberately avoided
 

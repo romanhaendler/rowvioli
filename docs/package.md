@@ -59,7 +59,7 @@ rowvioli/
     seal.py             encrypt and decrypt connections
     target.py           control connection: keepalive, lock, COPY, SQL
     load.py             one run: staging, checks, diff, publishing
-    work.py             the loop: look for due tables, start a process per run
+    work.py             the loop: look for claimable tables, start a process per run
     contract.py         connector contract
     connectors/
       postgres.py
@@ -83,7 +83,7 @@ rowvioli/
 
 `init` creates the schema `_rowvioli` and writes a schema version into it. The program refuses to start if the version does not match.
 
-The first screen of the README shows the whole usage: one source file, two commands and the status view. Whatever a user needs a drawing for to understand is cut or hidden.
+The first screen of the README shows the whole usage: one source file, the target's address, four commands and the status view. Whatever a user needs a drawing for to understand is cut or hidden.
 
 ## When 0.1 is done
 
@@ -92,7 +92,7 @@ The first screen of the README shows the whole usage: one source file, two comma
   - a concurrent reader never sees an empty or half-loaded table,
   - a run killed at any step leaves the target unchanged and the table is loaded again after the pause,
   - the limits per source and per target hold,
-  - each check in step 4 fails the run and leaves the target unchanged,
+  - each check fails the run and leaves the target unchanged,
   - `apply` twice gives the same state and never changes what the workers experienced.
 - The benchmark script reproduces the numbers in `docs/measurements.md`.
 

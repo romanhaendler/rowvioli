@@ -1,39 +1,42 @@
 # Open points
 
-What is undecided, unverified or unbuilt as of 2026-11-11, after the second round of the discussion.
+What is undecided, unverified or unbuilt as of 2026-11-12, after the prototype.
 
 ## Decisions for the owner
 
-None at the moment.
+Two points left open by the prototype need one before 0.1: what "workers wait and retry" means, and schema versions (both below).
+
+Decided after the prototype and no longer open: percent-encoding a password in a URL, stopping `work`, asking what is claimable, and one `target_schema` per source (decisions 32 to 35).
 
 Decided in the second round and no longer open: new tables of the source do not arrive by themselves (decision 21), one key pair for all workers (decision 26), no second Postgres driver (decision 28), the address of the target comes from the worker's environment (decision 30), and the smaller points collected in decision 31.
 
+## Left open by the prototype
+
+From `.scratch/prototype/findings.md`:
+
+- **"Workers wait and retry" when the target is gone** (E11). The prototype's loop has no retry and would end with a traceback. With `Restart=always` the service manager would bring it back, which was not tried. To decide: whether "retry" means the service manager restarts the worker, and then to say so.
+- **Schema versions** (B5). In the prototype `init` recreates the view and creates missing tables, and nothing migrates. `docs/package.md` proposes that the program refuses to start on another version. How the schema gets from one version to the next is undecided.
+- **Progress** (A4), for example `485,000 of about 1,000,000 rows`, was not built.
+- **Seeing dead runs** (A5). A dead run's row in `runs` stays `running` without `finished_at`, and only its table shows `failed: worker lost`. If people should see dead runs as such, a second small view over `runs` is needed.
+- **A traceback on stderr** (F4). A run process that crashes writes it unscrubbed to the inherited stderr. 0.1 scrubs stderr too or catches everything in the run process.
+- **`runs.definition`** (B4), the hash of the definition, was never filled, and `key_id` is read by nobody. Both stay promises of 0.1. Nothing has shown that they are needed.
+
 ## Not verified
 
-These follow from the design or from documentation and were not tried out.
+These follow from the design or from documentation and were not tried out. The prototype verified the model as a whole: the view and the order, the pause, requests during a run, claiming with both limits, `apply`, a process per run with `max_seconds`, whole connection blocks, row counts through ADBC, a reader during publishing, and runs killed at every step.
 
 From the second round:
 
-- **The model as a whole.** A maximum age per table, the view that computes what is due, the order by how far a table misses its target, and the growing pause exist on paper only.
-- **Claiming in its new form.** Experiment 5 handed out waiting runs with one counting lock per source. Due tables, one counting lock for the whole target and the total limit `max_running` were not tried.
-- **`apply`**: idempotence, disabling what is missing, filling in placeholders, one transaction.
 - **Progress from `pg_stat_progress_copy`.** Experiment 8 read it from a second connection as a superuser. Whether a role without special rights sees the rows of another session was not checked.
-- **One process per run**, including ending a hanging run after `max_seconds` and the cost of starting a process per table.
-- **Requesting a load while the table is loading.** That it then loads once more follows from comparing two points in time.
-- **Encrypting a whole connection block.** Experiment 7 encrypted a single named value.
 - **A target address with several nodes** through ADBC, and the behaviour during a failover.
-- **Row counts through ADBC.** Experiment 8 took all counts from queries, not from the driver.
-- **ADBC from a Linux client.** Experiment 8 ran on macOS against Postgres in Docker.
+- **ADBC from a Linux client.** Experiment 8 and the prototype ran on macOS against Postgres in Docker.
 - **Entry points** for connectors. Standard Python, not tried here.
 
 Unchanged from the first round:
 
-- **A concurrent reader during publishing.** That consumers never see an empty table follows from one transaction and MVCC. Experiment 8 checked from a second connection that nothing is visible before the COMMIT. No test with a reader running alongside exists.
-- **A killed process cannot publish.** Follows from the transaction ending with the connection.
 - **Machine or network failure.** Nobody closes the connection then. Release of the lock depends on TCP keepalive, expected after about 60 s. `data-extractor` could not reproduce this locally either.
 - **`client_connection_check_interval`** was measured on Linux. Postgres supports it only on some operating systems.
-- **Removing secrets from error texts.**
-- **The connectors themselves**: ADBC for Postgres as a source, arrow-odbc for MSSQL and Informix, DuckDB for files. `data-extractor` has experience with the first two.
+- **The connectors themselves**: arrow-odbc for MSSQL and Informix, DuckDB for files. `data-extractor` has experience with ODBC. Only the `postgres` connector was played in the prototype.
 - **Composite keys.** Only a single-column key was measured.
 - **Wide tables with many rows.** 900 columns were measured with 100,000 rows only.
 - **A view that computes validity periods from the change log**, and its speed on a long history.
@@ -57,24 +60,27 @@ Unchanged from the first round:
 - **The place where `apply` runs holds every secret** in its environment.
 - **An older ciphertext can be put back** by someone with write access to the target.
 - **A wrongly built connection shows only when a table is loaded.** `apply` does not know the connector.
-- **Removing secrets from error texts is best effort.** A driver can reformat a connection string in ways the program does not recognise.
+- **Removing secrets from error texts is best effort.** A driver can reformat a connection string or quote part of a value in ways the program does not recognise.
 - **The private key file has to reach every worker** once, by whatever the organisation uses for that.
 - **No common point in time in the source.** Two tables are not read at the same moment.
 - **Tables without a key** are replaced as a whole on every run, have no change log, and bloat until autovacuum has run.
 - **Advisory locks share one number space per database.** Another application using two-key advisory locks in the same database could collide.
-- **An idle worker keeps one connection to the target open**, with which it looks for due tables.
+- **An idle worker keeps one connection to the target open**, with which it asks whether something is claimable.
+- **A process per run costs about 0.18 s.** It matters only for hundreds of tiny tables per minute on one machine.
+- **A worker's restart can take up to `max_seconds`**, because it lets its runs finish (decision 33).
 - **The ADBC driver cannot run `SHOW`** and other statements that return rows but cannot be wrapped into `COPY`.
+- **The driver decides the types in the target** (decision 28). `varchar(n)` arrives as `text` and `numeric(p,s)` as `numeric`, so a change between such types passes the schema check. An unconstrained `numeric` beyond 38 digits fails the run.
 
 ## Not built
 
-Everything. In particular:
+The program. A throwaway prototype (`.scratch/prototype/`, code in `src/rowvioli/`) played the model to answer seven questions: `init`, `key new`, `apply`, `run`, `work`, the schema, the status view and the `postgres` connector. It is not the start of the program. Not built even there:
 
-- the program and all connectors,
-- the schema `_rowvioli` beyond the parts used in experiment 5,
-- the status view,
+- `list`, `apply --check`, decisions 32 to 35,
+- adding a new column to the mirror, `log = false`, table-level `max_delete_share` and `max_seconds`, connector options,
+- the `odbc`, `file` and `rest` connectors,
 - the web UI,
 - the example definition,
-- tests and benchmark.
+- the benchmark.
 
 ## Not examined
 

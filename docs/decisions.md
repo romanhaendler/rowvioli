@@ -2,7 +2,7 @@
 
 Every decision of the concept with its reason, its price and what was rejected. The order follows the discussion of 2026-11-11, so the document also shows how the design got to where it is.
 
-There were two rounds on that day. Decisions 1 to 19 are the first round. The second round (decisions 20 to 30) replaced the model of orders, a jobs repo and an external scheduler with a maximum age per table, definitions in the target and stateless workers. Decisions of the first round that no longer hold are marked and kept, with their text unchanged.
+There were two rounds on that day. Decisions 1 to 19 are the first round. The second round (decisions 20 to 30) replaced the model of orders, a jobs repo and an external scheduler with a maximum age per table, definitions in the target and stateless workers. Decisions of the first round that no longer hold are marked and kept, with their text unchanged. A third round (decisions 32 to 35) followed on 2026-11-12, after a throwaway prototype had tried out the model of the second round.
 
 Evidence refers to `docs/measurements.md` and to the earlier projects `hpdl`, `data-extractor` and `dataly` in the same workspace.
 
@@ -321,11 +321,13 @@ Patterns can be added later as a second job of the worker without changing the m
 
 **Why.** A Python thread cannot be ended, so a hanging run could not end itself after `max_seconds`. A crashing driver would take all tables of the worker with it. With a process per run, process, run and control connection end together.
 
-**Price.** About half a second to start Python and import the libraries, per table.
+**Price.** 0.1 to 0.2 s per table to start Python, import the libraries and reach the claim, measured in the prototype. That matters only for hundreds of tiny tables per minute on one machine.
 
 **Rejected.** *Threads.*
 
 ## 26. The connection is a block in the definition, encrypted as a whole
+
+> **Changed by decision 32.** `apply` percent-encodes a value that lands in the user info of a URL.
 
 **Decision.** A source has a `connection` block in the definition. Its values may contain `$NAME` placeholders. `apply` fills them in from its environment, encrypts the whole block with the public key and stores one ciphertext per source. The connector receives the decrypted block as a dict and defines its fields. There is one key pair for all workers of a target. The public key is a file next to the definition.
 
@@ -374,7 +376,7 @@ If network zones are needed later, `rowvioli work --sources erp,crm` is the smal
 
 **Why.** Lock, TEMP tables and transaction have to be on the same connection, so two drivers side by side are not possible: it is one or the other. Experiment 8 played a complete run through ADBC: the session lock survives COMMIT and ROLLBACK and ends with the connection, the staging table is a TEMP table on that connection, the driver streams, nothing is visible before COMMIT, and errors arrive with their SQLSTATE.
 
-**Price.** The driver wraps every query that returns rows into `COPY`. `SHOW` fails because of that and has to be written as `current_setting(...)`. The driver decides the column types of the staging table.
+**Price.** The driver wraps every query that returns rows into `COPY`. `SHOW` fails because of that and has to be written as `current_setting(...)`. The driver decides the column types of the staging table, and the mirror inherits them. The prototype named the losses: `varchar(n)` becomes `text` and `numeric(p,s)` becomes `numeric`, so the schema check cannot see a change between such types, and an unconstrained `numeric` beyond 38 digits fails the run. The driver also decides the chunk size, about 16 MB, and with it the memory of a run. These are stated, not fought.
 
 **Rejected.**
 - *psycopg 3, row by row.* Passes every row through Python objects and takes eight times as long to fill the staging table.
@@ -392,7 +394,7 @@ If network zones are needed later, `rowvioli work --sources erp,crm` is the smal
 
 **Rejected.** *A connection limit on the database role of the workers.* No code, but a second mechanism and an error path for refused connections.
 
-**Evidence.** None. Experiment 5 counted per source only.
+**Evidence.** The prototype: six workers never exceeded `parallel` or `max_running`, and with the counting lock replaced by `SELECT 1` the total broke in 1 of 4 runs (`docs/measurements.md`, section 9). Experiment 5 counted per source only.
 
 ## 30. The target is exactly one database
 
@@ -405,6 +407,8 @@ If network zones are needed later, `rowvioli work --sources erp,crm` is the smal
 **Evidence.** None for an address with several nodes through ADBC.
 
 ## 31. Smaller decisions of the second round
+
+> **Changed by decision 34.** A worker asks whether something is claimable, not whether something is due.
 
 Decided by the owner on the proposals in `docs/open-points.md`:
 
@@ -437,6 +441,67 @@ Decided by the owner on the proposals in `docs/open-points.md`:
 | Limits | per source, per worker | per source, per worker, per target |
 | Driver of the control connection | open | ADBC alone |
 | Commands | `init`, `check`, `submit`, `work`, `run`, `key new`, `secret set`, `secret rekey` | `init`, `key new`, `list`, `apply`, `work`, `run` |
+
+## Third round: after the prototype
+
+On 2026-11-12 a throwaway prototype tried out the model of the second round as a whole (`.scratch/prototype/findings.md`). The model held: facts in one row, everything else computed, the connection as the lock. It strained only at the edges: the driver, the boundary between a worker and its run processes, and the first screen of the README. None of it called for a new concept. Four points needed a decision, and the owner took the smaller option each time. Everything else is a correction, listed at the end of this round.
+
+## 32. `apply` percent-encodes a secret in the user info of a URL
+
+**Decision.** If a placeholder value lands in the user-info part of a URL (`scheme://user:pass@host`), `apply` percent-encodes it before encrypting. Removing the connection's values from error texts stays as well.
+
+**Why.** A driver quotes not only whole values but also the part of a URL it cannot parse. With the password `p@ss%word` unencoded, libpq reported `invalid percent-encoded token: "ss%word@127.0.0.1"`: part of the password, unscrubbed, in the status, in `runs` and on stdout. Encoded, the password is never misparsed, so there is no fragment to quote. Authors keep writing plain values and never encode by hand.
+
+**Price.** `apply` has to recognise a URL in a connection value. A value encoded by hand is encoded twice and fails to log in. Scrubbing stays best effort for other formats.
+
+**Rejected.**
+- *Sealing the raw placeholder values as well and scrubbing every part of them.* More to carry and to match, for the one case that encoding already removes.
+- *Only telling authors to encode.* Leaves the leak to whoever does not read the README.
+
+## 33. `work` stops by letting its runs finish
+
+**Decision.** On SIGTERM `work` starts nothing new, waits for its running runs, each still bounded by `max_seconds`, and exits. Killing it hard kills its runs too. They count as `worker lost` and are retried after the pause.
+
+**Why.** In the prototype, killing `work` left its run processes behind as orphans that nobody ended after `max_seconds`. The README promised that a new program version lets running loads finish. Waiting is the smallest way to keep that promise, and a hard kill falls back on the path that already handles every crash.
+
+**Price.** A restart can take up to `max_seconds`. The service manager has to allow that, for example `TimeoutStopSec` with systemd, or it kills hard.
+
+**Rejected.** *Ending the runs at once on SIGTERM.* Throws away loads that would have finished, for nothing a hard kill does not already give.
+
+## 34. A worker asks what is claimable, not what is due
+
+**Decision.** A worker starts a run process only if something is claimable: due, and within `parallel` and `max_running`. It asks the same view with the same two counts as the claim.
+
+**Why.** With the limits full, every worker still started up to `--slots` processes every two seconds that found nothing to claim, about 0.18 s each. Asking the claim's question removes those processes.
+
+**Price.** The question repeats the counts of the claim. It is not exact: between question and claim another worker can take the last place, and the process finds nothing. That is harmless.
+
+## 35. `apply` fails when two sources share a `target_schema`
+
+**Decision.** `apply` fails if two sources have the same `target_schema`, as it fails if two tables of a source get the same target table.
+
+**Why.** The README said that a schema belongs to exactly one source, but nothing checked it, so the mirrors of two sources could collide. One check in `apply` turns the rule into a fact.
+
+**Price.** Two sources cannot share a schema even when their table names would never collide.
+
+## Corrections after the prototype
+
+| Point | Before | Now |
+|---|---|---|
+| Decision 25, price | about half a second per table | 0.1 to 0.2 s per table |
+| Decision 28, price | the driver decides the column types | the losses are named: `varchar(n)` to `text`, `numeric(p,s)` to `numeric`, no unconstrained `numeric` beyond 38 digits, chunks of about 16 MB |
+| Decision 29, evidence | none | the prototype, with and without the counting lock |
+| First screen of the README | `apply` and `work` | also `init`, `key new` and the two environment variables |
+| Status view | one column `status` with `loading (worker etl-02)` and `failed: <reason>`, a column `table` | `status` and `reason` separate, `source_table`, no worker |
+| `dead` | a stored run status | computed: a `running` row without its lock. Its table shows as `failed` with the reason `worker lost` |
+| Answer of `run` | `"step": "check"` for a failed table | `status` and `reason`. The reason already says what failed |
+| `run <source> <table>` with an unknown or disabled name | not covered | fails |
+| `apply` on a target without `init` | not covered | says: run `rowvioli init` first |
+| A missing `ROWVIOLI_TARGET_URL` or `ROWVIOLI_KEY_FILE` | not covered | `run` and `work` name it at start |
+| Request while loading, and the run fails | not covered | one more run at once, then the pause |
+| Share of deletions | checked in step 4 | checked after the diff, still before publishing |
+| Chunk | a few thousand rows | the size the connector delivers, about 16 MB with ADBC |
+| One file per source | a rule | a convention |
 
 ## Not examined
 

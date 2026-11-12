@@ -1,6 +1,6 @@
 # Measurements
 
-All numbers were taken on 2026-11-11 with the scripts in `experiments/`.
+All numbers were taken on 2026-11-11 with the scripts in `experiments/`, except section 9, which was taken on 2026-11-12 with the throwaway prototype.
 
 ## Set-up
 
@@ -87,7 +87,7 @@ Experiment `05_vergabe.sql` and `05_vergabe.sh`. Two sources with `parallel` 4 a
 | Tables with exactly one successful run | 50 of 50 |
 | The killed worker's table | recorded as dead, loaded by another worker as attempt 2 |
 
-This is the claim of the first round: it hands out waiting runs and uses one counting lock per source. The second round claims due tables with one counting lock for the whole target and adds a total limit (decisions 20 and 29). That form is not tested. What the experiment still shows is the mechanism: limits counted from held locks hold under concurrency, and a run whose lock is gone is recognised.
+This is the claim of the first round: it hands out waiting runs and uses one counting lock per source. The second round claims due tables with one counting lock for the whole target and adds a total limit (decisions 20 and 29). That form was tested by the prototype (section 9). What this experiment still shows is the mechanism: limits counted from held locks hold under concurrency, and a run whose lock is gone is recognised.
 
 ## 6. Staging as a TEMP table
 
@@ -153,6 +153,53 @@ What the numbers say:
 
 Limitations: one measurement each. The diff at 1 % changes took 2.3 s through ADBC against 1.0 s through psycopg, which was not investigated. Not tested: a Linux client, a real network between client and server, the row counts the driver itself reports, and a target address with several nodes.
 
+## 9. The prototype
+
+Source: `.scratch/prototype/findings.md`, with the code in `src/rowvioli/` and its tests in `tests/` (62 passed). A laptop with Apple Silicon against `postgres:16` in Docker, Python 3.13, adbc-driver-postgresql 1.13.0, pyarrow 26.0.1, PyNaCl 1.6.2. The prototype plays the whole model: `init`, `key new`, `apply`, `run`, `work`, the status view, the claim, both limits and the pause.
+
+A process per run, 10 repetitions each, median. A 100-row table with a key, nothing changed:
+
+| What | Median |
+|---|---|
+| Bare `python -c pass` | 0.013 s |
+| Python plus importing pyarrow, ADBC and PyNaCl | 0.105 s |
+| A run process that claims nothing: start, import, connect, claim query | 0.183 s |
+| The run inside the target, claim to publish | 0.068 s |
+| `rowvioli run erp public.customers`, wall time | 0.453 s |
+
+The status view and the claim's pick, with 10 table locks held:
+
+| Tables | `select * from status` | the claim's pick |
+|---|---|---|
+| 2 | 0.3 ms | 0.4 ms |
+| 200 | 1.1 ms | 1.3 ms |
+| 1000 | 3.7 ms | 4.2 ms |
+
+Lock released after `kill -9` of a run process:
+
+| The run's backend was | Lock released after |
+|---|---|
+| waiting for the client, while filling | about 10 ms |
+| waiting for a lock, at the diff or while publishing, with `client_connection_check_interval = 2s` | about 2 s |
+
+Both limits under concurrency: 6 workers with 4 slots each, erp with `parallel = 2`, crm with `parallel = 3`, 10 slow tables each, `max_running = 4`, a probe on `pg_locks` every 20 ms.
+
+| Variant | Result |
+|---|---|
+| With the counting lock | never more than 2 erp, 3 crm or 4 in total; 2 erp and 4 in total were reached |
+| Counting lock replaced by `SELECT 1` | the total limit broke in 1 of 4 runs (5 locks against 4), and in 2 of 3 runs in an earlier series |
+| Smaller load (3 workers, 2 × 5 tables), without the counting lock | never broke the limit |
+
+What the numbers say:
+
+- **A process per run costs about 0.18 s** before it does any work, more than twice the work for a small table. That is irrelevant for tables loaded every few minutes. Decision 25 had assumed half a second.
+- **The view and the claim stay cheap.** 4 ms per claim, serialised by the counting lock, allows about 250 claims a second. The one part that grows with tables times locks is the look into `pg_locks` per table.
+- **The counting lock is what holds the limits.** Without load the race is rare, because claims have to overlap within a few milliseconds and starting a Python process spreads them out. A probe at low load proves nothing.
+- **`client_connection_check_interval` also works during a lock wait.** Both release times stay within the README's "Failures" table.
+- **The driver hands over batches of about 16 MB**, or the rest at the end of the stream. A small table arrives as one batch.
+
+Every number is a single series on a laptop. Not measured: a Linux client, a real network, and a machine or network failure.
+
 ## Reference: hpdl
 
 From `hpdl/docs/performance.md`, same table shape, source and target with 2 CPUs and 4 GB each, worker with 3 CPUs:
@@ -175,12 +222,13 @@ The bottleneck in `hpdl` was never the Python worker: source CPU on unchanged ru
 | Claim | Evidence |
 |---|---|
 | Publishing leaves mirror equal to the source | experiments 1 and 6 |
-| Consumers never see an empty table | follows from one transaction and MVCC. Not tested with a concurrent reader. |
+| Consumers never see an empty table | prototype, with a reader running alongside |
 | The row comparison scales with the amount of data, not abruptly with the column count | experiment 2 |
-| The per-source limit holds under concurrency | experiment 5 |
-| A dead run is detected | experiment 5. The retry after a growing pause is not tested. |
+| The limits per source and per target hold under concurrency | experiment 5 for the earlier form, prototype for the current one |
+| A dead run is detected and retried after the pause | experiment 5, prototype |
 | One driver can do everything a run needs on one connection | experiment 8 |
 | Nothing is visible to another connection before the COMMIT | experiment 8, without a reader running alongside |
 | A killed process releases its lock | experiment 4 |
-| Connections cannot be read without the private key, and tampering is detected | experiment 7, with a single value in place of a block |
-| A killed process cannot publish | follows from the transaction ending with the connection. Not tested as such. |
+| Connections cannot be read without the private key, and tampering is detected | experiment 7. The prototype sealed whole blocks and rejected a copied ciphertext and a wrong private key. |
+| A killed process cannot publish | prototype: killed while filling, at the diff and while publishing, the mirror stayed unchanged |
+| A process per run costs 0.1 to 0.2 s | prototype |
