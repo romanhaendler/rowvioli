@@ -214,8 +214,10 @@ def test_run_and_work_name_a_missing_variable_at_start(rv, command, variable):
 @pytest.mark.parametrize("command", ["init", "status", "run", "work"])
 def test_an_unreachable_target_gives_the_drivers_message_without_password_or_traceback(rv, command):
     r = rv.run(command, env={"ROWVIOLI_TARGET_URL": "postgresql://u:pass%25word@127.0.0.1:1/db"}, timeout=10)
-    assert r.returncode == 1 and "Failed to connect" in r.stderr, r.stderr
-    assert "Traceback" not in r.stderr and "pass" not in r.stderr
+    assert r.returncode == 1 and "Failed to connect" in r.stderr and "Traceback" not in r.stderr, r.stderr
+    # libpq quotes a password that is not valid percent-encoding in its message
+    r = rv.run(command, env={"ROWVIOLI_TARGET_URL": "postgresql://u:geheim%zz@127.0.0.1:1/db"}, timeout=10)
+    assert r.returncode == 1 and "invalid percent-encoded token" in r.stderr and "geheim" not in r.stderr, r.stderr
 
 
 @pytest.mark.parametrize("command", ["run", "work"])

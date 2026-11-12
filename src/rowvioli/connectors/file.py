@@ -1,7 +1,7 @@
 """The file connector: expects `path`, a directory; a table is a file name in it. Reads CSV, Excel and Parquet
 through DuckDB by extension. Parquet keeps its own types; CSV and Excel arrive as text, except the columns the option
 `columns` names with a DuckDB type. Every other option is a named parameter of DuckDB's reader, such as `sep` or
-`sheet`."""
+`sheet`; a name that belongs to rowvioli, such as `parallel`, reaches no connector."""
 import re
 from pathlib import Path
 

@@ -198,7 +198,7 @@ What the numbers say:
 - **`client_connection_check_interval` also works during a lock wait.** Both release times stay within the README's "Failures" table.
 - **The driver hands over batches of about 16 MB**, or the rest at the end of the stream. A small table arrives as one batch.
 
-Every number is a single series on a laptop. Not measured: a Linux client, a real network, and a machine or network failure.
+Every number is a single series on a laptop. Not measured: a Linux client, a real network, and a machine failure (section 11 cuts a container's network).
 
 ## 10. A composite key
 
@@ -211,6 +211,21 @@ Every number is a single series on a laptop. Not measured: a Linux client, a rea
 | Publishing at 1 % changes | 0.3 s | 0.2 to 0.3 s |
 
 The second key column costs about a second on the diff of 10⁶ rows, a sixth of the whole run. Publishing does not change. The bench script was changed for this in its definition only (`key = ["linenr", "id"]`); a key `(linenr, part)` is not unique after the bench's inserts.
+
+## 11. A worker whose network is cut
+
+2026-11-12, two `postgres:16-alpine` containers on one Docker network on the same laptop: a target, and a client whose `psql` takes `pg_advisory_lock(1, 1)` and then stays idle. `docker network disconnect` cuts the client's network, and the target is asked every 5 seconds whether the lock is still held. One run each:
+
+| The client's session first sets | Lock released |
+|---|---|
+| nothing | still held after 240 s; the server's default is two hours on Linux |
+| `tcp_keepalives_idle = 30`, `tcp_keepalives_interval = 10`, `tcp_keepalives_count = 3`, `tcp_user_timeout = 60000` | after 62 s |
+
+The keepalive in a libpq URL acts on the client's socket only, so the program sets the second row on every control connection (`target.SESSION`). The client was idle; a session in the middle of a `COPY` was not tried, nor a real machine or network.
+
+## 12. A target address with several nodes
+
+2026-11-12, two local `postgres:16-alpine` servers, the first with `default_transaction_read_only = on`. With `postgresql://…@127.0.0.1:<first>,127.0.0.1:<second>/postgres?target_session_attrs=read-write`, `rowvioli init` created `_rowvioli` on the second server and `rowvioli status` read it there. Without `target_session_attrs`, `status` reached the first server and found no schema. A failover was not tried.
 
 ## Reference: hpdl
 

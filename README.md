@@ -143,7 +143,7 @@ string = "Driver={ODBC Driver 18 for SQL Server};Server=sqlsrv01;Database=erp;UI
 
 What follows from it:
 
-- Every listed table gets a target table in `raw_erp`, named after the last part of its name in lower case: `dbo.Customers` becomes `raw_erp.customers`. A file loses its extension: `customers.csv` becomes `customers`. Since Postgres cuts names at 63 bytes and the change log adds `__log`, `apply` refuses a target name longer than 58 bytes. Nothing else is loaded. A new table in the source arrives when somebody adds its name.
+- Every listed table gets a target table in `raw_erp`, named after the last part of its name in lower case: `dbo.Customers` becomes `raw_erp.customers`. A file loses its extension: `customers.csv` becomes `customers`. Since Postgres cuts names at 63 bytes and the change log adds `__log`, `apply` refuses a target name longer than 58 bytes, a target schema longer than 63 bytes (also `raw_<name>` of a long source name), and a target name that is another table's name plus `__log`. Nothing else is loaded. A new table in the source arrives when somebody adds its name.
 - `dbo.Orders` is never older than five minutes, the other tables never older than an hour.
 - At most four tables of this source load at the same time, across all workers.
 - Every table with a key gets a change log, except `dbo.Items`, where it is switched off.
@@ -466,7 +466,7 @@ The prototype claimed this way with 6 workers of 4 slots, two sources with `para
 |---|---|---|
 | Worker crashes while Postgres waits for it | transaction discarded, run dead, retried after the pause | under 0.3 s (measured) |
 | Worker crashes while Postgres is computing a statement or waiting for a lock | as above, as soon as Postgres notices the loss | under 4 s with a connection check every 2 s (measured), otherwise when the statement ends |
-| Machine or network drops out | as above, detected through the server's TCP keepalive | about 60 s (62 s with a container's network cut) |
+| Machine or network drops out | as above, detected through the server's TCP keepalive | about 60 s (62 s with a container's network cut, [measurements](docs/measurements.md#11-a-worker-whose-network-is-cut)) |
 | Source is unreachable for a moment | the run fails, the next one starts a minute later | right after |
 | Source stops answering | the worker ends the run's process after `max_seconds` | right after |
 | A table fails again and again | the pause doubles up to `max_age`. The status shows the reason and the number of attempts. | |
