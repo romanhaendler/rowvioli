@@ -1,6 +1,6 @@
 # 03: The `odbc` connector
 
-**Blocked by:** None for the code. The owner accepts Microsoft's terms before a SQL Server container or driver is used (spec "Further Notes").
+**Blocked by:** None (can start immediately)
 
 **Status:** ready-for-agent
 
@@ -16,8 +16,8 @@ Spec stories 11 to 22 and the implementation decisions under "The `odbc` connect
 - Check the licence of arrow-odbc on PyPI and correct its row in `docs/package.md` if needed.
 - The password inside the connection string is scrubbed from reasons and lines, not only the string as a whole; extend the existing extraction of connection values if it is not.
 - The table name check runs before any query is sent.
-- The tests run against a SQL Server container and skip with a clear message where the SQL Server ODBC driver (or the container) cannot be had; the workflow installs the driver where the runner lacks it. Check the free disk before the image is pulled; containers and volumes are removed after the session.
-- A type conversion only if the test against SQL Server shows one is needed; then note it in this ticket's comments for ticket 04.
+- The tests run against PostgreSQL through psqlODBC, driver manager and driver in a container, nothing installed on the machine (spec "Further Notes", last bullet). They skip with a clear message where no driver manager can be had.
+- A type conversion only if the test shows one is needed; then note it in this ticket's comments for ticket 04.
 
 ## Acceptance criteria
 

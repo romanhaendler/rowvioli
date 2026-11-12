@@ -160,7 +160,7 @@ Estimate, to be checked again per ticket (the owner's rule: the smallest model t
 - **The existing seam, nothing new.** Tests start the commands as real processes and look only at what a user sees: the mirror in the target, the answer of `run`, the output of `list` (`tests/conftest.py`; `.scratch/v0.1/spec.md`, "Testing Decisions"). No test imports a module of the program. Prior art for a connector: `tests/test_file.py`.
 - **A good test** states one sentence of this spec and would pass if the connector were rewritten on another library.
 - **`rest` is tested against a small HTTP server inside the test** (standard library, a thread), which serves fixed pages and records the requests it received. No container, no network.
-- **`odbc` is tested against a SQL Server container**, as `docs/package.md` planned. The tests are skipped with a clear message where the SQL Server ODBC driver is not installed, and they run in CI, where the workflow installs the driver if the runner does not have it. Informix is not tested: its driver cannot be had without IBM's terms.
+- **`odbc` is tested against a free source only**: PostgreSQL through the open psqlODBC driver, with driver manager and driver in a container, nothing installed on the developer's machine. The tests are skipped with a clear message where no driver manager can be had. SQL Server and Informix are not tested: both need the acceptance of a vendor's terms (owner's decision of 2026-11-12, see "Further Notes"). A guide says how to write and test a connector that needs licensed software.
 - **The licence rule has one test**: every dependency of the core and of every extra has a row in the dependency table.
 
 What is tested:
@@ -177,7 +177,7 @@ What is tested:
 10. `rest`: `list` says that the connector cannot list tables.
 11. The dependency table has a row for every dependency of the core and of every extra.
 
-Disk space: the SQL Server image is about 1.5 GB. The harness's rule stands: containers and volumes are removed after the session, and the free disk is checked before the image is pulled for the first time.
+Disk space: the harness's rule stands: containers and volumes are removed after the session.
 
 ## Out of Scope
 
@@ -201,3 +201,4 @@ Disk space: the SQL Server image is about 1.5 GB. The harness's rule stands: con
 - The seam was not confirmed with the owner beforehand. It is the one every earlier spec used, plus an HTTP server inside the test for `rest`.
 - The owner's rule applies: one carrying idea, no pile of rules. The measure is that the README needs one paragraph for licences and that the decision has four consequences, each following from the one sentence.
 - This is the project's rule, not legal advice.
+- **Changed by the owner on 2026-11-12, during implementation:** tests run only against truly free sources, and nothing is installed locally. The `odbc` tests use PostgreSQL through psqlODBC instead of SQL Server; the notes above about `ACCEPT_EULA`, the SQL Server image and CI as the only proof no longer apply. In exchange the owner wants a very good guide on writing a connector that needs licensed software (ticket 05). What was read in the vendors' terms: Microsoft's Developer edition and ODBC driver are licensed to develop and test, Microsoft commits `ACCEPT_EULA=Y` in its own repos, who accepts when a third party runs a workflow is answered nowhere, and benchmark results of SQL Server need Microsoft's written approval; the text of IBM's licence for the Informix Developer Edition and for the Client SDK with its ODBC driver could not be retrieved.
