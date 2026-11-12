@@ -338,9 +338,8 @@ Staging table and diff are TEMP tables on the control connection. They have no f
 Bookkeeping in the schema `_rowvioli`:
 
 ```
-sources   id, name, type, target_schema, parallel, max_delete_share, max_seconds,
-          options, connection (ciphertext), key_id, enabled
-tables    id, source, source_table, target_table, key, max_age, log, options, enabled,
+sources   id, name, type, target_schema, parallel, options, connection (ciphertext), key_id, enabled
+tables    id, source, source_table, target_table, key, max_age, log, max_delete_share, max_seconds, options, enabled,
           loaded_at, attempted_at, attempts, requested_at, reason
 runs      run, table, worker, started_at, finished_at, status,
           rows_read, inserted, updated, deleted, reason, definition
@@ -348,7 +347,7 @@ status    view over tables: age, due_at and status, computed on every query
 meta      schema_version, max_running, definition (hash of the definition last applied)
 ```
 
-- `sources` and the first line of `tables` are the definition. Only `apply` writes them.
+- `sources` and the first line of `tables` are the definition. Only `apply` writes them. A table row carries the settings a table may override, with the source's filled in.
 - The second line of `tables` is what the workers experienced, plus `requested_at`.
 - `runs` is a log: one row per run. Nothing reads it to decide anything.
 - `status` is what people look at. It shows a table as `new`, `loading`, `ok` or `failed`, with the `reason` of a failure in a column of its own. A table whose run died shows as `failed` with the reason `worker lost`.
