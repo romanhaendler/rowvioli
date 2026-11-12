@@ -2,7 +2,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -22,3 +22,7 @@ Spec stories 22 to 34 and the implementation decisions about `status`. A new com
 - [ ] Spec "What is tested" 9 to 12, in `tests/test_status.py` or a file next to it, with facts written by SQL and fixed dates, no simulated clock.
 - [ ] The existing tests pass unchanged.
 - [ ] No documents in this ticket (ticket 03).
+
+## Comments
+
+Resolved on branch `visibility`, from vis-02 (5a0df3d). Review fixes: 2373115.

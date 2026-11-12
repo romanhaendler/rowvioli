@@ -2,7 +2,7 @@
 
 **Blocked by:** 01, 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -22,3 +22,7 @@ Spec stories 35 to 37 and the implementation decisions "A new decision" and "Doc
 - [ ] The measure of the spec ("Further Notes"): one paragraph for the lines, one for `status`, no setting introduced.
 - [ ] The examples in the README match the real output of `work` and `status` in wording and columns.
 - [ ] No sentence in README, GLOSSARY or `docs/` still says that a worker prints nothing or that the status needs `psql`.
+
+## Comments
+
+Resolved on branch `visibility`, from vis-03 (30d314d). Review fixes: 2373115.

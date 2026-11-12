@@ -1,6 +1,6 @@
 # Visibility: a worker says what it does, `status` shows what is
 
-Status: ready-for-agent
+Status: resolved
 
 ## Problem Statement
 

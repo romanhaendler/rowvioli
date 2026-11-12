@@ -2,7 +2,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -24,3 +24,7 @@ Spec stories 1 to 21 and the implementation decisions about the lines. The loop 
 - [ ] Spec "What is tested" 1 to 8, in the test files named there as prior art (`tests/test_work.py`, `tests/test_crashes.py`, `tests/test_secrets.py`, `tests/test_run.py`). Tests match the meaningful parts of a line, not the timestamp.
 - [ ] The existing tests pass unchanged; stdout and exit codes of `run` are untouched.
 - [ ] No documents in this ticket (ticket 03).
+
+## Comments
+
+Resolved on branch `visibility`, from vis-01 (5f0761a). Review fixes: 2373115.
