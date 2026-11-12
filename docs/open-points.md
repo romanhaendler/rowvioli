@@ -1,6 +1,6 @@
 # Open points
 
-What is undecided, unverified or unbuilt as of 2026-11-12, after version 0.1, load times and visibility.
+What is undecided, unverified or unbuilt as of 2026-11-12, after versions 0.1 and 0.2, load times and visibility.
 
 ## Decisions for the owner
 
@@ -28,7 +28,7 @@ Unchanged from the first round:
 
 - **Machine or network failure.** Nobody closes the connection then. Release of the lock depends on TCP keepalive, expected after about 60 s. `data-extractor` could not reproduce this locally either.
 - **`client_connection_check_interval`** was measured on Linux. Postgres supports it only on some operating systems.
-- **The connectors themselves**: arrow-odbc for MSSQL and Informix, DuckDB for files. `data-extractor` has experience with ODBC. The `postgres` and `file` connectors are tested; `odbc` is not built.
+- **The connectors themselves**: arrow-odbc for MSSQL and Informix, DuckDB for files. `data-extractor` has experience with ODBC. The `postgres`, `file`, `odbc` and `rest` connectors are tested; `odbc` only against PostgreSQL through psqlODBC, SQL Server and Informix not at all.
 - **Composite keys.** Only a single-column key was measured.
 - **Wide tables with many rows.** 900 columns were measured with 100,000 rows only.
 - **A view that computes validity periods from the change log**, and its speed on a long history.
@@ -65,7 +65,7 @@ Unchanged from the first round:
 
 ## Not built
 
-- The connectors `odbc` and `rest`, and JSON files in the `file` connector.
+- JSON files in the `file` connector.
 - The web UI.
 - The command `request`, reading only rows from a timestamp on, patterns for table names, and workers that serve only some sources.
 - Migrating the schema from one version to the next.
