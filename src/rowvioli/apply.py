@@ -28,5 +28,8 @@ def apply(directory, key_file):
             raise SystemExit(f"{s['name']}: target_schema {s['target_schema']} belongs to source "
                              f"{taken[s['target_schema']]} already")
     payload = json.dumps({"sources": sources, "tables": tables, "definition": digest}, default=str)
-    target.transaction(conn, files(__package__).joinpath("sql/apply.sql").read_text(), [payload])
+    try:
+        target.transaction(conn, files(__package__).joinpath("sql/apply.sql").read_text(), [payload])
+    except target.adbc.Error as e:  # Postgres names what it refused, for example a time zone it does not know
+        raise SystemExit(f"the target refused the definition, nothing was changed: {e}")
     print(f"applied {len(sources)} sources with {len(tables)} tables")

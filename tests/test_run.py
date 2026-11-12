@@ -1,5 +1,6 @@
 """`rowvioli run`: one table from the source to its mirror (spec tests 4 rest, 5, 6, 7, 8, 21)."""
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -142,6 +143,22 @@ def test_run_ends_with_0_and_does_nothing_when_nothing_is_due(erp):
     code, answer = run(erp)
     assert (code, answer["tables"]) == (0, {})
     assert erp.target("select count(*) from _rowvioli.runs") == [(1,)]
+
+
+def test_a_fresh_table_with_a_load_time_after_its_last_run_is_loaded_once(erp):
+    ok(erp)
+    erp.target("update _rowvioli.tables set loaded_at = now() - interval '30 minutes',"
+               " attempted_at = now() - interval '30 minutes'")
+    assert run(erp)[1]["tables"] == {}  # fresh by its maximum age
+    passed = datetime.now(timezone.utc) - timedelta(minutes=10)
+    apply(erp, definition(erp, f'"public.customers" = {{ key = ["customer_no"], at = ["{passed:%H:%M}"], '
+                               'timezone = "UTC" }\n'))
+    erp.source("insert into customers values (9, 'Ida', 'Ulm')")
+    code, answer = run(erp)
+    assert code == 0
+    assert answer["tables"] == {"raw_erp.customers": {"status": "ok", "inserted": 1, "updated": 0, "deleted": 0}}
+    assert run(erp)[1]["tables"] == {}
+    assert erp.target("select count(*) from _rowvioli.runs") == [(2,)]
 
 
 def test_run_source_table_loads_a_table_that_is_not_due(erp):

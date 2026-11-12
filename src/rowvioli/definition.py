@@ -5,10 +5,12 @@ import re
 import tomllib
 from pathlib import Path
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days"}
 # a table may override these; its row carries them with the source's filled in
-TABLE_SETTINGS = {"max_age": str, "log": bool, "max_delete_share": (int, float), "max_seconds": int}
+TABLE_SETTINGS = {"max_age": str, "log": bool, "max_delete_share": (int, float), "max_seconds": int, "at": list,
+                  "timezone": str}
 DEFAULTS = {"log": True, "max_delete_share": 0.5, "max_seconds": 3600}
 SOURCE_SETTINGS = {"type": str, "connection": dict, "tables": dict, "target_schema": str, "parallel": int,
                    **TABLE_SETTINGS}
@@ -62,9 +64,13 @@ def read(directory, env=None):
                 if target in seen:
                     raise SystemExit(f"{at}: {seen[target]} and {table} both become target table {target}")
                 seen[target] = table
+                # no default zone: 14:00 that silently means UTC is found in production (decision 36)
+                if t.get("at", s.get("at")) and not t.get("timezone", s.get("timezone")):
+                    raise SystemExit(f"{at}: at needs a timezone, from the table or the source")
                 tables.append({"source": name, "source_table": table, "target_table": target, "key": key,
                                "max_age": interval(t.get("max_age", s["max_age"]), at),
                                **{k: t.get(k, s.get(k, DEFAULTS[k])) for k in DEFAULTS},
+                               **{k: t.get(k, s.get(k)) for k in ("at", "timezone")},
                                "options": {k: v for k, v in t.items() if k not in TABLE_SETTINGS and k != "key"}})
     # of the text as written: placeholders stay unfilled, so the hash says nothing about a secret
     digest = hashlib.sha256(json.dumps(whole, sort_keys=True, default=str).encode()).hexdigest()
@@ -81,6 +87,14 @@ def settings(block, known, where):
             raise SystemExit(f"{where}: {k} must be {KINDS[kind]}")
         if k in block and k in RANGES and not RANGES[k][0](block[k]):
             raise SystemExit(f"{where}: {k} must be {RANGES[k][1]}")
+    for time in block.get("at", []):
+        if not (isinstance(time, str) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", time)):
+            raise SystemExit(f"{where}: at {time!r} is not a time HH:MM from 00:00 to 23:59")
+    if "timezone" in block:
+        try:
+            ZoneInfo(block["timezone"])
+        except (KeyError, ValueError, OSError):  # not found, not a zone's name, a directory
+            raise SystemExit(f"{where}: timezone {block['timezone']!r} is not a time zone")
 
 
 def interval(value, where):

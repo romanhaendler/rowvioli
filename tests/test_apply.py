@@ -1,6 +1,9 @@
 """`rowvioli apply`: the definition written into the target (spec tests 1-4, 18 first part, 20)."""
+import shutil
+import zoneinfo
 from datetime import timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -207,6 +210,54 @@ def test_a_table_overrides_the_source_settings_and_other_keys_reach_the_connecto
                                           ("dbo.Orders", False, Decimal("0.5"), 60, {})]
 
 
+LOAD_TIMES = ERP.replace("parallel = 4", 'parallel = 4\nat = ["06:00", "14:00"]\ntimezone = "Europe/Berlin"')
+
+
+def test_apply_stores_the_load_times_and_the_time_zone_of_the_source_or_the_tables_own(ready):
+    erp = LOAD_TIMES.replace('max_age = "5m" }', 'at = ["23:59"], timezone = "America/New_York" }').replace(
+        '"dbo.Notes"     = {}', '"dbo.Notes"     = { at = [] }')
+    r = apply(ready, {"erp.toml": erp})
+    assert r.returncode == 0, r.stderr
+    assert ready.target("select source_table, at::text[], timezone, options from _rowvioli.tables order by 1") == [
+        ("dbo.Customers", ["06:00:00", "14:00:00"], "Europe/Berlin", {}),
+        ("dbo.Notes", [], "Europe/Berlin", {}),
+        ("dbo.Orders", ["23:59:00"], "America/New_York", {})]
+    assert ready.target("select options from _rowvioli.sources") == [({},)]
+
+
+def test_changed_load_times_change_due_at_without_a_run_and_leave_what_the_workers_experienced(ready):
+    assert apply(ready, {"erp.toml": ERP}).returncode == 0
+    ready.target("""update _rowvioli.tables set loaded_at = '2026-01-01 00:00Z', attempted_at = '2026-01-01 00:00Z',
+                           attempts = 0, requested_at = '2025-12-31 00:00Z'""")
+    facts = "select loaded_at, attempted_at, attempts, requested_at from _rowvioli.tables order by id"
+    due = "select due_at - loaded_at from _rowvioli.status where source_table = 'dbo.Customers'"
+    before = ready.target(facts)
+    assert ready.target(due) == [(timedelta(hours=1),)]
+    # 01:30 in Berlin is 00:30 UTC in winter
+    late = ERP.replace("parallel = 4", 'parallel = 4\nat = ["01:30", "01:45"]\ntimezone = "Europe/Berlin"')
+    assert apply(ready, {"erp.toml": late}).returncode == 0
+    assert ready.target(due) == [(timedelta(minutes=30),)]
+    assert apply(ready, {"erp.toml": late.replace("01:30", "01:40")}).returncode == 0
+    assert ready.target(due) == [(timedelta(minutes=40),)]
+    assert apply(ready, {"erp.toml": late.replace("Europe/Berlin", "Europe/London")}).returncode == 0
+    assert ready.target(due) == [(timedelta(hours=1),)]  # 01:30 in London is after the maximum age
+    assert ready.target(facts) == before
+
+
+def test_apply_with_a_time_zone_the_target_does_not_know_names_it_and_changes_nothing(ready, tmp_path):
+    assert apply(ready, {"erp.toml": LOAD_TIMES}).returncode == 0
+    before = everything(ready)
+    # a zone this program's machine knows and the target's Postgres does not
+    utc = next(p / "UTC" for p in map(Path, zoneinfo.TZPATH) if (p / "UTC").is_file())
+    (tmp_path / "Mars").mkdir()
+    shutil.copy(utc, tmp_path / "Mars" / "Phobos")
+    changed = LOAD_TIMES.replace("Europe/Berlin", "Mars/Phobos").replace('max_age = "1h"', 'max_age = "2h"')
+    r = apply(ready, {"erp.toml": changed}, env={**ENV, "PYTHONTZPATH": str(tmp_path)})
+    assert r.returncode != 0 and "Mars/Phobos" in r.stderr, r.stderr
+    assert "Traceback" not in r.stderr
+    assert everything(ready) == before
+
+
 NO_TARGET = {"ROWVIOLI_TARGET_URL": "postgresql://nobody@nowhere.invalid:1/none"}
 
 
@@ -220,8 +271,18 @@ def test_check_passes_a_valid_definition_without_a_target_a_key_or_the_variables
     assert r.returncode == 0, r.stderr
 
 
+def test_check_passes_load_times_a_time_zone_without_them_and_a_source_whose_tables_all_bring_the_zone(rv):
+    r = check(rv, {"erp.toml": LOAD_TIMES.replace('"dbo.Notes"     = {}', '"dbo.Notes"     = { at = [] }'),
+                   "crm.toml": CRM.replace('"1d"', '"1d"\ntimezone = "UTC"')})
+    assert r.returncode == 0, r.stderr
+    no_source_zone = ERP.replace("parallel = 4", 'parallel = 4\nat = ["00:00", "23:59"]').replace(
+        "{}", "{ at = [] }").replace(" }", ', timezone = "Asia/Kolkata" }')
+    r = check(rv, {"erp.toml": no_source_zone})
+    assert r.returncode == 0, r.stderr
+
+
 @pytest.mark.parametrize("old, new, says", [
-    ('"dbo.Notes"     = {}', '"dbo.Notes"     = {', "erp.toml"),               # syntax
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = {', "erp.toml"),             # syntax
     ('type = "postgres"', "", "type"),                                          # required setting missing
     ('max_age = "1h"', "", "max_age"),
     ('max_age = "1h"', 'max_age = "1 hour"', "max_age"),                        # unit
@@ -242,6 +303,22 @@ def test_check_passes_a_valid_definition_without_a_target_a_key_or_the_variables
     ("parallel = 4", "parallel = 4\nmax_delete_share = 1.5", "max_delete_share"),
     ('"dbo.Notes"     = {}', '"dbo.Notes" = { max_delete_share = -0.1 }', "max_delete_share"),
     ('"dbo.Notes"     = {}', '"dbo.Notes" = { max_seconds = 0 }', "max_seconds"),
+    ("parallel = 4", 'parallel = 4\nat = "14:00"\ntimezone = "Europe/Berlin"', "erp: at "),  # load times
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { at = "14:00", timezone = "Europe/Berlin" }', "dbo.Notes: at "),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { at = ["14"], timezone = "Europe/Berlin" }', "dbo.Notes: at "),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { at = ["6:00"], timezone = "Europe/Berlin" }', "dbo.Notes: at "),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { at = ["14:00:00"], timezone = "Europe/Berlin" }', "dbo.Notes: at "),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { at = [14:00:00], timezone = "Europe/Berlin" }', "dbo.Notes: at "),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { at = ["14:60"], timezone = "Europe/Berlin" }', "dbo.Notes: at "),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { at = ["06:00", "24:00"], timezone = "Europe/Berlin" }', "24:00"),
+    ("parallel = 4", 'parallel = 4\nat = ["25:00"]\ntimezone = "Europe/Berlin"', "erp: at "),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { at = ["14:00"] }', "dbo.Notes: at needs a timezone"),
+    ("parallel = 4", 'parallel = 4\nat = ["14:00"]', "dbo.Customers: at needs a timezone"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { at = ["14:00"], timezone = "Europe/Bonn" }', "dbo.Notes: timezone "),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { timezone = "" }', "dbo.Notes: timezone "),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { timezone = "../x" }', "dbo.Notes: timezone "),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { timezone = "Europe" }', "dbo.Notes: timezone "),
+    ("parallel = 4", 'parallel = 4\ntimezone = "Mars/Phobos"', "erp: timezone "),
 ])
 def test_check_fails_each_invalid_definition_without_a_target_or_the_variables(rv, old, new, says):
     assert old in ERP
