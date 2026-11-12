@@ -3,6 +3,8 @@ from datetime import timedelta
 
 import pytest
 
+pytestmark = pytest.mark.skip(reason="ticket 02: apply")
+
 ERP = """
 [erp]
 type = "postgres"

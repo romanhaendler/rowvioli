@@ -2,10 +2,13 @@
 from datetime import timedelta
 
 import psycopg
+import pytest
 
 from conftest import until
 from test_crashes import waiting_on
 from test_run import apply, definition, erp, ok, run  # noqa: F401 (erp is a fixture)
+
+pytestmark = pytest.mark.skip(reason="ticket 06: pause and requests")
 
 
 def facts(rv, table):

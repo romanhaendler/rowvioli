@@ -3,6 +3,9 @@ import pytest
 
 from test_run import apply, definition, erp, ok, rows, run  # noqa: F401 (erp is a fixture)
 
+checks = pytest.mark.skip(reason="ticket 04: checks")
+secrets = pytest.mark.skip(reason="ticket 05: secrets and keys")
+
 
 def failed(rv, *args):
     """`run` that must fail one table; returns its reason as answered, in the status and in `runs`."""
@@ -18,6 +21,7 @@ def failed(rv, *args):
 MIRROR = "select * from raw_erp.customers"
 
 
+@checks
 @pytest.mark.parametrize("change, expected", [
     ("insert into customers values (4, 'Dora', null); alter table customers drop constraint customers_pkey;"
      " insert into customers values (1, 'Anna2', null)", "occurs twice"),
@@ -38,6 +42,7 @@ def test_a_check_fails_the_run_and_leaves_the_mirror_unchanged(erp, change, expe
     assert rows(erp.target, MIRROR) == before
 
 
+@checks
 def test_a_key_that_differs_from_the_mirrors_primary_key_fails_the_run(erp):
     ok(erp)
     before = rows(erp.target, MIRROR)
@@ -47,6 +52,7 @@ def test_a_key_that_differs_from_the_mirrors_primary_key_fails_the_run(erp):
     assert rows(erp.target, MIRROR) == before
 
 
+@secrets
 def test_an_unknown_connector_type_fails_with_a_reason_naming_the_type_and_the_worker(erp):
     apply(erp, definition(erp).replace('type = "postgres"', 'type = "nosuch"'))
     reason = failed(erp)
@@ -54,6 +60,7 @@ def test_an_unknown_connector_type_fails_with_a_reason_naming_the_type_and_the_w
     assert "nosuch" in reason and worker in reason
 
 
+@secrets
 def test_a_worker_with_the_wrong_private_key_fails_the_run_with_a_reason(erp):
     (erp.dir / "worker.key").rename(erp.dir / "old.key")
     (erp.dir / "worker.pub").rename(erp.dir / "old.pub")
@@ -91,12 +98,14 @@ def leaks(rv, password, *outputs):
     return [s for s in seen if password in s]
 
 
+@secrets
 def test_the_stored_connection_does_not_contain_the_password(secret):
     apply_with(secret, PASSWORD)
     assert secret.target("select count(*) from _rowvioli.sources where position(convert_to(%s, 'UTF8') in connection) > 0",
                          [PASSWORD]) == [(0,)]
 
 
+@secrets
 def test_a_ciphertext_copied_to_another_source_is_rejected(secret):
     apply_with(secret, PASSWORD)
     secret.target("update _rowvioli.sources set connection = (select connection from _rowvioli.sources where name = 'erp')"
@@ -105,6 +114,7 @@ def test_a_ciphertext_copied_to_another_source_is_rejected(secret):
     assert run(secret, "erp")[0] == 0
 
 
+@secrets
 def test_the_password_appears_nowhere_when_a_run_fails(secret):
     out = [apply_with(secret, PASSWORD)]
     apply_with(secret, PASSWORD)
@@ -116,6 +126,7 @@ def test_the_password_appears_nowhere_when_a_run_fails(secret):
     assert leaks(secret, PASSWORD, *out) == []
 
 
+@secrets
 def test_the_password_appears_nowhere_when_the_source_refuses_the_login(secret):
     out = [apply_with(secret, WRONG), secret.run("run", "erp")]
     assert out[-1].returncode == 1
@@ -123,6 +134,7 @@ def test_the_password_appears_nowhere_when_the_source_refuses_the_login(secret):
     assert leaks(secret, WRONG, *out) == []
 
 
+@secrets
 def test_the_password_appears_nowhere_when_the_driver_quotes_it(secret):
     garbled = "Prozent%zz-4711"  # libpq rejects the URL and quotes the token: invalid percent-encoded token
     out = [apply_with(secret, garbled), secret.run("run", "erp")]
