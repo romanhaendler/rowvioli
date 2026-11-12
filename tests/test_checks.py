@@ -1,9 +1,8 @@
-"""Checks, failure reasons and secrets (spec tests 15, 16, 17, 18)."""
+"""Checks, schema changes, failure reasons and secrets (spec tests 12, 13, 15, 16, 17, 18)."""
 import pytest
 
 from test_run import apply, definition, erp, ok, rows, run  # noqa: F401 (erp is a fixture)
 
-checks = pytest.mark.skip(reason="ticket 04: checks")
 secrets = pytest.mark.skip(reason="ticket 05: secrets and keys")
 
 
@@ -21,7 +20,6 @@ def failed(rv, *args):
 MIRROR = "select * from raw_erp.customers"
 
 
-@checks
 @pytest.mark.parametrize("change, expected", [
     ("insert into customers values (4, 'Dora', null); alter table customers drop constraint customers_pkey;"
      " insert into customers values (1, 'Anna2', null)", "occurs twice"),
@@ -29,8 +27,8 @@ MIRROR = "select * from raw_erp.customers"
      " insert into customers values (null, 'Nobody', null)", "is null"),
     ("delete from customers", "zero rows"),
     ("delete from customers where customer_no <> 1", "67 % of the rows would be deleted"),
-    ("alter table customers add column phone text", "columns differ"),
-    ("alter table customers alter customer_no type bigint", "columns differ"),
+    ("alter table customers drop column city", "column city is missing"),
+    ("alter table customers alter customer_no type bigint", "column customer_no has changed its type"),
 ])
 def test_a_check_fails_the_run_and_leaves_the_mirror_unchanged(erp, change, expected):
     ok(erp)
@@ -42,7 +40,6 @@ def test_a_check_fails_the_run_and_leaves_the_mirror_unchanged(erp, change, expe
     assert rows(erp.target, MIRROR) == before
 
 
-@checks
 def test_a_key_that_differs_from_the_mirrors_primary_key_fails_the_run(erp):
     ok(erp)
     before = rows(erp.target, MIRROR)

@@ -15,11 +15,16 @@ from . import contract, seal, target
 from .target import CLAIMABLE, quote, sql
 
 TABLE = """SELECT t.id, s.name, s.type, s.connection, s.key_id, t.source_table, s.target_schema, t.target_table,
-                  t.key, t.log, t.max_seconds, (s.options || t.options)::text
+                  t.key, t.log, t.max_seconds, (s.options || t.options)::text, t.max_delete_share::float8
              FROM _rowvioli.tables t JOIN _rowvioli.sources s ON s.name = t.source WHERE t.id = $1"""
 
-STAGED = """SELECT attname FROM pg_attribute WHERE attrelid = 'pg_temp._stage'::regclass
-             AND attnum > 0 AND NOT attisdropped ORDER BY attnum"""
+# the columns of a table by name and type as Postgres shows them; none for a table that does not exist
+COLUMNS = """SELECT attname, format_type(atttypid, atttypmod) FROM pg_attribute
+              WHERE attrelid = to_regclass($1) AND attnum > 0 AND NOT attisdropped ORDER BY attnum"""
+
+PRIMARY_KEY = """SELECT a.attname FROM pg_index i, unnest(i.indkey) WITH ORDINALITY k(attnum, n), pg_attribute a
+                  WHERE i.indrelid = $1::regclass AND i.indisprimary AND a.attrelid = i.indrelid
+                    AND a.attnum = k.attnum ORDER BY k.n"""
 
 
 def claim(conn, worker, source, table):
@@ -46,7 +51,7 @@ def claim(conn, worker, source, table):
         sql(conn, "ROLLBACK")
         raise
     keys = ("id", "source", "type", "connection", "key_id", "source_table", "schema", "table", "key", "log",
-            "max_seconds", "options")
+            "max_seconds", "options", "max_delete_share")
     t = dict(zip(keys, facts), run=run, worker=worker)
     t["options"] = json.loads(t["options"])  # the source's options, overridden by the table's
     t["name"] = f"{t['schema']}.{t['table']}"
@@ -58,10 +63,45 @@ def claim(conn, worker, source, table):
 def load(conn, t):
     """Steps 2 to 6. Raises with the reason when the run fails."""
     rows_read = stage(conn, t)
-    columns = [quote(c) for (c,) in sql(conn, STAGED)]
-    new = sql(conn, "SELECT to_regclass($1) IS NULL", [t["mirror"]])[0][0]
-    counts = diff(conn, t, columns, new) if t["key"] else None
-    return publish(conn, t, columns, new, rows_read, counts)
+    if rows_read == 0:
+        raise Exception("the source delivered zero rows")
+    staged = sql(conn, COLUMNS, ["pg_temp._stage"])
+    mirror = sql(conn, COLUMNS, [t["mirror"]])  # empty before the first run
+    check(conn, t, staged, mirror)
+    counts = diff(conn, t, staged, mirror) if t["key"] else None
+    if mirror:
+        limit(conn, t, rows_read, counts)
+    return publish(conn, t, staged, mirror, rows_read, counts)
+
+
+def check(conn, t, staged, mirror):
+    """Step 4 (README "Checks before publishing"). A new column passes, publish adds it (decision 17)."""
+    types = dict(staged)
+    for name, type in mirror:
+        if name not in types:
+            raise Exception(f"column {name} is missing in the source")
+        if types[name] != type:
+            raise Exception(f"column {name} has changed its type from {type} to {types[name]}")
+    key = t["key"] or []
+    if mirror:
+        primary_key = [k for (k,) in sql(conn, PRIMARY_KEY, [t["mirror"]])]
+        if primary_key != key:
+            raise Exception(f"the key {key} differs from the mirror's primary key {primary_key}")
+    if key:
+        names = ", ".join(quote(k) for k in key)
+        if sql(conn, f"SELECT 1 FROM _stage WHERE {' OR '.join(quote(k) + ' IS NULL' for k in key)} LIMIT 1"):
+            raise Exception(f"a key column of ({names}) is null")
+        if sql(conn, f"SELECT 1 FROM _stage GROUP BY {names} HAVING count(*) > 1 LIMIT 1"):
+            raise Exception(f"a key combination of ({names}) occurs twice")
+
+
+def limit(conn, t, rows_read, counts):
+    """After step 5: a broken source must not empty the mirror in a perfectly consistent way (decision 18).
+    Without a key the shrinkage counts."""
+    before = sql(conn, f"SELECT count(*) FROM {t['mirror']}")[0][0]
+    gone = counts["deleted"] if counts else before - rows_read
+    if before and gone / before > t["max_delete_share"]:
+        raise Exception(f"{round(100 * gone / before)} % of the rows would be deleted")
 
 
 def stage(conn, t):
@@ -90,14 +130,16 @@ def stream(batches):
     return pa.RecordBatchReader.from_batches(first.schema, itertools.chain([first], batches))
 
 
-def diff(conn, t, columns, new):
+def diff(conn, t, staged, mirror):
     """Step 5: the rows that differ into the TEMP table _diff (README "Comparing in the target"), every column
     list by name. Returns the counts."""
-    s = ", ".join("s." + c for c in columns)
-    m = ", ".join("m." + c for c in columns)
+    had = dict(mirror)
+    s = ", ".join("s." + quote(c) for c, _ in staged)
+    # a new column is null in the mirror once added, so a row differs only if the source has a value there
+    m = ", ".join(f"m.{quote(c)}" if c in had else f"NULL::{type}" for c, type in staged)
     key = [quote(k) for k in t["key"]]
     on = " AND ".join(f"s.{k} = m.{k}" for k in key)
-    if new:
+    if not mirror:
         sql(conn, f"CREATE TEMP TABLE _diff AS SELECT 'I'::text AS _op, {s} FROM _stage s")
     else:
         sql(conn, f"""CREATE TEMP TABLE _diff AS
@@ -110,9 +152,10 @@ def diff(conn, t, columns, new):
     return {"inserted": counts.get("I", 0), "updated": counts.get("U", 0), "deleted": counts.get("D", 0)}
 
 
-def publish(conn, t, columns, new, rows_read, counts):
-    """Step 6, one transaction: change log, mirror, loaded_at, attempts and the run's row."""
-    names = ", ".join(columns)
+def publish(conn, t, staged, mirror, rows_read, counts):
+    """Step 6, one transaction: new columns, change log, mirror, loaded_at, attempts and the run's row."""
+    names = ", ".join(quote(c) for c, _ in staged)
+    new = not mirror
     if new:
         # in a transaction of its own under a lock on its name, because two first runs of a source race on
         # IF NOT EXISTS; the one-number lock never counts as a table lock
@@ -123,9 +166,14 @@ def publish(conn, t, columns, new, rows_read, counts):
     if new:  # created inside publishing, so a mirror never exists empty
         key = f", PRIMARY KEY ({', '.join(quote(k) for k in t['key'])})" if t["key"] else ""
         sql(conn, f"CREATE TABLE {t['mirror']} (LIKE _stage{key})")
+    else:
+        widen(conn, t["mirror"], staged, mirror)
     if t["key"]:
         if t["log"]:
-            if sql(conn, "SELECT to_regclass($1) IS NULL", [t["log_table"]])[0][0]:
+            log = sql(conn, COLUMNS, [t["log_table"]])
+            if log:
+                widen(conn, t["log_table"], staged, log)
+            else:
                 sql(conn, f"CREATE TABLE {t['log_table']} (_run bigint, _op text, LIKE {t['mirror']})")
             sql(conn, f"INSERT INTO {t['log_table']} (_run, _op, {names}) SELECT $1, _op, {names} FROM _diff",
                 [t["run"]])
@@ -142,6 +190,16 @@ def publish(conn, t, columns, new, rows_read, counts):
         [t["run"], rows_read, counts["inserted"], counts["updated"], counts["deleted"]])
     sql(conn, "COMMIT")
     return {"status": "ok", **counts}
+
+
+def widen(conn, table, staged, existing):
+    """Decision 17: adds the source's columns the table lacks. The exclusive lock this takes waits behind a
+    long-reading consumer, so it gives up after lock_timeout and the run fails instead of hanging."""
+    have = dict(existing)
+    for name, type in staged:
+        if name not in have:
+            sql(conn, "SET LOCAL lock_timeout = '10s'")
+            sql(conn, f"ALTER TABLE {table} ADD COLUMN {quote(name)} {type}")
 
 
 def rowcount(conn, query):
