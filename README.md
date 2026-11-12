@@ -753,7 +753,7 @@ rowvioli ships only code written for it and dependencies under a permissive lice
 - Vendor drivers, SDKs and specification files are not in the package. You install them under the vendor's licence and accept its terms yourself; rowvioli accepts none for you. For `odbc` that is the ODBC driver.
 - A connector that needs a GPL library or a vendor SDK is a separate package with its own licence.
 
-The reasons are in decision 38. It is the project's rule, not legal advice.
+The reasons are in decision 38. It is the project's rule, not legal advice. For a source whose driver or SDK is under a vendor licence, [docs/connector-guide.md](docs/connector-guide.md) walks you through it.
 
 ### Two ways to get a connector
 
@@ -810,6 +810,8 @@ key     = ["station", "time"]
 path    = "/v1/readings"
 columns = { station = "text", time = "timestamptz", temp = "float8" }
 ```
+
+A connector that needs licensed software, worked through from an empty directory to a mirrored table: [docs/connector-guide.md](docs/connector-guide.md).
 
 ### Types
 
