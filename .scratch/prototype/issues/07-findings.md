@@ -1,6 +1,6 @@
 # Findings for the owner
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 04, 05, 06
 
 Spec: `.scratch/prototype/spec.md`. Behaviour reference: `README.md`, `GLOSSARY.md`, `docs/decisions.md`. Prior art: `experiments/`.

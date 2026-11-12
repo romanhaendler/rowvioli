@@ -1,6 +1,6 @@
 # `run`: one table from source to mirror
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02
 
 Spec: `.scratch/prototype/spec.md`. Behaviour reference: `README.md`, `GLOSSARY.md`, `docs/decisions.md`. Prior art: `experiments/`.

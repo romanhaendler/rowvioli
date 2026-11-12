@@ -1,6 +1,6 @@
 # Skeleton, test harness, `init`, `key new`
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: none
 
 Spec: `.scratch/prototype/spec.md`. Behaviour reference: `README.md`, `GLOSSARY.md`, `docs/decisions.md`. Prior art: `experiments/`.

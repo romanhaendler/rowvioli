@@ -1,6 +1,6 @@
 # Checks, failure reasons, no secret leaks
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 03
 
 Spec: `.scratch/prototype/spec.md`. Behaviour reference: `README.md`, `GLOSSARY.md`, `docs/decisions.md`. Prior art: `experiments/`.

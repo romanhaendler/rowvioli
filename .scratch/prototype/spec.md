@@ -1,6 +1,6 @@
 # Prototype: does the model hold as a whole?
 
-Status: ready-for-agent
+Status: resolved
 
 ## Problem Statement
 
