@@ -453,6 +453,7 @@ file = [
 dev = [
     { name = "psycopg", extra = ["binary"] },
     { name = "pytest" },
+    { name = "rowvioli", extra = ["file"] },
 ]
 
 [package.metadata]
@@ -468,6 +469,7 @@ provides-extras = ["file"]
 dev = [
     { name = "psycopg", extras = ["binary"] },
     { name = "pytest" },
+    { name = "rowvioli", extras = ["file"] },
 ]
 
 [[package]]
