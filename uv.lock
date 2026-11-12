@@ -73,6 +73,23 @@ wheels = [
 ]
 
 [[package]]
+name = "arrow-odbc"
+version = "10.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cffi" },
+    { name = "pyarrow" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/54/57/c45c3d6c9a27e3e87dbec14fbaf8a749c399e7a09bec3e5a540bdf81f2b6/arrow_odbc-10.7.0.tar.gz", hash = "sha256:3f112ba000ecb0337655d9bbb8b5c5f881d95d39c2489c3d93bec6e7c092fc2a", size = 120507, upload-time = "2026-11-07T23:05:33.501Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0c/5f/f80f9b297fcc9c5875d09368395f55d83cc74f2f602a5f306a6d12683bff/arrow_odbc-10.7.0-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:161ec2ea426c4639e7b8dd8177c441215ef6392a41ca3826b3b0ad31e50f8069", size = 762846, upload-time = "2026-11-07T23:10:51.045Z" },
+    { url = "https://files.pythonhosted.org/packages/fa/9d/4fcbf5c786394837e9a8d188d042f10de13fa7ed54cd730712809354ef10/arrow_odbc-10.7.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:67d6d00d23673e112b83d6acaf5aec658112817c58ba0aecb45a328b64531162", size = 745689, upload-time = "2026-11-07T23:05:32.231Z" },
+    { url = "https://files.pythonhosted.org/packages/54/19/c717de5d8222c288a7f8f633f9707a67807ea2e04455559c29bff2641f07/arrow_odbc-10.7.0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:f780bacb72c7e9c2d9280c239c9d2b6bf2236e518811f90241d97be7276f37c2", size = 850946, upload-time = "2026-11-07T23:06:08.743Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/da/185f20a8580dac0bbe419f8798bf7bcbc2f6fb1645b1fef6cddefd7c4876/arrow_odbc-10.7.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:1d30729c21b81f1ceb67cf7933dc3ece5b11c74d517acce10eb9eac5d3d4f6ce", size = 874826, upload-time = "2026-11-07T23:07:14.052Z" },
+    { url = "https://files.pythonhosted.org/packages/22/ae/77dc3b219860279ab70abed241901e370080b565c7d642a060491524e16c/arrow_odbc-10.7.0-py3-none-win_amd64.whl", hash = "sha256:c1e465c4ce54107eb0747e168876ca07c6a5a0b1651e5474ca33630a6651b26a", size = 662631, upload-time = "2026-11-07T23:07:00.898Z" },
+]
+
+[[package]]
 name = "cffi"
 version = "2.1.1"
 source = { registry = "https://pypi.org/simple" }
@@ -448,29 +465,33 @@ dependencies = [
 file = [
     { name = "duckdb" },
 ]
+odbc = [
+    { name = "arrow-odbc" },
+]
 
 [package.dev-dependencies]
 dev = [
     { name = "psycopg", extra = ["binary"] },
     { name = "pytest" },
-    { name = "rowvioli", extra = ["file"] },
+    { name = "rowvioli", extra = ["file", "odbc"] },
     { name = "rowvioli-testing" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "adbc-driver-postgresql" },
+    { name = "arrow-odbc", marker = "extra == 'odbc'" },
     { name = "duckdb", marker = "extra == 'file'" },
     { name = "pyarrow" },
     { name = "pynacl" },
 ]
-provides-extras = ["file"]
+provides-extras = ["file", "odbc"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "psycopg", extras = ["binary"] },
     { name = "pytest" },
-    { name = "rowvioli", extras = ["file"] },
+    { name = "rowvioli", extras = ["file", "odbc"] },
     { name = "rowvioli-testing", editable = "tests/connector" },
 ]
 
