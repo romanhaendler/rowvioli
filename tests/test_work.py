@@ -137,6 +137,8 @@ def test_with_the_limits_full_the_targets_connections_stay_at_the_running_tables
     until(lambda: ready.target("select count(*) from _rowvioli.status where status = 'loading'") == [(2,)])
     connections = """select count(*) from pg_stat_activity
                       where datname = current_database() and pid <> pg_backend_pid()"""
+    # run processes started before the first claims committed find nothing and end; wait for them
+    until(lambda: ready.target(connections) == [(2 + 3,)])
     seen, end = set(), time.monotonic() + 8  # four polling intervals
     while time.monotonic() < end:
         seen.add(ready.target(connections)[0][0])

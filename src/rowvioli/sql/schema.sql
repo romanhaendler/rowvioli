@@ -58,7 +58,11 @@ SELECT t.id, s.id AS source_id, t.source, t.source_table,
        s.target_schema || '.' || t.target_table AS target_table,
        t.max_age, t.loaded_at, now() - t.loaded_at AS age, d.due_at, st.status, t.attempts,
        CASE WHEN st.status = 'failed' THEN coalesce(t.reason, 'worker lost') ELSE t.reason END AS reason,
-       t.attempted_at, t.requested_at
+       t.attempted_at, t.requested_at,
+       -- progress while the staging table fills, null where the reading role cannot see it (decision 31)
+       (SELECT p.tuples_processed FROM pg_stat_progress_copy p WHERE p.pid = h.pid) AS rows_written,
+       (SELECT r.rows_read FROM _rowvioli.runs r WHERE h.pid IS NOT NULL AND r."table" = t.id AND r.status = 'ok'
+         ORDER BY r.run DESC LIMIT 1) AS rows_last_run
   FROM _rowvioli.tables t
   JOIN _rowvioli.sources s ON s.name = t.source
  CROSS JOIN LATERAL (SELECT CASE
@@ -68,12 +72,13 @@ SELECT t.id, s.id AS source_id, t.source, t.source_table,
          -- the pause: one minute, doubled per further attempt, never longer than max_age
          ELSE t.attempted_at + least(interval '1 minute' * power(2, least(t.attempts - 1, 30)), t.max_age)
        END AS due_at) d
+ -- loading means: somebody holds the table lock (source id, table id) in this database
+  LEFT JOIN LATERAL (SELECT l.pid FROM pg_locks l
+                      WHERE l.locktype = 'advisory' AND l.objsubid = 2 AND l.granted
+                        AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
+                        AND l.classid = s.id::oid AND l.objid = t.id::oid) h ON true
  CROSS JOIN LATERAL (SELECT CASE
-         -- loading means: somebody holds the table lock (source id, table id) in this database
-         WHEN EXISTS (SELECT FROM pg_locks l
-                       WHERE l.locktype = 'advisory' AND l.objsubid = 2 AND l.granted
-                         AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
-                         AND l.classid = s.id::oid AND l.objid = t.id::oid) THEN 'loading'
+         WHEN h.pid IS NOT NULL THEN 'loading'
          WHEN t.attempted_at IS NULL THEN 'new'
          WHEN t.attempts = 0 THEN 'ok'
          ELSE 'failed'
