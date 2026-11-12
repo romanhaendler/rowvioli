@@ -15,7 +15,10 @@ file = ["duckdb"]
 rowvioli = "rowvioli.cli:main"
 
 [dependency-groups]
-dev = ["pytest", "psycopg[binary]"]
+dev = ["pytest", "psycopg[binary]", "rowvioli-testing"]
+
+[tool.uv.sources]
+rowvioli-testing = { path = "tests/connector", editable = true }
 
 [build-system]
 requires = ["uv_build>=0.8,<0.12"]

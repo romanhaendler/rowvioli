@@ -18,7 +18,7 @@ From `.scratch/prototype/findings.md`:
 - **Schema versions** (B5). In the prototype `init` recreates the view and creates missing tables, and nothing migrates. `docs/package.md` proposes that the program refuses to start on another version. **Decided for 0.1:** schema version 1; every command refuses another version and names both. Migration waits for the first version that needs it.
 - **Progress** (A4), for example `485,000 of about 1,000,000 rows`, was not built. 0.1 builds it in the status view.
 - **Seeing dead runs** (A5). A dead run's row in `runs` stays `running` without `finished_at`, and only its table shows `failed: worker lost`. If people should see dead runs as such, a second small view over `runs` is needed.
-- **A traceback on stderr** (F4). A run process that crashes writes it unscrubbed to the inherited stderr. **Decided for 0.1:** the run process catches everything and turns it into a scrubbed reason.
+- **A traceback on stderr** (F4). A run process that crashes writes it unscrubbed to the inherited stderr. **Decided for 0.1:** the run process catches everything and turns it into a scrubbed reason; if it still dies, the worker reports `worker lost`.
 - **`runs.definition`** (B4), the hash of the definition, was never filled, and `key_id` is read by nobody. 0.1 fills the hash and uses `key_id` to pick among several private keys during rotation.
 
 ## Not verified

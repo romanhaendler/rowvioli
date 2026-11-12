@@ -453,6 +453,7 @@ file = [
 dev = [
     { name = "psycopg", extra = ["binary"] },
     { name = "pytest" },
+    { name = "rowvioli-testing" },
 ]
 
 [package.metadata]
@@ -468,7 +469,19 @@ provides-extras = ["file"]
 dev = [
     { name = "psycopg", extras = ["binary"] },
     { name = "pytest" },
+    { name = "rowvioli-testing", editable = "tests/connector" },
 ]
+
+[[package]]
+name = "rowvioli-testing"
+version = "0"
+source = { editable = "tests/connector" }
+dependencies = [
+    { name = "pyarrow" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pyarrow" }]
 
 [[package]]
 name = "typing-extensions"
