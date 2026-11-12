@@ -295,6 +295,9 @@ def test_check_passes_load_times_a_time_zone_without_them_and_a_source_whose_tab
     ("parallel = 4", 'parallel = 4\nkey = ["id"]', "erp: key belongs to a table"),  # a setting at the wrong level
     ('"dbo.Notes"     = {}', '"dbo.Notes" = { parallel = 1 }', "dbo.Notes: parallel belongs to the source"),
     ('"dbo.Notes"     = {}', '"dbo.Notes" = {}\n"sales.NOTES" = {}', "notes"),  # duplicate target table
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = {}\n"dbo.notes__log" = {}', "notes__log"),  # the change log of another
+    ('"dbo.Notes"     = {}', f'"dbo.{"n" * 59}" = {{}}', "longer than 58 bytes"),      # Postgres would cut it
+    ("parallel = 4", f'parallel = 4\ntarget_schema = "{"s" * 64}"', "longer than 63 bytes"),
     ("parallel = 4", 'parallel = 4\ntarget_schema = "raw_crm"', "raw_crm"),     # shared target schema
     ("$ERP_PASSWORD", "$erp_password", "$"),                                    # malformed placeholder
     ("$ERP_PASSWORD", "pa$", "$"),

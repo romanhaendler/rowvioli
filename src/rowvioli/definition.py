@@ -49,6 +49,8 @@ def read(directory, env=None, only=None):
                     raise SystemExit(f"{where}: {required} is missing")
             interval(s["max_age"], where)
             schema = s.get("target_schema", f"raw_{name}")
+            if len(schema.encode()) > 63:  # Postgres cuts longer names, so two could meet in one schema
+                raise SystemExit(f"{where}: target_schema {schema} is longer than 63 bytes")
             if schema in schemas:
                 raise SystemExit(f"{where}: target_schema {schema} belongs to source {schemas[schema]} already")
             schemas[schema] = name
@@ -67,9 +69,13 @@ def read(directory, env=None, only=None):
                     raise SystemExit(f"{spot}: key must be a list of column names")
                 # a file's extension is not a name part: `customers.csv` becomes `customers`
                 target = (Path(table).stem if s["type"] == "file" else table.rsplit(".", 1)[-1]).lower()
-                if target in seen:
-                    raise SystemExit(f"{spot}: {seen[target]} and {table} both become target table {target}")
-                seen[target] = table
+                # Postgres cuts names at 63 bytes, and the change log is the name plus __log
+                if len(target.encode()) > 58:
+                    raise SystemExit(f"{spot}: target table {target} is longer than 58 bytes")
+                for name_ in (target, target + "__log"):
+                    if name_ in seen:
+                        raise SystemExit(f"{spot}: {seen[name_]} and {table} both become target table {name_}")
+                seen[target] = seen[target + "__log"] = table
                 # no default zone: 14:00 that silently means UTC is found in production (decision 36)
                 times = {k: t.get(k, s.get(k)) for k in ("at", "timezone")}
                 if times["at"] and not times["timezone"]:
