@@ -44,7 +44,7 @@ That is the whole usage. `docker compose up` in [examples/quickstart](examples/q
 
 Two ideas carry the design:
 
-- **You state the freshness, not the time.** A table is due when it is older than its `max_age`. A worker takes the table that misses its target the most.
+- **You state the freshness.** A table is due when it is older than its `max_age`. A worker takes the table that misses its target the most. A table that has to be loaded at a time of day names that too: a load time is a request the clock makes.
 - **Postgres does everything that is hard.** The connection of a run is its lock and its sign of life. Postgres compares the rows, counts what is running and computes what is due. The program passes rows from the source to the target and never holds a whole table in memory.
 
 ## Contents
@@ -77,7 +77,7 @@ Two ideas carry the design:
 
 What it is not:
 
-- Not a general scheduler. It knows how old a table may be and nothing else about time.
+- Not a general scheduler. It knows how old a table may be and at which times of day it is due, and nothing else about time.
 - Not a transformation tool. Columns arrive the way the source delivers them.
 - Not a tool for targets other than PostgreSQL.
 
@@ -155,6 +155,8 @@ What follows from it:
 | `type` | source | | Connector: `postgres`, `odbc`, `file`, `rest`, or the name of an installed connector package. |
 | `connection` | source | | Everything the connector needs to reach the source. The fields are defined by the connector. Values may contain `$NAME` placeholders. See [Connections](#connections). |
 | `max_age` | source or table | | How old the mirror may get, for example `5m`, `1h`, `1d`. Required at source level. |
+| `at` | source or table | none | Load times: times of day at which the table is due whatever its age, for example `["06:00", "14:00"]`. A table's list replaces the source's, and `[]` switches it off. A load after an event in the source is a request, not a load time: see [Loading now](#loading-now). |
+| `timezone` | source or table | | The time zone the load times are meant in, for example `"Europe/Berlin"`. Required where `at` is not empty. There is no default. |
 | `tables` | source | | The tables to load, by name. |
 | `target_schema` | source | `raw_<name>` | Schema of the target tables. A schema belongs to exactly one source: `apply` fails if two share one. |
 | `parallel` | source | 2 | Maximum number of tables of this source loading at the same time. |
@@ -163,7 +165,7 @@ What follows from it:
 | `max_delete_share` | source or table | 0.5 | The run aborts if a larger share of the rows would disappear. Without a key: if the table would shrink by more. |
 | `max_seconds` | source or table | 3600 | A hanging run is ended after this time. |
 
-Any other key, at source or table level, is passed to the connector unchanged as an option, for example `path` for a REST connector. A table's option overrides the source's of the same name.
+Any other key, at source or table level, is passed to the connector unchanged as an option, for example `path` for a REST connector. A table's option overrides the source's of the same name. The names in the table above belong to rowvioli, so a connector cannot have an option called `at` or `timezone`.
 
 Nobody has to type 200 table names and keys. `rowvioli list erp` asks the source and prints them in this format, ready to paste. It is a helper for people. Nothing in the running system calls it.
 
@@ -174,22 +176,27 @@ The target stores only facts per table. When a table is due is computed from the
 | Fact | Meaning | Written by |
 |---|---|---|
 | `max_age` | allowed maximum age | `apply` |
+| `at`, `timezone` | load times and the time zone they are meant in | `apply` |
 | `loaded_at` | when the table was last published | the worker, inside the publishing transaction |
 | `attempted_at` | when the last run began | the worker, when it claims the table |
 | `attempts` | runs since the last success | the worker: plus one when claiming, zero on success |
 | `requested_at` | when somebody asked for a load now | a person or another system |
 
 ```
-due_at =  at once                       if never attempted
+due_at =  the earliest of the lines that apply:
+          at once                       if never attempted
           requested_at                  if requested after the last run began
+          the next load time            after the last run began
           loaded_at + max_age           if the last run succeeded
-          attempted_at + pause          otherwise
+          attempted_at + pause          if it did not
 ```
+
+- **Load times.** A load time is a request the clock makes. Everything said about a request under [Loading now](#loading-now) holds for it.
 
 - **Order.** A worker takes the table that is the most overdue measured against its own `max_age`. A five-minute table that is two minutes late overtakes hourly tables that are ten minutes late.
 - **Retry.** After a run that did not succeed, the pause is one minute, then 2, 4, 8 minutes and so on, but never longer than `max_age`. A success resets it. A nightly table that fails at 02:00 is tried again at 02:01, 02:03, 02:07, 02:15, 02:31, 03:03 and so on.
 - **A crash needs no bookkeeping.** The attempt was counted when the table was claimed and the success never came. The pause follows from that. A crashed worker and a failed check go through the same formula.
-- **A changed `max_age` takes effect at once**, because nothing derived is stored.
+- **A changed `max_age`, `at` or `timezone` takes effect at once**, because nothing derived is stored.
 - **All times come from the clock of the target.** Clocks of workers and callers do not matter.
 
 ### Loading now
@@ -208,6 +215,8 @@ UPDATE _rowvioli.tables SET requested_at = now() WHERE source = 'erp';
 | while the table is loading | it loads once more afterwards, because the running read can be older than the request |
 | while the table is loading, and that run fails | one more run at once, because the request was not served. Then the pause. |
 | and the run that serves it fails | the normal retry with its pause takes over |
+| by the clock, at load times that passed while no worker ran | one run as soon as a worker runs, however many load times passed |
+| by the clock, at a load time while the table is loading | it loads once more afterwards, as in the second row |
 
 Nobody ever resets `requested_at`. The formula only compares two points in time, so there is no flag that a worker could clear while somebody sets it.
 
@@ -341,7 +350,7 @@ Bookkeeping in the schema `_rowvioli`:
 
 ```
 sources   id, name, type, target_schema, parallel, options, connection (ciphertext), key_id, enabled
-tables    id, source, source_table, target_table, key, max_age, log, max_delete_share, max_seconds, options, enabled,
+tables    id, source, source_table, target_table, key, max_age, at, timezone, log, max_delete_share, max_seconds, options, enabled,
           loaded_at, attempted_at, attempts, requested_at, reason
 runs      run, table, worker, started_at, finished_at, status,
           rows_read, inserted, updated, deleted, reason, definition
@@ -404,8 +413,8 @@ stateDiagram-v2
     due --> loading: a worker claims it
     loading --> fresh: published
     loading --> pausing: failed or worker lost
-    fresh --> due: older than max_age, or requested
-    pausing --> due: pause is over, or requested
+    fresh --> due: older than max_age, load time, or requested
+    pausing --> due: pause is over, load time, or requested
 ```
 
 None of these states is stored. They follow from the facts in the row and from the locks that are held at this moment.
@@ -585,7 +594,7 @@ Every command that needs the target finds it in `ROWVIOLI_TARGET_URL`. A worker 
 `apply` in detail:
 
 - **Idempotent.** Applying the same definition twice gives the same state. Sources and tables are created or updated by name.
-- **It never touches what the workers experienced.** `loaded_at`, `attempted_at`, `attempts` and `requested_at` stay as they are. A deployment triggers no load and loses no request. A table that is new in the definition has never been attempted and is therefore due at once.
+- **It never touches what the workers experienced.** `loaded_at`, `attempted_at`, `attempts` and `requested_at` stay as they are. A deployment by itself triggers no load and loses no request. A changed `max_age` or `at` takes effect with the next query: a table that is due by the new values is loaded. A table that is new in the definition has never been attempted and is therefore due at once.
 - **The definition is always the whole.** `apply` gets a directory. What is no longer in it is disabled, never deleted, and its target table stays. Applying the wrong directory by mistake is undone by applying the right one.
 - **Disabling is the only way to stop a table.** Until then it is loaded and retried. A run that is loading the table when it is disabled finishes.
 - **It fails rather than guess.** On a missing variable, two tables with the same target table, two sources with the same `target_schema`, or a target without the schema `_rowvioli` (then it says: run `rowvioli init` first).
@@ -798,6 +807,7 @@ Everything a UI needs is in the target. It is a small application of its own wit
 | Show which rows a run changed | change log of the table | yes, unless `log = false` |
 | Show which definition a run used | `runs.definition` | yes, as a hash |
 | Load a table now | `requested_at` in `_rowvioli.tables` | yes |
+| Load a table at a fixed time | | no. That is `at` in the definition, and it changes through `apply`. |
 | Show the progress of a running run | `_rowvioli.status`, columns `rows_written` and `rows_last_run` | yes, while the staging table is filled. Not tried with a role without special rights. |
 | Cancel a run | Postgres terminates the run's control connection | only for the moment: the retry starts it again after a minute |
 | Stop a table for good | | no. It is removed from the definition, and `apply` disables it. |

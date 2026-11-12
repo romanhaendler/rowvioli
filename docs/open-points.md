@@ -15,7 +15,7 @@ Decided in the second round and no longer open: new tables of the source do not 
 From `.scratch/prototype/findings.md`:
 
 - **"Workers wait and retry" when the target is gone** (E11). The prototype's loop has no retry and would end with a traceback. With `Restart=always` the service manager would bring it back, which was not tried. **Decided for 0.1:** the worker itself waits two seconds and connects again; no service manager is needed for it.
-- **Schema versions** (B5). In the prototype `init` recreates the view and creates missing tables, and nothing migrates. `docs/package.md` proposes that the program refuses to start on another version. **Decided for 0.1:** schema version 1; every command refuses another version and names both. Migration waits for the first version that needs it.
+- **Schema versions** (B5). In the prototype `init` recreates the view and creates missing tables, and nothing migrates. `docs/package.md` proposes that the program refuses to start on another version. **Decided for 0.1:** every command refuses another schema version and names both. The version is 2 since load times (decision 36). Migration waits for the first version that needs it.
 - **Progress** (A4), for example `485,000 of about 1,000,000 rows`, was not built. 0.1 builds it in the status view.
 - **Seeing dead runs** (A5). A dead run's row in `runs` stays `running` without `finished_at`, and only its table shows `failed: worker lost`. If people should see dead runs as such, a second small view over `runs` is needed.
 - **A traceback on stderr** (F4). A run process that crashes writes it unscrubbed to the inherited stderr. **Decided for 0.1:** the run process catches everything and turns it into a scrubbed reason; if it still dies, the worker reports `worker lost`.
@@ -49,9 +49,9 @@ Unchanged from the first round:
 - **At 10⁷ rows the path is slower than `hpdl`.** Staging, diff and publishing add up to more than a minute before any reading.
 - **No multi-core comparison** of a single table, because the staging table is a TEMP table (decision 6).
 - **Change logs only ever grow.** They are on by default and nothing prunes them.
-- **No fixed times.** "Load at six" cannot be said. A load after an event needs a request from outside.
+- **A load after an event in the source** needs a request from outside.
 - **A table that takes longer to load than its `max_age`** is due again the moment it is published and loads without a break.
-- **A table that stays broken** reads the source about ten times on the first day and once per `max_age` after that.
+- **A table that stays broken** reads the source about ten times on the first day and once per `max_age` after that, and at each load time.
 - **All workers on one target have to be equipped alike** (decision 27).
 - **New tables of a source have to be added by hand.**
 - **Column types without equality.** `json` and `xml` cannot be compared row by row and have to arrive as `jsonb` or text.

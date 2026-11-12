@@ -16,8 +16,9 @@ The binding vocabulary of the concept. If a term changes, it changes here and in
 | **Secret** | A single value that must not be in the definition, such as a password or a token. It comes from the environment when `apply` runs and replaces a `$NAME` placeholder in a connection. |
 | **Worker key** | The key pair for connections. The public key is a file next to the definition and encrypts. The private key is a file on each worker and decrypts. |
 | **Maximum age** | `max_age`: how old a mirror may get. Set per source or per table. |
+| **Load time** | `at`: a time of day at which a table is due, in the table's time zone (`timezone`). Set per source or per table. A request the clock makes. |
 | **Age** | The time since a table was last published. |
-| **Due** | A table is due when the time computed from its facts has come: at once if never attempted, at the request if one came after the last run began, one maximum age after the last success, or one pause after the last unsuccessful run. Computed on every query, never stored. |
+| **Due** | A table is due when the time computed from its facts has come: at once if never attempted, at the request if one came after the last run began, at the next load time after the last run began, one maximum age after the last success, or one pause after the last unsuccessful run. Computed on every query, never stored. |
 | **Pause** | The wait after a run that did not succeed: one minute, then doubling, never longer than the maximum age. |
 | **Request** | Asking for a load now by setting `requested_at` on a table. |
 | **Run** | Loading one table once, in a process of its own. One row in `_rowvioli.runs`. |
@@ -43,7 +44,7 @@ The binding vocabulary of the concept. If a term changes, it changes here and in
 |---|---|---|
 | Job | source, table or run | "Job" meant all three at different points in the discussion. |
 | Order, queue, waiting | due | Nothing waits in a queue. A table is due or it is not. |
-| Schedule, scheduler | maximum age | The definition says how old, not when. |
+| Schedule, scheduler | maximum age, load time | The definition says how old, and at which times of day. No next time is stored. |
 | Scan, pattern | list of tables | Tables are named. Nothing is discovered while the system runs. |
 | Secret store | connection | There is no table of secrets. A source has one encrypted connection. |
 | Destination | address of the source | "Target" means the Postgres database only. |
