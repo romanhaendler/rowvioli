@@ -293,7 +293,9 @@ Patterns can be added later as a second job of the worker without changing the m
 
 ## 23. Facts are stored, the due time is computed
 
-**Decision.** Per table the target stores `max_age`, the load times (`at`) and their time zone (`timezone`) as definition, and `loaded_at`, `attempted_at`, `attempts` and `requested_at` as facts. When a table is due is computed from them in a view on every query. Workers and people ask the same view. A load that should not wait is requested by setting `requested_at`.
+> **Changed by decision 36.** The target also stores the load times (`at`) and their time zone (`timezone`) per table, as definition like `max_age`.
+
+**Decision.** Per table the target stores `max_age`, `loaded_at`, `attempted_at`, `attempts` and `requested_at`. When a table is due is computed from them in a view on every query. Workers and people ask the same view. A load that should not wait is requested by setting `requested_at`.
 
 **Why.** A due time is a derived value, and the concept avoids those elsewhere too: running tables are counted from held locks, not from a counter (decision 11). A changed `max_age` or a changed retry rule takes effect at once. `apply` needs no exception for it. A crashed worker has to write nothing: the attempt was counted when the table was claimed.
 

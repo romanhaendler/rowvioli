@@ -282,7 +282,7 @@ def test_check_passes_load_times_a_time_zone_without_them_and_a_source_whose_tab
 
 
 @pytest.mark.parametrize("old, new, says", [
-    ('"dbo.Notes"     = {}', '"dbo.Notes"     = {', "erp.toml"),             # syntax
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = {', "erp.toml"),               # syntax
     ('type = "postgres"', "", "type"),                                          # required setting missing
     ('max_age = "1h"', "", "max_age"),
     ('max_age = "1h"', 'max_age = "1 hour"', "max_age"),                        # unit
@@ -310,7 +310,7 @@ def test_check_passes_load_times_a_time_zone_without_them_and_a_source_whose_tab
     ('"dbo.Notes"     = {}', '"dbo.Notes" = { at = ["14:00:00"], timezone = "Europe/Berlin" }', "dbo.Notes: at "),
     ('"dbo.Notes"     = {}', '"dbo.Notes" = { at = [14:00:00], timezone = "Europe/Berlin" }', "dbo.Notes: at "),
     ('"dbo.Notes"     = {}', '"dbo.Notes" = { at = ["14:60"], timezone = "Europe/Berlin" }', "dbo.Notes: at "),
-    ('"dbo.Notes"     = {}', '"dbo.Notes" = { at = ["06:00", "24:00"], timezone = "Europe/Berlin" }', "24:00"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { at = ["06:00", "24:00"], timezone = "Europe/Berlin" }', "dbo.Notes: at '24:00'"),
     ("parallel = 4", 'parallel = 4\nat = ["25:00"]\ntimezone = "Europe/Berlin"', "erp: at "),
     ('"dbo.Notes"     = {}', '"dbo.Notes" = { at = ["14:00"] }', "dbo.Notes: at needs a timezone"),
     ("parallel = 4", 'parallel = 4\nat = ["14:00"]', "dbo.Customers: at needs a timezone"),

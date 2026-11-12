@@ -183,12 +183,12 @@ The target stores only facts per table. When a table is due is computed from the
 | `requested_at` | when somebody asked for a load now | a person or another system |
 
 ```
-due_at =  the earliest of the lines that apply:
-          at once                       if never attempted
+due_at =  at once                       if never attempted
           requested_at                  if requested after the last run began
-          the next load time            after the last run began
           loaded_at + max_age           if the last run succeeded
-          attempted_at + pause          if it did not
+          attempted_at + pause          otherwise
+
+          or the next load time after the last run began, if that is earlier
 ```
 
 - **Load times.** A load time is a request the clock makes. Everything said about a request under [Loading now](#loading-now) holds for it.
@@ -350,8 +350,8 @@ Bookkeeping in the schema `_rowvioli`:
 
 ```
 sources   id, name, type, target_schema, parallel, options, connection (ciphertext), key_id, enabled
-tables    id, source, source_table, target_table, key, max_age, at, timezone, log, max_delete_share, max_seconds, options, enabled,
-          loaded_at, attempted_at, attempts, requested_at, reason
+tables    id, source, source_table, target_table, key, max_age, at, timezone, log, max_delete_share, max_seconds,
+          options, enabled, loaded_at, attempted_at, attempts, requested_at, reason
 runs      run, table, worker, started_at, finished_at, status,
           rows_read, inserted, updated, deleted, reason, definition
 status    view over tables: age, due_at and status, computed on every query

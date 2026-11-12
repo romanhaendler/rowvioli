@@ -76,11 +76,11 @@ SELECT t.id, s.id AS source_id, t.source, t.source_table,
        END,
        -- the next load time: a request the clock makes, so it counts in every state (decision 36).
        -- The day the last run began and the day after hold every candidate.
-       (SELECT min(c.at)
+       (SELECT min(c.instant)
           FROM unnest(t.at) a, generate_series(0, 1) day,
                LATERAL (SELECT ((t.attempted_at AT TIME ZONE t.timezone)::date + day + a)
-                               AT TIME ZONE t.timezone AS at) c
-         WHERE c.at > t.attempted_at)) AS due_at) d
+                               AT TIME ZONE t.timezone AS instant) c
+         WHERE c.instant > t.attempted_at)) AS due_at) d
  -- loading means: somebody holds the table lock (source id, table id) in this database
   LEFT JOIN LATERAL (SELECT l.pid FROM pg_locks l
                       WHERE l.locktype = 'advisory' AND l.objsubid = 2 AND l.granted

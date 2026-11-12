@@ -54,23 +54,24 @@ def read(directory, env=None):
                             "connection": fill(s["connection"], f"{where}: connection", env)})
             seen = {}
             for table, t in s["tables"].items():
-                at = f"{where}: {table}"
-                settings(t, {**TABLE_SETTINGS, "key": list}, at)
+                spot = f"{where}: {table}"
+                settings(t, {**TABLE_SETTINGS, "key": list}, spot)
                 key = t.get("key")
                 if key is not None and not (key and all(isinstance(c, str) and c for c in key)):
-                    raise SystemExit(f"{at}: key must be a list of column names")
+                    raise SystemExit(f"{spot}: key must be a list of column names")
                 # a file's extension is not a name part: `customers.csv` becomes `customers`
                 target = (Path(table).stem if s["type"] == "file" else table.rsplit(".", 1)[-1]).lower()
                 if target in seen:
-                    raise SystemExit(f"{at}: {seen[target]} and {table} both become target table {target}")
+                    raise SystemExit(f"{spot}: {seen[target]} and {table} both become target table {target}")
                 seen[target] = table
                 # no default zone: 14:00 that silently means UTC is found in production (decision 36)
-                if t.get("at", s.get("at")) and not t.get("timezone", s.get("timezone")):
-                    raise SystemExit(f"{at}: at needs a timezone, from the table or the source")
+                times = {k: t.get(k, s.get(k)) for k in ("at", "timezone")}
+                if times["at"] and not times["timezone"]:
+                    raise SystemExit(f"{spot}: at needs a timezone, from the table or the source")
                 tables.append({"source": name, "source_table": table, "target_table": target, "key": key,
-                               "max_age": interval(t.get("max_age", s["max_age"]), at),
+                               "max_age": interval(t.get("max_age", s["max_age"]), spot),
                                **{k: t.get(k, s.get(k, DEFAULTS[k])) for k in DEFAULTS},
-                               **{k: t.get(k, s.get(k)) for k in ("at", "timezone")},
+                               **times,
                                "options": {k: v for k, v in t.items() if k not in TABLE_SETTINGS and k != "key"}})
     # of the text as written: placeholders stay unfilled, so the hash says nothing about a secret
     digest = hashlib.sha256(json.dumps(whole, sort_keys=True, default=str).encode()).hexdigest()

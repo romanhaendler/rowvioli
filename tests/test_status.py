@@ -139,6 +139,7 @@ def test_a_load_time_before_the_last_run_began_does_not_make_it_due(rv, table):
 def test_several_missed_load_times_give_one_run(rv, table):
     id = table(max_age="7d", at="{06:00,14:00}", timezone="Europe/Berlin",
                loaded_at="2026-06-01 03:00Z", attempted_at="2026-06-01 03:00Z", attempts=0)
+    assert due(rv, id) == "2026-06-01 04:00"  # the first one missed, long before the maximum age ends
     assert row(rv, id, "due_at <= now()")[0]
     rv.target("update _rowvioli.tables set attempted_at = now(), loaded_at = now() where id = %s", [id])
     assert row(rv, id, "due_at > now()")[0]

@@ -4,6 +4,8 @@ import json
 import os
 from importlib.resources import files
 
+import adbc_driver_postgresql.dbapi as adbc
+
 from . import definition, seal, target
 
 
@@ -30,6 +32,6 @@ def apply(directory, key_file):
     payload = json.dumps({"sources": sources, "tables": tables, "definition": digest}, default=str)
     try:
         target.transaction(conn, files(__package__).joinpath("sql/apply.sql").read_text(), [payload])
-    except target.adbc.Error as e:  # Postgres names what it refused, for example a time zone it does not know
+    except adbc.Error as e:  # Postgres names what it refused, for example a time zone it does not know
         raise SystemExit(f"the target refused the definition, nothing was changed: {e}")
     print(f"applied {len(sources)} sources with {len(tables)} tables")

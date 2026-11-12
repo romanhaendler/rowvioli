@@ -18,7 +18,7 @@ The binding vocabulary of the concept. If a term changes, it changes here and in
 | **Maximum age** | `max_age`: how old a mirror may get. Set per source or per table. |
 | **Load time** | `at`: a time of day at which a table is due, in the table's time zone (`timezone`). Set per source or per table. A request the clock makes. |
 | **Age** | The time since a table was last published. |
-| **Due** | A table is due when the time computed from its facts has come: at once if never attempted, at the request if one came after the last run began, at the next load time after the last run began, one maximum age after the last success, or one pause after the last unsuccessful run. Computed on every query, never stored. |
+| **Due** | A table is due when the time computed from its facts has come: at once if never attempted, at the request if one came after the last run began, one maximum age after the last success, or one pause after the last unsuccessful run. Or at the next load time after the last run began, if that is earlier. Computed on every query, never stored. |
 | **Pause** | The wait after a run that did not succeed: one minute, then doubling, never longer than the maximum age. |
 | **Request** | Asking for a load now by setting `requested_at` on a table. |
 | **Run** | Loading one table once, in a process of its own. One row in `_rowvioli.runs`. |
