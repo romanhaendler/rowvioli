@@ -1,6 +1,6 @@
 # Package and first version
 
-The package as built in version 0.1, not yet published (`.scratch/v0.1/spec.md`).
+The package as built in version 0.2, not yet published (`.scratch/v0.1/spec.md`, `.scratch/connectors/spec.md`).
 
 ## What the package is
 
@@ -9,19 +9,19 @@ The package as built in version 0.1, not yet published (`.scratch/v0.1/spec.md`)
 - **Python 3.11 or newer**, because TOML is then read without an extra package.
 - **No official Docker image.** The repo carries an example Dockerfile into which users put the vendor drivers themselves (see decision 16).
 
-## What goes into 0.1
+## What goes into 0.2
 
-| Part | In 0.1 | Later |
+| Part | In 0.2 | Later |
 |---|---|---|
 | Commands | `init`, `key new`, `list`, `apply` with `--check`, `run`, `work`, `status` | `request` as a shortcut for setting `requested_at` |
-| Connectors | `postgres`, `file` (CSV, Excel, Parquet) | `odbc`, `rest`, JSON files in `file` |
+| Connectors | `postgres`, `file` (CSV, Excel, Parquet), `odbc`, `rest` | JSON files in `file` |
 | Core | table lock, staging, checks, diff, publishing, mirror and change log, encrypted connections, the status view, retry | reading only rows from a timestamp on, patterns for table names |
 | Limits | per worker, per source, per target | workers that serve only some sources |
 
 Two points:
 
-- **`work` is part of 0.1.** It is the loop of `run` without the end. Several workers on several machines need nothing more.
-- **ODBC comes in 0.2.** The first two connectors can be tested in CI without vendor drivers. MSSQL is next, with a SQL Server container in CI. Informix cannot be tested without the IBM driver.
+- **`work` is part of the package.** It is the loop of `run` without the end. Several workers on several machines need nothing more.
+- **`odbc` and `rest` came with 0.2.** `odbc` is tested in CI against PostgreSQL through psqlODBC, a free source; SQL Server and Informix are untested. `rest` is tested against an HTTP server inside the test. Run the odbc tests on a machine without a driver manager with `tests/odbc/run.sh`.
 
 ## Modularity
 
@@ -85,7 +85,7 @@ rowvioli/
 
 The first screen of the README shows the whole usage: one source file, the target's address, four commands and the status view. Whatever a user needs a drawing for to understand is cut or hidden.
 
-## When 0.1 is done
+## When the package is done
 
 - The quickstart runs through with one `docker compose up`.
 - Tests prove the guarantees:

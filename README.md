@@ -2,7 +2,7 @@
 
 <p align="center"><img src="docs/mascot.svg" width="360" alt="Two identical ravioli mirroring each other and holding hands"></p>
 
-> **Status 2026-11-12: version 0.1 is built and not yet published** ([spec](.scratch/v0.1/spec.md)). The model described here (a maximum age per table, definitions in the target, stateless workers) has been tried out as a whole in a throwaway prototype: every guarantee below held, and its findings are worked into these documents ([findings](.scratch/prototype/findings.md)). Measured besides: compare and publish as plain SQL, the row comparison on wide tables, the behaviour when a process is killed and a complete run through the ADBC driver. What is proven and what is not is listed in [docs/measurements.md](docs/measurements.md) and [docs/open-points.md](docs/open-points.md).
+> **Status 2026-11-12: version 0.2 is built and not yet published** ([spec](.scratch/v0.1/spec.md), [connectors](.scratch/connectors/spec.md)). The model described here (a maximum age per table, definitions in the target, stateless workers) has been tried out as a whole in a throwaway prototype: every guarantee below held, and its findings are worked into these documents ([findings](.scratch/prototype/findings.md)). Measured besides: compare and publish as plain SQL, the row comparison on wide tables, the behaviour when a process is killed and a complete run through the ADBC driver. What is proven and what is not is listed in [docs/measurements.md](docs/measurements.md) and [docs/open-points.md](docs/open-points.md).
 
 A program that mirrors tables from source systems into a PostgreSQL target. You say how old each table may be. Workers keep it that fresh, and consumers always see a complete state.
 
@@ -646,7 +646,7 @@ etl-definition/
 
 ### A worker
 
-To be set up once: the program with its connectors, for example `uv tool install "rowvioli[file]"`, and the drivers they need.
+To be set up once: the program with its connectors, for example `uv tool install "rowvioli[file,odbc,rest]"`, and the drivers they need.
 
 ```
 /etc/rowvioli/env          ROWVIOLI_TARGET_URL and ROWVIOLI_KEY_FILE
@@ -735,11 +735,15 @@ A connector may offer a second function, `tables(connection)`, that lists the ta
 | Connector | Covers | Built on | Needed on the worker |
 |---|---|---|---|
 | `postgres` | PostgreSQL | ADBC | nothing |
-| `odbc` | MSSQL, Informix, any ODBC source | arrow-odbc | the vendor's ODBC driver |
-| `file` | CSV, Excel, Parquet, JSON files | DuckDB | access to the files |
+| `odbc` | any ODBC source; tested against PostgreSQL only | arrow-odbc | an ODBC driver manager and the vendor's driver |
+| `file` | CSV, Excel, Parquet | DuckDB | access to the files |
 | `rest` | flat JSON objects over HTTP, page by page | Python generator | nothing |
 
-Version 0.1 ships `postgres` and `file` (without JSON). `odbc` and `rest` come with 0.2.
+Version 0.2 ships `postgres`, `file` (without JSON), `odbc` and `rest`. JSON files in `file` are not built.
+
+**`odbc`** reads the whole table with `SELECT * FROM <table>`. The connection has one field, `string`, an ODBC connection string. The table name is dotted parts of letters, digits and underscores and is not quoted. The column types follow the driver's description of the columns. `rowvioli list` reads the tables and their primary keys from `INFORMATION_SCHEMA`, so a source without it needs its tables block written by hand. It is tested against PostgreSQL through the open psqlODBC driver; SQL Server and Informix are not tested, so check the types of decimals, dates, timestamps and unbounded text on them first. The tests need a driver manager and the driver `PostgreSQL Unicode`; where there is none, they skip and name `tests/odbc/run.sh`, which runs them in a container.
+
+**`rest`** reads a JSON array of flat objects from `url` + `path`. The connection has `url` and optionally `token`, sent as a Bearer header. A table needs `path` and `columns`, which names every column with a type: `text`, `int8`, `float8`, `bool`, `date`, `timestamp` or `timestamptz`. A field not named is left out, a missing field is null. With `page = "page"` that query parameter counts from 1 and the connector asks until a page comes back empty; without `page` there is one request. A `timestamptz` without a zone is read as UTC. For other paging, wrapped responses or headers, write a [custom connector](#a-custom-connector-complete).
 
 ### Licences
 
@@ -755,7 +759,7 @@ The reasons are in decision 38. It is the project's rule, not legal advice. For 
 
 | Way | Set-up | In the definition | Meant for |
 |---|---|---|---|
-| Shipped | `pip install rowvioli[odbc]` | `type = "odbc"` | The connectors in the table above. The core stays small, heavy dependencies come only on request. |
+| Shipped | `pip install rowvioli[odbc]` (extras: `file`, `odbc`, `rest`) | `type = "odbc"` | The connectors in the table above. The core stays small, heavy dependencies come only on request. |
 | Separate package | `pip install rowvioli-weather` | `type = "weather"` | Everything else. The package registers through an entry point. |
 
 Installing connectors on the workers is the operator's task.
