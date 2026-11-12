@@ -2,11 +2,13 @@
 import adbc_driver_postgresql.dbapi as adbc
 import pyarrow as pa
 
+from ..target import quote
+
 
 def read(connection, table, options):
     conn = adbc.connect(connection["url"])
     cur = conn.cursor()
-    cur.execute("SELECT * FROM " + ".".join('"' + p.replace('"', '""') + '"' for p in table.split(".")))
+    cur.execute("SELECT * FROM " + ".".join(quote(p) for p in table.split(".")))
     reader = cur.fetch_record_batch()
     schema = pa.schema([pa.field(f.name, _decimal(f)) if _is_numeric(f) else f for f in reader.schema])
 

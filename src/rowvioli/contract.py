@@ -4,7 +4,9 @@ point group `rowvioli.connectors` under their `type`; the shipped ones do the sa
 from importlib.metadata import entry_points
 
 
-def connector(type):
-    """The connector module registered under `type`, or None if none is installed."""
+def connector(type, where=""):
+    """The connector module registered under `type`. Refuses if none is installed; `where` names the worker."""
     found = entry_points(group="rowvioli.connectors", name=type)
-    return next(iter(found)).load() if found else None
+    if not found:
+        raise SystemExit(f'connector "{type}" is not installed{where}')
+    return next(iter(found)).load()

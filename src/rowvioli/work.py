@@ -16,8 +16,9 @@ from .target import CLAIMABLE, sql
 
 SCOPE = "($1::text = '' OR source = $1::text) AND ($2::text = '' OR source_table = $2::text)"
 # how many runs may start now, and whether anything in scope is due or loading
-ASK = f"""SELECT (SELECT count(*) FROM ({CLAIMABLE}) c), count(*) FILTER (WHERE status = 'loading' OR due_at <= now())
-            FROM _rowvioli.status WHERE {SCOPE}"""
+CLAIMABLE_AND_BUSY = f"""SELECT (SELECT count(*) FROM ({CLAIMABLE}) c),
+                                count(*) FILTER (WHERE status = 'loading' OR due_at <= now())
+                           FROM _rowvioli.status WHERE {SCOPE}"""
 
 
 def loop(slots, source="", table="", once=False):
@@ -39,7 +40,7 @@ def loop(slots, source="", table="", once=False):
             while ended:
                 record(conn, ended[0])
                 ended.pop(0)
-            claimable, busy = sql(conn, ASK, [source, table])[0]
+            claimable, busy = sql(conn, CLAIMABLE_AND_BUSY, [source, table])[0]
         except adbc.Error as e:  # the target is unreachable: try again in two seconds (open point E11)
             if once:
                 raise
@@ -97,8 +98,7 @@ def record(conn, claim):
 
 def run(source, table, slots):
     """`rowvioli run [<source> [<table>]]`: naming something requests it, then loads until nothing in scope is
-    due or loading. Prints the answer and returns the exit code."""
-    started = time.monotonic()
+    due or loading. Returns ({target table: answer}, crashed)."""
     if source:
         conn = target.connect()
         requested = sql(conn, f"""UPDATE _rowvioli.tables SET requested_at = now()
@@ -107,6 +107,4 @@ def run(source, table, slots):
         conn.close()
         if not requested:
             raise SystemExit(f"{source} {table}".strip() + ": no enabled table has this name")
-    answers, crashed = loop(slots, source, table, once=True)
-    print(json.dumps({"seconds": round(time.monotonic() - started, 1), "tables": answers}))
-    return 1 if crashed or any(a["status"] != "ok" for a in answers.values()) else 0
+    return loop(slots, source, table, once=True)

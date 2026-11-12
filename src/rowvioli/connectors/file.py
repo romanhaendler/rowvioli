@@ -8,6 +8,8 @@ from pathlib import Path
 import duckdb
 import pyarrow as pa
 
+from ..target import quote
+
 READERS = {".csv": "read_csv", ".xlsx": "read_xlsx", ".parquet": "read_parquet"}
 # a type name with an optional precision, since it is written into the query: `integer`, `decimal(10,2)`
 TYPE = re.compile(r"[A-Za-z][A-Za-z0-9_ ]*(\(\d+(,\s*\d+)?\))?")
@@ -30,7 +32,7 @@ def read(connection, table, options):
     for type in columns.values():
         if not TYPE.fullmatch(type):
             raise Exception(f"{table}: {type} is not a column type")
-    casts = ", ".join(f'CAST({q(c)} AS {t}) AS {q(c)}' for c, t in columns.items())
+    casts = ", ".join(f'CAST({quote(c)} AS {t}) AS {quote(c)}' for c, t in columns.items())
     db = duckdb.connect()
     result = db.sql(f"SELECT *{f' REPLACE ({casts})' if casts else ''} FROM {reader}(?"
                     + "".join(f", {name} = ?" for name in options) + ")", params=[str(file), *options.values()])
@@ -48,6 +50,3 @@ def tables(connection):
     """The readable files of the directory, without keys."""
     return {p.name: None for p in sorted(Path(connection["path"]).iterdir()) if p.suffix.lower() in READERS}
 
-
-def q(name):
-    return '"' + name.replace('"', '""') + '"'

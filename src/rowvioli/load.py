@@ -17,8 +17,9 @@ import pyarrow as pa
 from . import contract, seal, target
 from .target import CLAIMABLE, quote, sql
 
-TABLE = """SELECT t.id, s.name, s.type, s.connection, s.key_id, t.source_table, s.target_schema, t.target_table,
-                  t.key, t.log, t.max_seconds, (s.options || t.options)::text, t.max_delete_share::float8
+TABLE = """SELECT t.id, s.name AS source, s.type, s.connection, s.key_id, t.source_table, s.target_schema AS schema,
+                  t.target_table AS "table", t.key, t.log, t.max_seconds, (s.options || t.options)::text AS options,
+                  t.max_delete_share::float8 AS max_delete_share
              FROM _rowvioli.tables t JOIN _rowvioli.sources s ON s.name = t.source WHERE t.id = $1"""
 
 # the columns of a table by name and type as Postgres shows them; none for a table that does not exist
@@ -48,14 +49,13 @@ def claim(conn, worker, source, table):
                   " WHERE id = $1", [id])
         [(run,)] = sql(conn, """INSERT INTO _rowvioli.runs ("table", worker, definition)
                                 SELECT $1, $2, definition FROM _rowvioli.meta RETURNING run""", [id, worker])
-        facts = sql(conn, TABLE, [id])[0]
+        with conn.cursor() as c:
+            c.execute(TABLE, [id])
+            t = dict(zip([d[0] for d in c.description], c.fetchone()), run=run, worker=worker)
         sql(conn, "COMMIT")
     except BaseException:
         sql(conn, "ROLLBACK")
         raise
-    keys = ("id", "source", "type", "connection", "key_id", "source_table", "schema", "table", "key", "log",
-            "max_seconds", "options", "max_delete_share")
-    t = dict(zip(keys, facts), run=run, worker=worker)
     t["options"] = json.loads(t["options"])  # the source's options, overridden by the table's
     t["name"] = f"{t['schema']}.{t['table']}"
     t["mirror"] = f"{quote(t['schema'])}.{quote(t['table'])}"
@@ -66,14 +66,12 @@ def claim(conn, worker, source, table):
 def load(conn, t):
     """Steps 2 to 6. Raises with the reason when the run fails."""
     rows_read = stage(conn, t)
-    if rows_read == 0:
-        raise Exception("the source delivered zero rows")
     staged = sql(conn, COLUMNS, ["pg_temp._stage"])
     mirror = sql(conn, COLUMNS, [t["mirror"]])  # empty before the first run
     check(conn, t, staged, mirror)
     counts = diff(conn, t, staged, mirror) if t["key"] else None
     if mirror:
-        limit(conn, t, rows_read, counts)
+        check_delete_share(conn, t, rows_read, counts)
     return publish(conn, t, staged, mirror, rows_read, counts)
 
 
@@ -98,7 +96,7 @@ def check(conn, t, staged, mirror):
             raise Exception(f"a key combination of ({names}) occurs twice")
 
 
-def limit(conn, t, rows_read, counts):
+def check_delete_share(conn, t, rows_read, counts):
     """After step 5: a broken source must not empty the mirror in a perfectly consistent way (decision 18).
     Without a key the shrinkage counts."""
     before = sql(conn, f"SELECT count(*) FROM {t['mirror']}")[0][0]
@@ -110,27 +108,29 @@ def limit(conn, t, rows_read, counts):
 def stage(conn, t):
     """Opens the connection, calls the connector and fills the TEMP staging table chunk by chunk. Returns the
     number of rows read."""
-    connector = contract.connector(t["type"])
-    if connector is None:
-        raise Exception(f'connector "{t["type"]}" is not installed on worker {t["worker"]}')
+    connector = contract.connector(t["type"], f" on worker {t['worker']}")
     try:
         connection = seal.unseal(os.environ["ROWVIOLI_KEY_FILE"], t["key_id"], t["source"], t["connection"])
     except Exception as e:
         raise Exception(f"the connection of source {t['source']} cannot be decrypted on worker {t['worker']}: {e}")
-    t["secrets"] = secrets(connection)
-    batches = connector.read(connection, t["source_table"], t["options"])
+    t["values"] = connection_values(connection)
+    batches = stream(connector.read(connection, t["source_table"], t["options"]))
     with conn.cursor() as c:
-        return c.adbc_ingest("_stage", stream(batches), mode="create", temporary=True)
+        rows_read = c.adbc_ingest("_stage", batches, mode="create", temporary=True) if batches else 0
+    if rows_read == 0:
+        raise Exception("the source delivered zero rows")
+    return rows_read
 
 
 def stream(batches):
-    """The driver's ingest needs the schema before the first batch; a connector may return any iterator."""
+    """The driver's ingest needs the schema before the first batch; a connector may return any iterator. None for
+    one without a batch."""
     if isinstance(batches, pa.RecordBatchReader):
         return batches
     batches = iter(batches)
     first = next(batches, None)
     if first is None:
-        raise Exception("the source delivered zero rows")
+        return None
     return pa.RecordBatchReader.from_batches(first.schema, itertools.chain([first], batches))
 
 
@@ -206,22 +206,23 @@ def widen(conn, table, staged, existing):
             sql(conn, f"ALTER TABLE {table} ADD COLUMN {quote(name)} {type}")
 
 
-def secrets(value):
+def connection_values(value):
     """Every text of a connection, and the password of a URL in it as written and decoded, since a driver may quote
     either (README "What happens to the decrypted connection")."""
     if isinstance(value, dict):
-        return [s for v in value.values() for s in secrets(v)]
+        return [s for v in value.values() for s in connection_values(v)]
     if isinstance(value, list):
-        return [s for v in value for s in secrets(v)]
+        return [s for v in value for s in connection_values(v)]
     if not isinstance(value, str):
         return []
     password = urlsplit(value).password if "://" in value else None
     return [value] + ([password, unquote(password)] if password else [])
 
 
-def scrub(t, text):
-    for secret in sorted(filter(None, t.get("secrets", [])), key=len, reverse=True):  # a whole URL before its parts
-        text = text.replace(secret, "***")
+def scrub(values, text):
+    """`text` with each of `values` replaced by `***`."""
+    for value in sorted(filter(None, values), key=len, reverse=True):  # a whole URL before its parts
+        text = text.replace(value, "***")
     return text
 
 
@@ -263,7 +264,7 @@ def main(worker, source, table):
     try:
         answer = load(conn, t)
     except BaseException as e:  # everything, so no unscrubbed traceback reaches stderr (open point F4)
-        answer = {"reason": scrub(t, str(e) or type(e).__name__)}
+        answer = {"reason": scrub(t.get("values", []), str(e) or type(e).__name__)}
     if "reason" in answer:  # outside the except, so a failing fail() cannot print the unscrubbed error with it
         try:
             answer = fail(conn, t, answer["reason"])

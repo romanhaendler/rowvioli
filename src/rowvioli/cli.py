@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import sys
+import time
 
 from . import apply, contract, definition, load, seal, target, work
 
@@ -38,12 +39,15 @@ def main():
     elif a.command == "list":
         print_tables(a.definition, a.source)
     elif a.command in ("run", "work"):
-        for variable in ("ROWVIOLI_TARGET_URL", "ROWVIOLI_KEY_FILE"):
-            if not os.environ.get(variable):
-                raise SystemExit(f"{variable} is not set")
-        if a.command == "run":
-            sys.exit(work.run(a.source or "", a.table or "", a.slots))
-        work.loop(a.slots)
+        if not os.environ.get("ROWVIOLI_KEY_FILE"):  # ROWVIOLI_TARGET_URL is checked when connecting
+            raise SystemExit("ROWVIOLI_KEY_FILE is not set")
+        if a.command == "work":
+            work.loop(a.slots)
+            return
+        started = time.monotonic()
+        answers, crashed = work.run(a.source or "", a.table or "", a.slots)
+        print(json.dumps({"seconds": round(time.monotonic() - started, 1), "tables": answers}))
+        sys.exit(1 if crashed or any(answer["status"] != "ok" for answer in answers.values()) else 0)
 
 
 def print_tables(directory, name):
@@ -53,14 +57,12 @@ def print_tables(directory, name):
     if s is None:
         raise SystemExit(f"{directory} has no source {name}")
     connector = contract.connector(s["type"])
-    if connector is None:
-        raise SystemExit(f'connector "{s["type"]}" is not installed')
     if not hasattr(connector, "tables"):
         raise SystemExit(f"connector {s['type']} of source {name} cannot list tables")
     try:
         tables = connector.tables(s["connection"])
     except Exception as e:  # a driver may quote the connection in its message
-        raise SystemExit(load.scrub({"secrets": load.secrets(s["connection"])}, str(e) or type(e).__name__))
+        raise SystemExit(load.scrub(load.connection_values(s["connection"]), str(e) or type(e).__name__))
     for table, key in tables.items():
         # a JSON string and a JSON list of strings are TOML as well
         print(f"{json.dumps(table)} = {{ key = {json.dumps(key)} }}" if key else f"{json.dumps(table)} = {{}}")
