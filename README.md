@@ -1,5 +1,7 @@
 # rowvioli
 
+<p align="center"><img src="docs/mascot.svg" width="360" alt="Two identical ravioli mirroring each other and holding hands"></p>
+
 > **Status 2026-11-12: version 0.1 is being built** ([spec](.scratch/v0.1/spec.md)). The model described here (a maximum age per table, definitions in the target, stateless workers) has been tried out as a whole in a throwaway prototype: every guarantee below held, and its findings are worked into these documents ([findings](.scratch/prototype/findings.md)). Measured besides: compare and publish as plain SQL, the row comparison on wide tables, the behaviour when a process is killed and a complete run through the ADBC driver. What is proven and what is not is listed in [docs/measurements.md](docs/measurements.md) and [docs/open-points.md](docs/open-points.md).
 
 A program that mirrors tables from source systems into a PostgreSQL target. You say how old each table may be. Workers keep it that fresh, and consumers always see a complete state.

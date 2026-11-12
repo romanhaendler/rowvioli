@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 60 480 300" role="img" aria-label="Two identical ravioli mirroring each other and holding hands">
+<defs>
+<g id="twin">
+<ellipse cx="240" cy="382" rx="92" ry="10" fill="#162844"/>
+<line x1="205" y1="330" x2="205" y2="372" stroke="#E9B530" stroke-width="13" stroke-linecap="round"/>
+<line x1="275" y1="330" x2="275" y2="372" stroke="#E9B530" stroke-width="13" stroke-linecap="round"/>
+<line x1="370" y1="215" x2="424" y2="232" stroke="#E9B530" stroke-width="15" stroke-linecap="round"/>
+<rect x="110" y="70" width="260" height="260" rx="34" fill="none" stroke="#E9B530" stroke-width="30" stroke-linecap="round" pathLength="38" stroke-dasharray="0 1"/>
+<rect x="110" y="70" width="260" height="260" rx="34" fill="#F6C945"/>
+<rect x="146" y="106" width="188" height="188" rx="44" fill="#FBDD7A"/>
+<line x1="150" y1="169" x2="330" y2="169" stroke="#E9B530" stroke-width="5" stroke-linecap="round"/>
+<line x1="150" y1="231" x2="330" y2="231" stroke="#E9B530" stroke-width="5" stroke-linecap="round"/>
+<circle cx="196" cy="211" r="9" fill="#F58A7A"/>
+<circle cx="296" cy="211" r="9" fill="#F58A7A"/>
+<circle cx="220" cy="194" r="11" fill="#2A2140"/>
+<circle cx="276" cy="194" r="11" fill="#2A2140"/>
+<circle cx="225" cy="191" r="4" fill="#FFFFFF"/>
+<circle cx="281" cy="191" r="4" fill="#FFFFFF"/>
+<path d="M236 209 q12 11 24 0" fill="none" stroke="#2A2140" stroke-width="4" stroke-linecap="round"/>
+</g>
+</defs>
+<rect x="0" y="60" width="480" height="300" rx="24" fill="#1E3557"/>
+<line x1="240" y1="80" x2="240" y2="345" stroke="#FFFFFF" stroke-opacity="0.4" stroke-width="3" stroke-linecap="round" stroke-dasharray="2 12"/>
+<use href="#twin" transform="translate(-19 80) scale(0.62)"/>
+<use href="#twin" transform="translate(499 80) scale(-0.62 0.62)"/>
+</svg>
