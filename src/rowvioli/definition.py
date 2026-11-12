@@ -24,9 +24,10 @@ PLACEHOLDER = re.compile(r"\$(\$|[A-Z][A-Z0-9_]*)?")
 USERINFO = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://(?:([^/?#]*)@)?")
 
 
-def read(directory, env=None):
+def read(directory, env=None, only=None):
     """Reads and checks every *.toml in the directory. With env, the placeholders of each connection are filled in
-    from it; without, they are only checked. Returns (sources, tables, hash of the definition)."""
+    from it; without, they are only checked. With `only`, just that source's are filled: `list` needs no other
+    source's secrets. Returns (sources, tables, hash of the definition)."""
     if not Path(directory).is_dir():
         raise SystemExit(f"{directory} is not a directory")
     whole, sources, tables, schemas = {}, [], [], {}
@@ -51,7 +52,8 @@ def read(directory, env=None):
             schemas[schema] = name
             sources.append({"name": name, "type": s["type"], "target_schema": schema, "parallel": s.get("parallel", 2),
                             "options": {k: v for k, v in s.items() if k not in SOURCE_SETTINGS},
-                            "connection": fill(s["connection"], f"{where}: connection", env)})
+                            "connection": fill(s["connection"], f"{where}: connection",
+                                              env if only in (None, name) else None)})
             seen = {}
             for table, t in s["tables"].items():
                 spot = f"{where}: {table}"

@@ -57,6 +57,16 @@ def test_list_for_file_prints_the_readable_files_without_keys_that_apply_and_loa
     assert paste_apply_run(ready, file, r.stdout) == {"raw_files.customers": 2, "raw_files.orders": 1}
 
 
+def test_list_needs_the_variables_of_the_listed_source_only(ready):
+    ready.source("create table customers (customer_no int primary key)")
+    source(ready, "erp", "postgres", 'url = "$ERP_URL"')
+    source(ready, "crm", "postgres", 'url = "$CRM_URL"')  # its variable is set where crm is loaded, not here
+    r = ready.run("list", "erp", env={"ERP_URL": ready.source_url})
+    assert r.returncode == 0 and r.stdout == '"public.customers" = { key = ["customer_no"] }\n', r.stderr
+    r = ready.run("list", "crm", env={"ERP_URL": ready.source_url})
+    assert r.returncode == 1 and "variable CRM_URL is not set" in r.stderr
+
+
 def test_list_fails_clearly_for_a_connector_without_tables_and_for_an_unknown_source(ready):
     source(ready, "feed", "testing", 'url = "postgresql://u:p@nowhere.invalid/x"')
     r = ready.run("list", "feed")

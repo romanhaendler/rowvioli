@@ -89,7 +89,7 @@ def print_status(source, table):
 
 def print_tables(directory, name):
     """The tables of a source from its connector's `tables`, as lines for the source's tables block."""
-    sources, _, _ = definition.read(directory, os.environ)
+    sources, _, _ = definition.read(directory, os.environ, only=name)
     s = next((s for s in sources if s["name"] == name), None)
     if s is None:
         raise SystemExit(f"{directory} has no source {name}")
