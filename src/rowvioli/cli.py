@@ -5,6 +5,8 @@ import os
 import sys
 import time
 
+import adbc_driver_postgresql.dbapi as adbc
+
 from . import apply, contract, definition, load, seal, target, work
 
 
@@ -31,7 +33,13 @@ def main():
     a = p.parse_args()
     if getattr(a, "slots", 1) < 1:  # with no slot `run` would wait forever for what is due
         p.error("--slots must be at least 1")
+    try:
+        command(a)
+    except adbc.Error as e:  # the target refused or is unreachable: its message, not a traceback
+        raise SystemExit(load.scrub(load.connection_values(os.environ.get("ROWVIOLI_TARGET_URL")), str(e)))
 
+
+def command(a):
     if a.command == "init":
         target.connect(init=True)
     elif a.command == "key":
