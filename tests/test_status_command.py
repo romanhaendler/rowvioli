@@ -85,7 +85,8 @@ def test_a_loading_table_without_progress_shows_no_reason(rv, add):
 def test_progress_shows_to_a_role_with_pg_read_all_stats_and_is_empty_without(rv, add):
     add("erp", "t")
     [(source_id, id)] = rv.target("select source_id, id from _rowvioli.status")
-    for role, extra in (("viewer", ""), ("stats", " in role pg_read_all_stats")):
+    # roles belong to the cluster, which other tests share: names of their own
+    for role, extra in (("plain_reader", ""), ("stats_reader", " in role pg_read_all_stats")):
         rv.target(f"create role {role} login password 'v'{extra}")
         rv.target(f"grant usage on schema _rowvioli to {role}")
         rv.target(f"grant select on _rowvioli.status to {role}")
@@ -101,8 +102,8 @@ def test_progress_shows_to_a_role_with_pg_read_all_stats_and_is_empty_without(rv
         with run.cursor().copy("copy _stage from stdin") as copy:
             for i in range(200_000):  # enough that psycopg has sent most of it
                 copy.write_row([i])
-            assert written("viewer") == ("loading", None)
-            assert written("stats")[0] == "loading" and written("stats")[1] > 0
+            assert written("plain_reader") == ("loading", None)
+            assert written("stats_reader")[0] == "loading" and written("stats_reader")[1] > 0
 
 
 def test_a_role_that_may_only_read_the_status_view_can_run_status(rv, add):
