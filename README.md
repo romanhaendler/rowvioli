@@ -32,11 +32,11 @@ rowvioli status             # whenever you want to look
 
 ```
 $ rowvioli status
-source  table             max_age  age    due     status   reason
-crm     contacts          1d       3h     in 4m   failed   62 % of the rows would be deleted
-erp     public.customers  1h       1h 3m  now     loading  485,000 of about 1,000,000 rows
-erp     public.items      1h       40m    in 20m  ok
-erp     public.orders     5m       2m     in 3m   ok
+source  table             max_age  age     due        status   reason
+crm     contacts          1d       3h      in 50s     failed   62 % of the rows would be deleted
+erp     public.customers  1h       1h 3m   now        loading  485,000 of about 1,000,000 rows
+erp     public.items      1h       40m     in 20m     ok
+erp     public.orders     5m       2m 14s  in 2m 46s  ok
 ```
 
 That is the whole usage. `docker compose up` in [examples/quickstart](examples/quickstart) plays it with a source and a target. There is no schedule, no queue and no job. One table in the target is work list, state and monitoring at once.
@@ -581,7 +581,7 @@ A connector is code the operator trusts. It receives the decrypted connection an
 | `rowvioli list erp` | Prints the tables of a source with their keys, ready to paste into its `tables` block. Reads the definition from `sources/` (or `--definition <dir>`). | definition, environment, connector, source |
 | `rowvioli apply --check sources/` | Reads the definition and checks it. Writes nothing. Meant for a laptop and for the pipeline of a merge request. | definition |
 | `rowvioli apply sources/` | Writes the definition into the target: one row per source and table, connections encrypted. | definition, environment, `worker.pub` (or `--key <file>`), target |
-| `rowvioli status [erp [dbo.Customers]]` | Prints the enabled tables with age, due time, status and reason or progress, from the view `_rowvioli.status`. Names narrow it the way `run` takes them. Always exits 0. | target |
+| `rowvioli status [erp [dbo.Customers]]` | Prints the enabled tables with age, due time, status and reason or progress, from the view `_rowvioli.status`. Names narrow it the way `run` takes them. Exits 0 whenever it could print the state. | target |
 | `rowvioli work --slots 4` | Runs permanently and loads whatever is due, up to four tables at a time. | connectors, private key, target |
 | `rowvioli run` | Loads everything that is due, once, and ends. | connectors, private key, target |
 | `rowvioli run erp` | Requests all tables of `erp` and loads until nothing of `erp` is due. | connectors, private key, target |
@@ -664,7 +664,7 @@ TimeoutStopSec=3600   # as long as max_seconds, so running tables can finish
 KillMode=mixed        # SIGTERM to the worker only, so its run processes are not ended with it
 ```
 
-- **A worker says what it does**, one line per event on stderr, each starting with local date and time. `run` says the same lines. Nothing is stored and nothing is configured: the lines are for a person at a terminal and for the log system you already have (journald, Docker), and what happened to a table stays in `_rowvioli.runs`.
+- **A worker says what it does**, one line per event on stderr, each starting with local date and time. `run` writes the start and end lines of its runs, not the worker's start line and not the waiting line. Nothing is stored and nothing is configured: the lines are for a person at a terminal and for the log system you already have (journald, Docker), and what happened to a table stays in `_rowvioli.runs`.
 
   ```
   2026-11-12 14:03:00 worker mac:4711 started with 4 slots on dwh
@@ -675,7 +675,7 @@ KillMode=mixed        # SIGTERM to the worker only, so its run processes are not
   2026-11-12 14:09:12 stopping, 1 run finishes
   ```
 
-  A failure carries the reason of the status view; `worker lost` and `ended after max_seconds` are failures too. The waiting line is written once when the worker runs out of work, not every two seconds (`due since 14:01:00` when the table is due but cannot be claimed yet), and `the target is unreachable` once per outage. Run processes keep their stderr discarded, so no driver message can carry a connection value into a log.
+  A failure carries the reason of the status view; `worker lost` and `ended after max_seconds` are failures too. The waiting line is written once when the worker runs out of work, not every two seconds (`due since 14:01:00` when the table is due but cannot be claimed yet), and `the target is unreachable` once per outage. Run processes keep their stderr discarded, so no driver message from a source can carry a connection value into a log. The line for an unreachable target keeps the driver's message, with the password of `ROWVIOLI_TARGET_URL` replaced by `***`.
 - **`rowvioli status` shows what is**, without `psql`. It prints the status view as a table; the `due` column says `now` or `in 20m`, so `ok` with an age above the maximum age is a table that is due and that nobody has taken yet (no worker runs). It computes nothing the view does not.
 - A worker has no checkout and no file that describes a source. A new source needs no change on any worker.
 - Source passwords are not on the worker. They are inside the encrypted connections in the target and are decrypted when a run starts.

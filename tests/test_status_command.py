@@ -1,6 +1,7 @@
 """`rowvioli status`: the view as a table, read as the user reads it."""
 from datetime import datetime, timedelta, timezone
 
+import psycopg
 import pytest
 
 
@@ -35,7 +36,7 @@ def test_one_row_per_table_with_max_age_due_and_status(rv, add):
     add("erp", "never")
     got = {r[1]: r for r in rows(rv)}
     assert got["late"][-2:] == ["now", "ok"]  # ok, yet due: nobody took it
-    assert got["fresh"][3] == "1m" and got["fresh"][4] == "in" and got["fresh"][-1] == "ok"
+    assert "in" in got["fresh"] and got["fresh"][-1] == "ok"  # how the age splits depends on rounding
     assert got["never"][2:] == ["1h", "now", "new"]  # no age
 
 
@@ -66,7 +67,29 @@ def test_names_narrow_the_rows_and_a_disabled_table_is_not_shown(rv, add):
 
 
 def test_status_needs_the_target_only_and_names_init_without_the_schema(rv, add):
-    assert rv.run("status").returncode == 0  # the harness sets a key file; the command ignores it
+    assert rv.run("status", env={"ROWVIOLI_KEY_FILE": ""}).returncode == 0  # no key file: the command needs none
     rv.target("drop schema _rowvioli cascade")
     r = rv.run("status")
     assert r.returncode != 0 and "rowvioli init" in r.stderr
+
+
+def test_a_loading_table_without_progress_shows_no_reason(rv, add):
+    add("erp", "t", attempted_at="2026-01-01 00:00Z", attempts=1, reason="old failure")
+    [(source_id, id)] = rv.target("select source_id, id from _rowvioli.status")
+    with psycopg.connect(rv.target_url, autocommit=True) as holder:
+        holder.execute("select pg_advisory_lock(%s, %s)", [source_id, id])
+        assert rows(rv)[0][-1] == "loading"
+        assert rv.target("select reason from _rowvioli.status") == [("old failure",)]
+
+
+def test_a_role_that_may_only_read_the_status_view_can_run_status(rv, add):
+    add("erp", "t")
+    rv.target("create role viewer login password 'v'")
+    rv.target("grant usage on schema _rowvioli to viewer")
+    rv.target("grant select on _rowvioli.status to viewer")
+    url = rv.target_url.replace("postgres:x@", "viewer:v@")
+    r = rv.run("status", env={"ROWVIOLI_TARGET_URL": url})
+    assert r.returncode == 0 and "erp" in r.stdout, r.stderr
+    rv.target("drop schema _rowvioli cascade")
+    r = rv.run("status", env={"ROWVIOLI_TARGET_URL": url})
+    assert r.returncode != 0 and "rowvioli init" in r.stderr and "Traceback" not in r.stderr

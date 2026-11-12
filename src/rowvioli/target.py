@@ -13,14 +13,22 @@ KEEPALIVE = "keepalives_idle=30&keepalives_interval=10&keepalives_count=3&tcp_us
 CLAIMABLE = files(__package__).joinpath("sql/claimable.sql").read_text()
 
 
-def connect(init=False):
+NO_SCHEMA = "the target has no schema _rowvioli: run `rowvioli init` first"
+
+
+def connect(init=False, versioned=True):
     """Opens the control connection and refuses a target without `_rowvioli` or with another schema version.
-    With init=True a missing `_rowvioli` is created instead."""
+    With init=True a missing `_rowvioli` is created instead. With versioned=False only the status view must
+    exist: a role that may only read it cannot read `meta` (README "Who may do what")."""
     url = os.environ.get("ROWVIOLI_TARGET_URL")
     if not url:
         raise SystemExit("ROWVIOLI_TARGET_URL is not set")
     conn = adbc.connect(url + ("&" if "?" in url else "?") + KEEPALIVE, autocommit=True)
     sql(conn, "SET client_connection_check_interval = '2s'")
+    if not versioned:
+        if not sql(conn, "SELECT to_regclass('_rowvioli.status') IS NOT NULL")[0][0]:
+            raise SystemExit(NO_SCHEMA)
+        return conn
     version = None
     if sql(conn, "SELECT to_regclass('_rowvioli.meta') IS NOT NULL")[0][0]:
         version = sql(conn, "SELECT schema_version FROM _rowvioli.meta")[0][0]
@@ -28,7 +36,7 @@ def connect(init=False):
         transaction(conn, files(__package__).joinpath("sql/schema.sql").read_text())
         version = SCHEMA_VERSION
     if version is None:
-        raise SystemExit("the target has no schema _rowvioli: run `rowvioli init` first")
+        raise SystemExit(NO_SCHEMA)
     if version != SCHEMA_VERSION:
         raise SystemExit(f"the target has schema version {version}, this program works with version {SCHEMA_VERSION}")
     return conn

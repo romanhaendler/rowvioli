@@ -55,21 +55,21 @@ def main():
         sys.exit(1 if crashed or any(answer["status"] != "ok" for answer in answers.values()) else 0)
 
 
-STATUS = """SELECT source, source_table, extract(epoch FROM max_age)::bigint, extract(epoch FROM age)::bigint,
+STATUS = f"""SELECT source, source_table, extract(epoch FROM max_age)::bigint, extract(epoch FROM age)::bigint,
        CASE WHEN due_at <= now() THEN NULL ELSE ceil(extract(epoch FROM due_at - now()))::bigint END,
        status, reason, rows_written, rows_last_run
   FROM _rowvioli.status
- WHERE ($1 = '' OR source = $1) AND ($2 = '' OR source_table = $2)
+ WHERE {work.SCOPE}
  ORDER BY source, source_table"""
 
 
 def print_status(source, table):
     """The status view as an aligned table. It formats; status, due time and progress are the view's."""
-    conn = target.connect()
+    conn = target.connect(versioned=False)
     lines = [["source", "table", "max_age", "age", "due", "status", "reason"]]
     for src, name, max_age, age, wait, status, reason, written, last in target.sql(conn, STATUS, [source, table]):
-        if status == "loading" and written is not None:  # progress in place of a reason
-            reason = f"{written:,} of about {last:,} rows" if last else f"{written:,} rows"
+        if status == "loading":  # progress in place of a reason, none yet: no reason
+            reason = "" if written is None else f"{written:,} of about {last:,} rows" if last else f"{written:,} rows"
         lines.append([src, name, definition.duration(max_age), "" if age is None else definition.duration(age),
                       "now" if wait is None else "in " + definition.duration(wait), status, reason or ""])
     widths = [max(len(line[i]) for line in lines) for i in range(6)]
