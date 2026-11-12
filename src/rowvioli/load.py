@@ -8,6 +8,8 @@ import itertools
 import json
 import os
 import sys
+import threading
+import time
 from urllib.parse import unquote, urlsplit
 
 import pyarrow as pa
@@ -243,7 +245,16 @@ def say(**line):
     print(json.dumps(line), flush=True)
 
 
+def orphaned(parent):
+    """Decision 33: a worker killed hard takes its runs with it. An orphan gets a new parent, so the run process
+    ends once its parent changes; its connection and lock go with it."""
+    while os.getppid() == parent:
+        time.sleep(1)
+    os._exit(1)
+
+
 def main(worker, source, table):
+    threading.Thread(target=orphaned, args=[os.getppid()], daemon=True).start()
     conn = target.connect()
     t = claim(conn, worker, source, table)
     if t is None:

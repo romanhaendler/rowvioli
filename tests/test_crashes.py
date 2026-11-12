@@ -1,5 +1,7 @@
 """Killed runs and readers (spec tests 9, 10, 22). Runs are held at a step from the SQL side, then killed with -9."""
 import json
+import os
+import subprocess
 import threading
 from datetime import timedelta
 
@@ -110,6 +112,33 @@ def test_a_run_killed_at_the_diff_or_while_publishing_leaves_the_mirror_and_rele
         kill_and_check(slow, worker)  # while the mirror is still locked
         holder.rollback()
     assert mirror(slow) == before
+
+
+def test_a_worker_killed_hard_takes_its_runs_with_it(slow):
+    """Decision 33: after kill -9 of `work`, its run process ends too, so the run counts as `worker lost`."""
+    before = mirror(slow)
+    with psycopg.connect(slow.target_url) as holder:
+        holder.execute("lock table raw_erp.slow in access exclusive mode")
+        worker = slow.start("work")
+        until(lambda: waiting_on(slow, "raw_erp.slow"))
+        [run] = [int(x) for x in subprocess.run(["pgrep", "-P", str(worker.pid)], capture_output=True,
+                                                 text=True).stdout.split()]
+        worker.kill()
+        worker.wait()
+        until(lambda: not alive(run))
+        until(lambda: status(slow) != ("loading", None))
+        holder.rollback()
+    assert status(slow) == ("failed", "worker lost")
+    assert held_table_locks(slow) == 0
+    assert mirror(slow) == before
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
 
 
 def test_a_run_whose_server_process_is_killed_fails_and_run_says_so(slow):
