@@ -4,7 +4,7 @@ What is undecided, unverified or unbuilt as of 2026-11-12, after the prototype.
 
 ## Decisions for the owner
 
-Two points left open by the prototype need one before 0.1: what "workers wait and retry" means, and schema versions (both below).
+None at the moment. The points the prototype left open are decided for 0.1 in `.scratch/v0.1/spec.md` where marked below.
 
 Decided after the prototype and no longer open: percent-encoding a password in a URL, stopping `work`, asking what is claimable, and one `target_schema` per source (decisions 32 to 35).
 
@@ -14,12 +14,12 @@ Decided in the second round and no longer open: new tables of the source do not 
 
 From `.scratch/prototype/findings.md`:
 
-- **"Workers wait and retry" when the target is gone** (E11). The prototype's loop has no retry and would end with a traceback. With `Restart=always` the service manager would bring it back, which was not tried. To decide: whether "retry" means the service manager restarts the worker, and then to say so.
-- **Schema versions** (B5). In the prototype `init` recreates the view and creates missing tables, and nothing migrates. `docs/package.md` proposes that the program refuses to start on another version. How the schema gets from one version to the next is undecided.
-- **Progress** (A4), for example `485,000 of about 1,000,000 rows`, was not built.
+- **"Workers wait and retry" when the target is gone** (E11). The prototype's loop has no retry and would end with a traceback. With `Restart=always` the service manager would bring it back, which was not tried. **Decided for 0.1:** the worker itself waits two seconds and connects again; no service manager is needed for it.
+- **Schema versions** (B5). In the prototype `init` recreates the view and creates missing tables, and nothing migrates. `docs/package.md` proposes that the program refuses to start on another version. **Decided for 0.1:** schema version 1; every command refuses another version and names both. Migration waits for the first version that needs it.
+- **Progress** (A4), for example `485,000 of about 1,000,000 rows`, was not built. 0.1 builds it in the status view.
 - **Seeing dead runs** (A5). A dead run's row in `runs` stays `running` without `finished_at`, and only its table shows `failed: worker lost`. If people should see dead runs as such, a second small view over `runs` is needed.
-- **A traceback on stderr** (F4). A run process that crashes writes it unscrubbed to the inherited stderr. 0.1 scrubs stderr too or catches everything in the run process.
-- **`runs.definition`** (B4), the hash of the definition, was never filled, and `key_id` is read by nobody. Both stay promises of 0.1. Nothing has shown that they are needed.
+- **A traceback on stderr** (F4). A run process that crashes writes it unscrubbed to the inherited stderr. **Decided for 0.1:** the run process catches everything and turns it into a scrubbed reason.
+- **`runs.definition`** (B4), the hash of the definition, was never filled, and `key_id` is read by nobody. 0.1 fills the hash and uses `key_id` to pick among several private keys during rotation.
 
 ## Not verified
 
