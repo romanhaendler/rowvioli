@@ -12,6 +12,8 @@ TABLE_SETTINGS = {"max_age": str, "log": bool, "max_delete_share": (int, float),
 DEFAULTS = {"log": True, "max_delete_share": 0.5, "max_seconds": 3600}
 SOURCE_SETTINGS = {"type": str, "connection": dict, "tables": dict, "target_schema": str, "parallel": int,
                    **TABLE_SETTINGS}
+RANGES = {"parallel": (lambda v: v >= 1, "at least 1"), "max_delete_share": (lambda v: 0 <= v <= 1, "between 0 and 1"),
+          "max_seconds": (lambda v: v > 0, "greater than 0")}
 KINDS = {str: "a string", bool: "true or false", int: "a whole number", (int, float): "a number", dict: "a table",
          list: "a list"}
 # `$NAME`, `$$`, or a `$` that is neither (group 1 is None)
@@ -37,7 +39,7 @@ def read(directory, env=None):
                 raise SystemExit(f"{where}: source {name} is defined twice")
             whole[name] = s
             settings(s, SOURCE_SETTINGS, where)
-            for required in ("type", "max_age"):
+            for required in ("type", "max_age", "connection", "tables"):
                 if required not in s:
                     raise SystemExit(f"{where}: {required} is missing")
             interval(s["max_age"], where)
@@ -47,10 +49,9 @@ def read(directory, env=None):
             schemas[schema] = name
             sources.append({"name": name, "type": s["type"], "target_schema": schema, "parallel": s.get("parallel", 2),
                             "options": {k: v for k, v in s.items() if k not in SOURCE_SETTINGS},
-                            "connection": {k: fill(v, f"{where}: connection.{k}", env) if isinstance(v, str) else v
-                                           for k, v in s.get("connection", {}).items()}})
+                            "connection": fill(s["connection"], f"{where}: connection", env)})
             seen = {}
-            for table, t in s.get("tables", {}).items():
+            for table, t in s["tables"].items():
                 at = f"{where}: {table}"
                 settings(t, {**TABLE_SETTINGS, "key": list}, at)
                 key = t.get("key")
@@ -78,6 +79,8 @@ def settings(block, known, where):
         # bool is a subclass of int, so true must not pass as a whole number and 1 not as true
         if k in block and (not isinstance(block[k], kind) or isinstance(block[k], bool) != (kind is bool)):
             raise SystemExit(f"{where}: {k} must be {KINDS[kind]}")
+        if k in block and k in RANGES and not RANGES[k][0](block[k]):
+            raise SystemExit(f"{where}: {k} must be {RANGES[k][1]}")
 
 
 def interval(value, where):
@@ -88,8 +91,15 @@ def interval(value, where):
 
 
 def fill(template, where, env):
-    """`$NAME` from env, `$$` a literal `$`. A value landing in the user info of a URL is percent-encoded
-    (decision 32). Without env, the placeholders are only checked. No value ever appears in an error."""
+    """`$NAME` from env, `$$` a literal `$`, in every string of the connection, also nested ones. A value landing
+    in the user info of a URL is percent-encoded (decision 32). Without env, the placeholders are only checked. No
+    value ever appears in an error."""
+    if isinstance(template, dict):
+        return {k: fill(v, f"{where}.{k}", env) for k, v in template.items()}
+    if isinstance(template, list):
+        return [fill(v, where, env) for v in template]
+    if not isinstance(template, str):
+        return template
     url = USERINFO.match(template)
     userinfo_end = url.end(1) if url and url[1] is not None else -1
 

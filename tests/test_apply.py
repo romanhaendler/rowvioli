@@ -86,6 +86,13 @@ url = "postgresql://crm@nowhere.invalid/crm"
 """
 
 
+def test_apply_fills_a_placeholder_nested_in_the_connection(ready):
+    nested = ERP.replace('1/erp"', '1/erp"\nssl = { cert = ["$ERP_CERT"] }')
+    r = apply(ready, {"erp.toml": nested})
+    assert r.returncode != 0 and "ERP_CERT" in r.stderr
+    assert apply(ready, {"erp.toml": nested}, env={**ENV, "ERP_CERT": "c"}).returncode == 0
+
+
 def test_apply_fails_when_two_tables_of_a_source_get_the_same_target_table(ready):
     twice = ERP + '"sales.CUSTOMERS" = { key = ["id"] }\n'
     r = apply(ready, {"erp.toml": twice})
@@ -228,6 +235,13 @@ def test_check_passes_a_valid_definition_without_a_target_a_key_or_the_variables
     ("parallel = 4", 'parallel = 4\ntarget_schema = "raw_crm"', "raw_crm"),     # shared target schema
     ("$ERP_PASSWORD", "$erp_password", "$"),                                    # malformed placeholder
     ("$ERP_PASSWORD", "pa$", "$"),
+    ('1/erp"', '1/erp"\nssl = { cert = ["pa$"] }', "connection.ssl"),           # also nested in the connection
+    ('[erp.connection]\nurl = "postgresql://reader:$ERP_PASSWORD@nowhere.invalid:1/erp"\n', "", "connection"),
+    ('[erp.tables]', "[erp.other]", "tables"),
+    ("parallel = 4", "parallel = 0", "parallel"),                               # ranges
+    ("parallel = 4", "parallel = 4\nmax_delete_share = 1.5", "max_delete_share"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { max_delete_share = -0.1 }', "max_delete_share"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { max_seconds = 0 }', "max_seconds"),
 ])
 def test_check_fails_each_invalid_definition_without_a_target_or_the_variables(rv, old, new, says):
     assert old in ERP
