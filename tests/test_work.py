@@ -1,11 +1,15 @@
 """`rowvioli work`, the order of loading, both limits, `max_seconds`, SIGTERM and an unreachable target
 (spec tests 9, 10, 11, 13, 14, 19)."""
+import os
+import pty
 import re
+import select
 import signal
+import subprocess
 import time
 
 import pytest
-from conftest import _query, until
+from conftest import ROWVIOLI, _query, until
 from test_run import apply, ok, run
 
 
@@ -180,6 +184,7 @@ def test_work_says_its_start_and_what_it_loads_and_the_counts_equal_those_in_run
     db = ready.target("select current_database()")[0][0]
     err = said_after_sigterm(worker)
     assert f"started with 3 slots on {db}" in err
+    assert "~~~" not in err  # no mascot when stderr is a pipe
     assert "raw_erp.customers started, run 1" in err
     [(inserted, updated, deleted)] = ready.target("select inserted, updated, deleted from _rowvioli.runs")
     assert re.search(rf"raw_erp.customers ok after \d+\.\d+s: {inserted} inserted, {updated} updated, "
@@ -230,3 +235,19 @@ def test_a_run_process_dying_before_its_claim_gives_a_line_with_its_exit_code(re
     apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
     ready.target("alter table _rowvioli.runs add constraint broken check (false) not valid")
     assert re.search(r"run process ended with exit code 1 before it claimed", ready.run("run", timeout=20).stderr)
+
+
+def test_work_shows_the_mascot_before_its_start_line_at_a_terminal(ready):
+    master, slave = pty.openpty()
+    worker = subprocess.Popen([ROWVIOLI, "work"], cwd=ready.dir, env=ready._env(None), stdout=subprocess.DEVNULL,
+                              stderr=slave)
+    ready.started.append(worker)
+    os.close(slave)
+    try:
+        out = ""
+        while "started with" not in out:
+            assert select.select([master], [], [], 10)[0], out
+            out += os.read(master, 4096).decode()
+        assert ".~~~~~~~.   .~~~~~~~." in out.split("started with")[0]
+    finally:
+        os.close(master)

@@ -20,6 +20,13 @@ CLAIMABLE_AND_BUSY = f"""SELECT (SELECT count(*) FROM ({CLAIMABLE}) c),
                                 count(*) FILTER (WHERE status = 'loading' OR due_at <= now())
                            FROM _rowvioli.status WHERE {SCOPE}"""
 
+MASCOT = """\
+  .~~~~~~~.   .~~~~~~~.
+  { o   o }   { o   o }
+  {   v   }---{   v   }
+  '~~~~~~~'   '~~~~~~~'
+    |   |       |   |"""
+
 
 def say(text):
     """One line on stderr: local date and time to the second, a space, the text. Nothing but scrubbed text."""
@@ -41,6 +48,8 @@ def loop(slots, source="", table="", once=False):
     conn = target.connect()
     stopped = False
     if not once:
+        if sys.stderr.isatty():
+            print(MASCOT, file=sys.stderr, flush=True)
         say(f"worker {worker} started with {slots} slots on {sql(conn, 'SELECT current_database()')[0][0]}")
     while True:
         try:

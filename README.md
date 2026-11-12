@@ -664,7 +664,7 @@ TimeoutStopSec=3600   # as long as max_seconds, so running tables can finish
 KillMode=mixed        # SIGTERM to the worker only, so its run processes are not ended with it
 ```
 
-- **A worker says what it does**, one line per event on stderr, each starting with local date and time. `run` writes the start and end lines of its runs, not the worker's start line. A worker with nothing to do is silent, and `rowvioli status` shows what is due when. Nothing is stored and nothing is configured: the lines are for a person at a terminal and for the log system you already have (journald, Docker), and what happened to a table stays in `_rowvioli.runs`.
+- **A worker says what it does**, one line per event on stderr, each starting with local date and time. `run` writes the start and end lines of its runs, not the worker's start line. A worker with nothing to do is silent, and `rowvioli status` shows what is due when. Nothing is stored and nothing is configured: the lines are for a person at a terminal and for the log system you already have (journald, Docker), and what happened to a table stays in `_rowvioli.runs`. At a terminal the worker first shows its mascot; in a log there are only the lines.
 
   ```
   2026-11-12 14:03:00 worker mac:4711 started with 4 slots on dwh
