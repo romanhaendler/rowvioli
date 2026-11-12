@@ -21,6 +21,16 @@ CLAIMABLE_AND_BUSY = f"""SELECT (SELECT count(*) FROM ({CLAIMABLE}) c),
                            FROM _rowvioli.status WHERE {SCOPE}"""
 
 
+def say(text):
+    """One line on stderr: local date and time to the second, a space, the text. Nothing but scrubbed text."""
+    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {text}", file=sys.stderr, flush=True)
+
+
+# the enabled, not loading table due next; whether it is due already, and when
+NEXT_DUE = """SELECT target_table, due_at <= now(), to_char(due_at, 'HH24:MI:SS') FROM _rowvioli.status
+               WHERE status <> 'loading' ORDER BY due_at LIMIT 1"""
+
+
 def loop(slots, source="", table="", once=False):
     """Every two seconds, or as soon as a run process ends, asks what in scope is claimable and starts a run
     process for each, up to `slots` at a time. With `once` it returns ({target table: answer}, crashed) when
@@ -34,6 +44,9 @@ def loop(slots, source="", table="", once=False):
     if not once:
         signal.signal(signal.SIGTERM, lambda *_: stopping.append(True))
     conn = target.connect()
+    told = stopped = False  # told: the waiting line was written since the last run started or outage
+    if not once:
+        say(f"worker {worker} started with {slots} slots on {sql(conn, 'SELECT current_database()')[0][0]}")
     while True:
         try:
             conn = conn or target.connect()
@@ -45,13 +58,24 @@ def loop(slots, source="", table="", once=False):
             if once:
                 raise
             if conn:
-                print(f"the target is unreachable, connecting again every two seconds: {e}", file=sys.stderr)
-            conn, claimable = None, 0
+                say(f"the target is unreachable, connecting again every two seconds: {e}")
+            conn, claimable, told = None, 0, False
         if (once and not runs and (crashed or not busy)) or (stopping and not runs):
             if conn:
                 conn.close()
             return answers, crashed
+        if stopping and not stopped:
+            stopped = True
+            say(f"stopping, {len(runs)} run{' finishes' if len(runs) == 1 else 's finish'}")
+        elif not once and conn and not runs and not claimable and not told and not stopping:
+            told = True
+            if due := sql(conn, NEXT_DUE):
+                name, past, at = due[0]
+                say(f"nothing due, next: {name} " + (f"due since {at}" if past else f"at {at}"))
+            else:
+                say("nothing due")
         for _ in range(0 if stopping or (once and crashed) else min(claimable, slots - len(runs))):
+            told = False
             runs[subprocess.Popen([sys.executable, "-m", "rowvioli.load", worker, source, table],
                                   # nothing unscrubbed on stderr: a driver may print a connection value there
                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)] = None
@@ -67,6 +91,7 @@ def listen(runs, answers, ended, seconds):
             if claim and claim["deadline"] <= now:
                 p.kill()  # README "Order when finishing": kill first, write the reason afterwards
                 claim["deadline"], claim["reason"] = math.inf, f"ended after max_seconds = {claim['max_seconds']}"
+                say(f"{claim['claimed']} failed after {now - claim['started']:.1f}s: {claim['reason']}")
                 answers[claim["claimed"]] = claim["answer"] = {"status": "failed", "reason": claim["reason"]}
                 ended.append(claim)
         wake = min([end] + [c["deadline"] for c in runs.values() if c])
@@ -75,15 +100,25 @@ def listen(runs, answers, ended, seconds):
             if line := p.stdout.readline():
                 said = json.loads(line)
                 if "claimed" in said:  # the clock for max_seconds starts here
-                    runs[p] = said | {"deadline": time.monotonic() + said["max_seconds"]}
+                    runs[p] = said | {"deadline": time.monotonic() + said["max_seconds"], "started": time.monotonic()}
+                    say(f"{said['claimed']} started, run {said['run']}")
                 else:
                     answers[said.pop("table")] = runs[p]["answer"] = said
+                    took = f"after {time.monotonic() - runs[p]['started']:.1f}s"
+                    if said["status"] == "ok":
+                        say(f"{runs[p]['claimed']} ok {took}: {said['inserted']} inserted, {said['updated']} updated, "
+                            f"{said['deleted']} deleted")
+                    else:
+                        say(f"{runs[p]['claimed']} failed {took}: {said['reason']}")
                     runs[p]["deadline"] = math.inf
                 continue
             p.wait()  # end of its output: the process has ended
             claim = runs.pop(p)
             if claim and "answer" not in claim:  # it died after its claim, e.g. kill -9
                 answers[claim["claimed"]] = {"status": "failed", "reason": "worker lost"}
+                say(f"{claim['claimed']} failed after {time.monotonic() - claim['started']:.1f}s: worker lost")
+            if claim is None and p.returncode != 0:
+                say(f"a run process ended with exit code {p.returncode} before it claimed anything")
             return claim is None and p.returncode != 0
     return False
 

@@ -1,5 +1,6 @@
 """`rowvioli work`, the order of loading, both limits, `max_seconds`, SIGTERM and an unreachable target
 (spec tests 9, 10, 11, 13, 14, 19)."""
+import re
 import signal
 import time
 
@@ -161,3 +162,75 @@ def test_a_worker_survives_an_unreachable_target_and_loads_again_once_it_accepts
     _query(other, f"alter database {db} allow_connections true")
     ready.target("update _rowvioli.tables set requested_at = now()")
     until(lambda: ready.target("select count(*) from _rowvioli.runs where status = 'ok'") == [(2,)])
+
+
+def said(worker):
+    """What a worker said on stderr, after it was asked to stop."""
+    worker.send_signal(signal.SIGTERM)
+    assert worker.wait(timeout=20) == 0
+    return worker.stderr.read()
+
+
+def test_work_says_its_start_and_what_it_loads_and_the_counts_equal_those_in_runs(ready):
+    ready.source("create table customers (id int primary key)")
+    ready.source("insert into customers values (1), (2)")
+    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
+    worker = ready.start("work", "--slots", "3")
+    until(lambda: ready.target("select status from _rowvioli.status") == [("ok",)])
+    db = ready.target("select current_database()")[0][0]
+    err = said(worker)
+    assert f"started with 3 slots on {db}" in err
+    assert "raw_erp.customers started, run 1" in err
+    [(inserted, updated, deleted)] = ready.target("select inserted, updated, deleted from _rowvioli.runs")
+    assert re.search(rf"raw_erp.customers ok after \d+\.\d+s: {inserted} inserted, {updated} updated, "
+                     rf"{deleted} deleted", err)
+    assert re.match(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d ", err)
+
+
+def test_work_says_a_failure_with_the_reason_of_the_status(ready):
+    apply(ready, source(ready, "erp", "", '"public.missing" = { key = ["id"] }'))
+    worker = ready.start("work")
+    until(lambda: ready.target("select status from _rowvioli.status") == [("failed",)])
+    [(reason,)] = ready.target("select reason from _rowvioli.status")
+    assert re.search(rf"raw_erp.missing failed after \d+\.\d+s: {re.escape(reason)}", said(worker))
+
+
+def test_work_says_it_waits_once_and_names_the_table_due_next(ready):
+    ready.source("create table customers (id int primary key)")
+    ready.source("insert into customers values (1)")
+    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
+    worker = ready.start("work")
+    until(lambda: ready.target("select status from _rowvioli.status") == [("ok",)])
+    time.sleep(5)  # more than two rounds of the loop
+    err = said(worker)
+    assert len(re.findall(r"raw_erp.customers at \d\d:\d\d:\d\d", err)) == 1
+    assert "nothing due, next: raw_erp.customers" in err
+
+
+def test_work_with_nothing_defined_says_nothing_due(ready):
+    worker = ready.start("work")
+    time.sleep(3)
+    assert re.search(r" nothing due$", said(worker), re.M)
+
+
+def test_work_on_sigterm_says_stopping_and_the_run_still_says_ok(ready):
+    slow(ready, "first", 3, 1)
+    apply(ready, source(ready, "erp", "", '"public.first" = { key = ["id"] }'))
+    worker = ready.start("work")
+    until(lambda: ready.target("select count(*) from _rowvioli.status where status = 'loading'") == [(1,)])
+    err = said(worker)
+    assert "stopping, 1 run finishes" in err
+    assert "raw_erp.first ok after" in err
+
+
+def test_a_run_ended_after_max_seconds_gives_a_failure_line(ready):
+    slow(ready, "hanging", 30, 1)
+    apply(ready, source(ready, "erp", "max_seconds = 2", '"public.hanging" = { key = ["id"] }'))
+    assert "raw_erp.hanging failed after 2.0s: ended after max_seconds = 2" in ready.run("run").stderr
+
+
+def test_a_run_process_dying_before_its_claim_gives_a_line_with_its_exit_code(ready):
+    ready.source("create table customers (id int primary key)")
+    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
+    ready.target("alter table _rowvioli.runs add constraint broken check (false) not valid")
+    assert re.search(r"run process ended with exit code 1 before it claimed", ready.run("run", timeout=20).stderr)
