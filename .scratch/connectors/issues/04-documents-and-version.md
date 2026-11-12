@@ -2,7 +2,7 @@
 
 **Blocked by:** 01, 02, 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -21,3 +21,5 @@ Spec: `.scratch/connectors/spec.md`, stories 37, 38, 41 and "Version and documen
 - [ ] The tests pass.
 
 ## Comments
+
+Resolved on branch `connectors`, from con-04 (f1e5035). Review fixes: 8ce4756.

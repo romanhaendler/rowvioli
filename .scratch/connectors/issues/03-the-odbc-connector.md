@@ -2,7 +2,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Opus
 
@@ -42,3 +42,7 @@ Spec stories 11 to 22 and the implementation decisions under "The `odbc` connect
   - Table names: Unicode letters count as letters (`\w`), so `dbo.Kunden_Ä` passes; quotes, semicolons, spaces do not.
   - Spec test 4 ("no query sent") uses an unreachable server: a refusal naming the rule shows no connection was tried.
 - **How the odbc tests run:** they need an ODBC driver manager with the driver `PostgreSQL Unicode` (`unixodbc` and `odbc-postgresql` on Debian/Ubuntu). In CI the workflow installs both on the runner and `uv run pytest` runs everything. On a machine without them (the owner's Mac) the odbc tests skip with a sentence naming `tests/odbc/run.sh`, which builds a small image (uv, Docker CLI, unixODBC, psqlODBC; `tests/odbc/Dockerfile`) and runs `tests/test_odbc.py` in it with the Docker socket mounted; the Postgres containers are reached through `host.docker.internal` (Docker Desktop), set by `ROWVIOLI_TEST_HOST`, which `tests/conftest.py` reads. Nothing is installed on the host. On such a host the test for a missing driver manager runs instead and checks the "not installed" wording.
+
+Resolved on branch `connectors`, from con-03 (54c75fe). Review fixes: 8ce4756.
+
+On 2026-11-12 the owner changed the testing during implementation: a free source only (PostgreSQL through psqlODBC, in a container), no SQL Server, nothing installed locally. See the last bullets under "Further Notes" in `spec.md`.

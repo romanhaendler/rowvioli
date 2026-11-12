@@ -1,6 +1,6 @@
 # Connectors: `odbc` and `rest`, and what rowvioli may ship
 
-Status: ready-for-agent
+Status: resolved
 
 ## Problem Statement
 

@@ -2,7 +2,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -23,3 +23,5 @@ Spec stories 1 to 10 and the implementation decisions under "What rowvioli may s
 - [ ] No other part of the README, no version change (ticket 04). No connector code.
 
 ## Comments
+
+Resolved on branch `connectors`, from con-01 (5d343cf). Review fixes: 8ce4756.

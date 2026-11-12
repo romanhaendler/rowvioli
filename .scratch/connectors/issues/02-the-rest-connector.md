@@ -2,7 +2,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -24,3 +24,5 @@ Spec stories 23 to 36 and the implementation decisions under "The `rest` connect
 - [ ] No documents except the row in `docs/package.md` (ticket 04).
 
 ## Comments
+
+Resolved on branch `connectors`, from con-02 (c85f93d). Review fixes: 8ce4756.

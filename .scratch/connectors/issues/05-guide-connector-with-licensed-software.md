@@ -2,7 +2,7 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Opus
 
@@ -27,3 +27,5 @@ One document, `docs/connector-guide.md`, linked from the README where it speaks 
 - [ ] The existing tests pass.
 
 ## Comments
+
+Resolved on branch `connectors`, from con-05 (b14c898). Review fixes: 8ce4756.
