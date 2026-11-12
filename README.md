@@ -1,22 +1,22 @@
 # rowvioli
 
-> **Status 2026-11-12: concept.** There is no program yet. The model described here (a maximum age per table, definitions in the target, stateless workers) has been tried out as a whole in a throwaway prototype: every guarantee below held, and its findings are worked into these documents ([findings](.scratch/prototype/findings.md)). Measured besides: compare and publish as plain SQL, the row comparison on wide tables, the behaviour when a process is killed and a complete run through the ADBC driver. What is proven and what is not is listed in [docs/measurements.md](docs/measurements.md) and [docs/open-points.md](docs/open-points.md).
+> **Status 2026-11-12: version 0.1 is being built** ([spec](.scratch/v0.1/spec.md)). The model described here (a maximum age per table, definitions in the target, stateless workers) has been tried out as a whole in a throwaway prototype: every guarantee below held, and its findings are worked into these documents ([findings](.scratch/prototype/findings.md)). Measured besides: compare and publish as plain SQL, the row comparison on wide tables, the behaviour when a process is killed and a complete run through the ADBC driver. What is proven and what is not is listed in [docs/measurements.md](docs/measurements.md) and [docs/open-points.md](docs/open-points.md).
 
 A program that mirrors tables from source systems into a PostgreSQL target. You say how old each table may be. Workers keep it that fresh, and consumers always see a complete state.
 
 ```toml
 # sources/erp.toml
 [erp]
-type    = "odbc"
+type    = "postgres"
 max_age = "1h"
 
 [erp.connection]
-string = "Driver={ODBC Driver 18 for SQL Server};Server=sqlsrv01;Database=erp;UID=reader;PWD=$ERP_PASSWORD"
+url = "postgresql://reader:$ERP_PASSWORD@erp-db01/erp"
 
 [erp.tables]
-"dbo.Customers" = { key = ["customer_no"] }
-"dbo.Items"     = { key = ["item_no"] }
-"dbo.Orders"    = { key = ["order_no"], max_age = "5m" }
+"public.customers" = { key = ["customer_no"] }
+"public.items"     = { key = ["item_no"] }
+"public.orders"    = { key = ["order_no"], max_age = "5m" }
 ```
 
 ```sh
@@ -30,15 +30,15 @@ ROWVIOLI_KEY_FILE=worker.key rowvioli work   # on any number of machines: keeps 
 ```
 select source, source_table, max_age, age, status, reason from _rowvioli.status;
 
- source | source_table   | max_age | age    | status  | reason
---------+----------------+---------+--------+---------+-----------------------------------
- erp    | dbo.Orders     | 5m      | 2m     | ok      |
- erp    | dbo.Customers  | 1h      | 1h 3m  | loading |
- erp    | dbo.Items      | 1h      | 40m    | ok      |
- crm    | contacts       | 1d      | 3h     | failed  | 62 % of the rows would be deleted
+ source | source_table     | max_age | age    | status  | reason
+--------+------------------+---------+--------+---------+-----------------------------------
+ erp    | public.orders    | 5m      | 2m     | ok      |
+ erp    | public.customers | 1h      | 1h 3m  | loading |
+ erp    | public.items     | 1h      | 40m    | ok      |
+ crm    | contacts         | 1d      | 3h     | failed  | 62 % of the rows would be deleted
 ```
 
-That is the whole usage. There is no schedule, no queue and no job. One table in the target is work list, state and monitoring at once.
+That is the whole usage. `docker compose up` in [examples/quickstart](examples/quickstart) plays it with a source and a target. There is no schedule, no queue and no job. One table in the target is work list, state and monitoring at once.
 
 Two ideas carry the design:
 
@@ -626,6 +626,8 @@ etl-definition/
   uv.lock            pins its version
 ```
 
+[examples/definition](examples/definition) is a template, with a GitLab pipeline.
+
 - A merge request is the only way to change a source. Its pipeline runs `rowvioli apply --check sources/`.
 - The pipeline runs `rowvioli apply sources/` after the merge. The organisation's secret manager injects the secrets as environment variables.
 - The pipeline needs access to the target. It needs no driver and no route to any source.
@@ -633,7 +635,7 @@ etl-definition/
 
 ### A worker
 
-To be set up once: the program with its connectors, for example `uv tool install "rowvioli[odbc]"`, and the vendors' ODBC drivers.
+To be set up once: the program with its connectors, for example `uv tool install "rowvioli[file]"`, and the drivers they need.
 
 ```
 /etc/rowvioli/env          ROWVIOLI_TARGET_URL and ROWVIOLI_KEY_FILE
@@ -654,7 +656,7 @@ KillMode=mixed        # SIGTERM to the worker only, so its run processes are not
 - A worker has no checkout and no file that describes a source. A new source needs no change on any worker.
 - Source passwords are not on the worker. They are inside the encrypted connections in the target and are decrypted when a run starts.
 - Test and production are separate targets with their own workers, their own key pair and the same definition.
-- Whoever runs containers can build an image from the program and the drivers. It is not required.
+- Whoever runs containers can build an image from the program and the drivers, starting from [examples/Dockerfile](examples/Dockerfile). It is not required.
 
 ### The target
 
@@ -713,6 +715,8 @@ A connector may offer a second function, `tables(connection)`, that lists the ta
 | `odbc` | MSSQL, Informix, any ODBC source | arrow-odbc | the vendor's ODBC driver |
 | `file` | CSV, Excel, Parquet, JSON files | DuckDB | access to the files |
 | `rest` | flat JSON objects over HTTP, page by page | Python generator | nothing |
+
+Version 0.1 ships `postgres` and `file` (without JSON). `odbc` and `rest` come with 0.2.
 
 ### Two ways to get a connector
 
@@ -800,7 +804,7 @@ Everything a UI needs is in the target. It is a small application of its own wit
 
 ## Measurements
 
-Short version. Set-up, all numbers and limitations are in [docs/measurements.md](docs/measurements.md).
+Short version. Set-up, all numbers and limitations are in [docs/measurements.md](docs/measurements.md). `uv run bench/bench.py` measures the same cases at 10⁶ rows through the program.
 
 | Case | 10⁶ rows | 10⁷ rows |
 |---|---|---|

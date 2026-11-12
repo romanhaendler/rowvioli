@@ -1,0 +1,48 @@
+# docker compose up: a source, a target, and rowvioli loading the one into the other. It ends with the
+# status view and the first rows of the mirror; the databases keep running until Ctrl-C.
+# Look around: docker compose exec target psql -U postgres dwh -c 'select * from _rowvioli.status'
+# Clean up:   docker compose down -v --rmi local
+services:
+  source:
+    image: postgres:16-alpine
+    environment: {POSTGRES_DB: shop, POSTGRES_PASSWORD: secret}
+    volumes: [./source.sql:/docker-entrypoint-initdb.d/source.sql:ro]
+    healthcheck: &ready
+      # over TCP, which the server opens only once initdb is done
+      test: pg_isready -U postgres -h 127.0.0.1
+      interval: 1s
+      retries: 60
+
+  target:
+    image: postgres:16-alpine
+    environment: {POSTGRES_DB: dwh, POSTGRES_PASSWORD: secret}
+    healthcheck: *ready
+
+  rowvioli:
+    build:
+      context: ../..
+      dockerfile: examples/Dockerfile
+      args: {PACKAGE: /src}   # the program from this checkout instead of PyPI
+    volumes: [./sources:/home/etl/sources:ro]
+    environment:
+      ROWVIOLI_TARGET_URL: postgresql://postgres:secret@target/dwh
+      SHOP_PASSWORD: secret   # in real life from the secret manager, and only for apply
+    command:
+      - sh
+      - -c
+      - rowvioli init && rowvioli key new && rowvioli apply sources/ && ROWVIOLI_KEY_FILE=worker.key rowvioli run
+    depends_on:
+      source: {condition: service_healthy}
+      target: {condition: service_healthy}
+
+  status:
+    image: postgres:16-alpine
+    command:
+      - psql
+      - postgresql://postgres:secret@target/dwh
+      - -c
+      - select source, source_table, max_age, age, status, reason from _rowvioli.status
+      - -c
+      - select * from raw_shop.customers order by id limit 5
+    depends_on:
+      rowvioli: {condition: service_completed_successfully}

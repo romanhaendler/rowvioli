@@ -1,0 +1,11 @@
+# The repo that holds the definition. Set up once:
+#   uv lock                pins the program's version in uv.lock
+#   uv run rowvioli key new   worker.pub stays here, worker.key goes to the workers and never into git
+[project]
+name = "etl-definition"
+version = "0"
+requires-python = ">=3.11"
+dependencies = ["rowvioli>=0.1,<0.2"]
+
+[tool.uv]
+package = false

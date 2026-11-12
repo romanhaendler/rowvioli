@@ -1,0 +1,10 @@
+[shop]
+type    = "postgres"
+max_age = "1h"
+
+[shop.connection]
+url = "postgresql://postgres:$SHOP_PASSWORD@source/shop"
+
+[shop.tables]
+"public.customers" = { key = ["id"] }
+"public.orders"    = { key = ["id"], max_age = "5m" }
