@@ -28,7 +28,6 @@ Unchanged from the first round:
 - **Machine or network failure.** Nobody closes the connection then. Release of the lock depends on TCP keepalive, expected after about 60 s. `data-extractor` could not reproduce this locally either.
 - **`client_connection_check_interval`** was measured on Linux. Postgres supports it only on some operating systems.
 - **The connectors themselves**: arrow-odbc for MSSQL and Informix, DuckDB for files. `data-extractor` has experience with ODBC. The `postgres`, `file`, `odbc` and `rest` connectors are tested; `odbc` only against PostgreSQL through psqlODBC, SQL Server and Informix not at all.
-- **Composite keys.** Only a single-column key was measured.
 - **Wide tables with many rows.** 900 columns were measured with 100,000 rows only.
 - **A view that computes validity periods from the change log**, and its speed on a long history.
 - **The COPY from a client over a real network.** Experiment 8 filled the staging table from a client on the same machine.

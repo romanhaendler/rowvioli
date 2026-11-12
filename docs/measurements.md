@@ -200,6 +200,18 @@ What the numbers say:
 
 Every number is a single series on a laptop. Not measured: a Linux client, a real network, and a machine or network failure.
 
+## 10. A composite key
+
+2026-11-12, `bench/bench.py` at 10⁶ rows through the program, twice with the key `id` and twice with the key `(linenr, id)`, whose first column has only 7 values. Same laptop and container as section 9 (2 CPUs, 4 GB). Server time of the step, the whole run in brackets, the two series as a range:
+
+| Case | key `id` | key `(linenr, id)` |
+|---|---|---|
+| Comparison when nothing changed | 1.8 to 2.1 s (7.0 to 7.5 s) | 2.6 s (7.7 s) |
+| Computing the diff at 1 % changes | 1.3 s (6.5 to 6.6 s) | 2.2 to 2.3 s (7.6 to 8.0 s) |
+| Publishing at 1 % changes | 0.3 s | 0.2 to 0.3 s |
+
+The second key column costs about a second on the diff of 10⁶ rows, a sixth of the whole run. Publishing does not change. The bench script was changed for this in its definition only (`key = ["linenr", "id"]`); a key `(linenr, part)` is not unique after the bench's inserts.
+
 ## Reference: hpdl
 
 From `hpdl/docs/performance.md`, same table shape, source and target with 2 CPUs and 4 GB each, worker with 3 CPUs:
