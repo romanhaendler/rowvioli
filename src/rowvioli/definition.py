@@ -42,6 +42,8 @@ def read(directory, env=None, only=None):
                 raise SystemExit(f"{where}: source {name} is defined twice")
             whole[name] = s
             settings(s, SOURCE_SETTINGS, where)
+            if "key" in s:  # rowvioli's name, so not a connector option either (README "Defining a source")
+                raise SystemExit(f"{where}: key belongs to a table, not to the source")
             for required in ("type", "max_age", "connection", "tables"):
                 if required not in s:
                     raise SystemExit(f"{where}: {required} is missing")
@@ -58,6 +60,8 @@ def read(directory, env=None, only=None):
             for table, t in s["tables"].items():
                 spot = f"{where}: {table}"
                 settings(t, {**TABLE_SETTINGS, "key": list}, spot)
+                for k in (SOURCE_SETTINGS.keys() - TABLE_SETTINGS.keys()) & t.keys():
+                    raise SystemExit(f"{spot}: {k} belongs to the source, not to a table")
                 key = t.get("key")
                 if key is not None and not (key and all(isinstance(c, str) and c for c in key)):
                     raise SystemExit(f"{spot}: key must be a list of column names")

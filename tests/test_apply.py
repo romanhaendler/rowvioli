@@ -292,6 +292,8 @@ def test_check_passes_load_times_a_time_zone_without_them_and_a_source_whose_tab
     ('"dbo.Notes"     = {}', '"dbo.Notes" = { log = "no" }', "log"),
     ('"dbo.Notes"     = {}', '"dbo.Notes" = { key = "id" }', "key"),            # keys
     ('"dbo.Notes"     = {}', '"dbo.Notes" = { key = [] }', "key"),
+    ("parallel = 4", 'parallel = 4\nkey = ["id"]', "erp: key belongs to a table"),  # a setting at the wrong level
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { parallel = 1 }', "dbo.Notes: parallel belongs to the source"),
     ('"dbo.Notes"     = {}', '"dbo.Notes" = {}\n"sales.NOTES" = {}', "notes"),  # duplicate target table
     ("parallel = 4", 'parallel = 4\ntarget_schema = "raw_crm"', "raw_crm"),     # shared target schema
     ("$ERP_PASSWORD", "$erp_password", "$"),                                    # malformed placeholder
