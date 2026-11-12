@@ -73,17 +73,28 @@ def mirror(rv):
     return rows(rv.target, "select * from raw_erp.slow"), rows(rv.target, "select * from raw_erp.slow__log")
 
 
+def hold_filling(rv):
+    """Starts `run` and returns it once it is held while filling a staging table that already has rows."""
+    # ~25 MB before the sleep, so that the driver hands over its first batches (they are ~16 MB each)
+    rv.source("insert into customers select i, repeat('x', 10000) from generate_series(1000, 3500) i")
+    rv.source("update delay set seconds = 1, after = 3400")
+    worker = rv.start("run")
+    until(lambda: rv.target("""select count(*) from pg_class where relpersistence = 't' and relkind = 'r'
+                                 and pg_relation_size(oid) > 0""")[0][0], timeout=30)
+    return worker
+
+
 def test_a_run_killed_while_filling_leaves_the_mirror_and_releases_its_lock(slow):
     before = mirror(slow)
-    # ~25 MB before the sleep, so that the driver hands over its first batches (they are ~16 MB each)
-    slow.source("insert into customers select i, repeat('x', 10000) from generate_series(1000, 3500) i")
-    slow.source("update delay set seconds = 1, after = 3400")
-    worker = slow.start("run")
-    # held while filling a staging table (a temp table) that already has rows
-    until(lambda: slow.target("""select count(*) from pg_class where relpersistence = 't' and relkind = 'r'
-                                   and pg_relation_size(oid) > 0""")[0][0], timeout=30)
-    kill_and_check(slow, worker)
+    kill_and_check(slow, hold_filling(slow))
     assert mirror(slow) == before
+
+
+def test_while_filling_the_status_shows_the_rows_written_so_far_and_those_of_the_last_run(slow):
+    assert slow.target("select rows_written, rows_last_run from _rowvioli.status") == [(None, None)]
+    hold_filling(slow)
+    written, last = slow.target("select rows_written, rows_last_run from _rowvioli.status")[0]
+    assert written > 0 and last == 5
 
 
 @pytest.mark.parametrize("mode, waits_for", [
