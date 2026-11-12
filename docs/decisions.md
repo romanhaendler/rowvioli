@@ -525,6 +525,31 @@ On 2026-11-12 the owner asked to see what a worker does (`.scratch/visibility/sp
 - *Progress lines during a run.* The status view has the progress; a worker writes nothing for it.
 - *A waiting line* ("nothing due, next: ... at ..."). It needed the only extra query, and it is state of the target, not something the worker does; a line from two hours ago does not prove the worker lives, and it repeats with two workers. `rowvioli status` (column `due`) answers it for every table.
 
+## Sixth round: connectors
+
+On 2026-11-12 the owner asked how more connectors can be built without violating a licence (`.scratch/connectors/spec.md`).
+
+## 38. rowvioli ships only code written for it and permissive dependencies
+
+**Decision.** rowvioli ships only code written for it and dependencies under a permissive licence; everything under another licence is installed by the operator or lives in a separate package. Four consequences:
+
+1. A connector's code is written from the public documentation of the source. Nothing is copied or ported from another project's connector, whatever tool does the porting.
+2. A dependency of the core or of an extra is under MIT, BSD or Apache-2.0. It has a row in the dependency table of `docs/package.md`; a test fails when it has none.
+3. Vendor drivers, SDKs and specification files are in no package, no repo file and no image. The operator installs them (extends decision 16 from the image to everything). Product names appear as plain words only, no logo.
+4. A connector that cannot keep 1 to 3 is a separate package with its own licence, outside this repo, registered through the entry point group `rowvioli.connectors` (decision 27).
+
+**Why.** Before this, the rule was spread over decision 16 and one table. Whoever added the fifth connector had nothing to follow and nothing that stopped a mistake. One sentence judges every later connector the same way.
+
+**Price.** Sources whose only library is GPL or a vendor SDK are not in the core. They need a package of their own, and someone to maintain it.
+
+**Rejected.**
+- *Bundling drivers for convenience.* It redistributes the vendor's files.
+- *A GPL library behind an optional extra.* Whether the MIT code stays untouched by it is disputed. A separate package ends the dispute.
+- *A licence scanner as a CI service.* One small test over the table is enough. It checks that the row exists, not what the licence is: the row is written by a person who looked.
+- *A contributor licence agreement.*
+
+This is the project's rule, not legal advice. A connector for a source whose SDK is under a vendor licence is looked at by a lawyer before it is published, even as a separate package.
+
 ## Corrections after the prototype
 
 | Point | Before | Now |
