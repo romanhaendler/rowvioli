@@ -8,7 +8,6 @@ import socket
 import subprocess
 import sys
 import time
-from datetime import datetime
 
 import adbc_driver_postgresql.dbapi as adbc
 
@@ -27,17 +26,6 @@ def say(text):
     print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {text}", file=sys.stderr, flush=True)
 
 
-# the enabled, not loading table due next; whether it is due already, and when
-NEXT_DUE = """SELECT target_table, due_at <= now(), due_at FROM _rowvioli.status
-               WHERE status <> 'loading' ORDER BY due_at LIMIT 1"""
-
-
-def clock(instant):
-    """A moment as `say` writes time: local, `HH:MM:SS`, with the date in front when it is not today."""
-    local = instant.astimezone()
-    return local.strftime("%H:%M:%S" if local.date() == datetime.now().date() else "%Y-%m-%d %H:%M:%S")
-
-
 def loop(slots, source="", table="", once=False):
     """Every two seconds, or as soon as a run process ends, asks what in scope is claimable and starts a run
     process for each, up to `slots` at a time. With `once` it returns ({target table: answer}, crashed) when
@@ -51,7 +39,7 @@ def loop(slots, source="", table="", once=False):
     if not once:
         signal.signal(signal.SIGTERM, lambda *_: stopping.append(True))
     conn = target.connect()
-    told = stopped = False  # told: the waiting line was written since the last run started or outage
+    stopped = False
     if not once:
         say(f"worker {worker} started with {slots} slots on {sql(conn, 'SELECT current_database()')[0][0]}")
     while True:
@@ -67,7 +55,7 @@ def loop(slots, source="", table="", once=False):
             if conn:
                 say("the target is unreachable, connecting again every two seconds: "
                 + load.scrub(load.connection_values(os.environ.get("ROWVIOLI_TARGET_URL")), str(e)))
-            conn, claimable, told = None, 0, False
+            conn, claimable = None, 0
         if stopping and not stopped:
             stopped = True
             say(f"stopping, {len(runs)} run{' finishes' if len(runs) == 1 else 's finish'}")
@@ -75,15 +63,7 @@ def loop(slots, source="", table="", once=False):
             if conn:
                 conn.close()
             return answers, crashed
-        if not once and conn and not runs and not claimable and not told and not stopping:
-            told = True
-            if due := sql(conn, NEXT_DUE):
-                name, past, at = due[0]
-                say(f"nothing due, next: {name} " + (f"due since {clock(at)}" if past else f"at {clock(at)}"))
-            else:
-                say("nothing due")
         for _ in range(0 if stopping or (once and crashed) else min(claimable, slots - len(runs))):
-            told = False
             runs[subprocess.Popen([sys.executable, "-m", "rowvioli.load", worker, source, table],
                                   # nothing unscrubbed on stderr: a driver may print a connection value there
                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)] = None

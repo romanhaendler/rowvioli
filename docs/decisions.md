@@ -512,7 +512,7 @@ On 2026-11-12 the owner asked to see what a worker does (`.scratch/visibility/sp
 
 ## 37. A worker says what it does, and nothing keeps it
 
-**Decision.** `work` writes one line per event to stderr: start, a run's start and end, a failure, waiting, an unreachable target, stopping. `run` writes the start and end lines of its runs, not the worker's start line and not the waiting line. Each begins with local date and time, and there is no setting for them. The lines are not stored. `rowvioli status` prints the status view as a table; the target stays the truth.
+**Decision.** `work` writes one line per event to stderr: start, a run's start and end, a failure, an unreachable target, stopping. `run` writes the start and end lines of its runs, not the worker's start line. Each begins with local date and time, and there is no setting for them. The lines are not stored. `rowvioli status` prints the status view as a table; the target stays the truth.
 
 **Why.** The target already holds everything (`status`, `runs`), but looking needed `psql`, and a worker that waits looked the same as one that hangs. The loop already hears each run's claim and answer, so the lines cost nothing new, and the log system the operator has (journald, Docker) is the right place for them. A second record would have to agree with `runs`.
 
@@ -523,6 +523,7 @@ On 2026-11-12 the owner asked to see what a worker does (`.scratch/visibility/sp
 - *Python's `logging` with levels and handlers.* Nothing to configure is the point.
 - *JSON lines.* The structured data is in the target.
 - *Progress lines during a run.* The status view has the progress; a worker writes nothing for it.
+- *A waiting line* ("nothing due, next: ... at ..."). It needed the only extra query, and it is state of the target, not something the worker does; a line from two hours ago does not prove the worker lives, and it repeats with two workers. `rowvioli status` (column `due`) answers it for every table.
 
 ## Corrections after the prototype
 

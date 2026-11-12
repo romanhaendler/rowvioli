@@ -28,3 +28,5 @@ Spec stories 1 to 21 and the implementation decisions about the lines. The loop 
 ## Comments
 
 Resolved on branch `visibility`, from vis-01 (5f0761a). Review fixes: 2373115.
+
+On 2026-11-12 the owner dropped the waiting line (stories 9 to 11, its implementation decision, spec test 5) after seeing it repeat with two workers; `rowvioli status` shows what is due when. See the last bullet under "Further Notes" in `spec.md`.

@@ -195,26 +195,12 @@ def test_work_says_a_failure_with_the_reason_of_the_status(ready):
     assert re.search(rf"raw_erp.missing failed after \d+\.\d+s: {re.escape(reason)}", said_after_sigterm(worker))
 
 
-def test_work_says_it_waits_once_and_names_the_table_due_next(ready):
-    ready.source("create table customers (id int primary key)")
-    ready.source("insert into customers values (1)")
-    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
-    worker = ready.start("work", env={"TZ": "Asia/Tokyo"})  # the target's time zone is another
-    until(lambda: ready.target("select status from _rowvioli.status") == [("ok",)])
-    time.sleep(5)  # more than two rounds of the loop
-    err = said_after_sigterm(worker)
-    assert len(re.findall(r"raw_erp.customers at \d\d:\d\d:\d\d", err)) == 1
-    assert "nothing due, next: raw_erp.customers" in err
-    # the same clock as the line's own stamp: max_age = 1h later
-    stamp, at = re.search(r" (\d\d:\d\d:\d\d) nothing due, next: raw_erp.customers (?:at )?(\d\d:\d\d:\d\d)", err).groups()
-    seconds = lambda t: sum(int(x) * m for x, m in zip(t.split(":"), (3600, 60, 1)))
-    assert 3500 < (seconds(at) - seconds(stamp)) % 86400 < 3700
-
-
-def test_work_with_nothing_defined_says_nothing_due(ready):
+def test_work_with_nothing_due_says_only_its_start(ready):
     worker = ready.start("work")
     time.sleep(3)
-    assert re.search(r" nothing due$", said_after_sigterm(worker), re.M)
+    err = said_after_sigterm(worker)
+    assert " started with " in err
+    assert "nothing due" not in err
 
 
 def test_an_idle_work_on_sigterm_says_stopping_with_0_runs(ready):

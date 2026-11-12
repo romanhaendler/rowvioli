@@ -664,18 +664,17 @@ TimeoutStopSec=3600   # as long as max_seconds, so running tables can finish
 KillMode=mixed        # SIGTERM to the worker only, so its run processes are not ended with it
 ```
 
-- **A worker says what it does**, one line per event on stderr, each starting with local date and time. `run` writes the start and end lines of its runs, not the worker's start line and not the waiting line. Nothing is stored and nothing is configured: the lines are for a person at a terminal and for the log system you already have (journald, Docker), and what happened to a table stays in `_rowvioli.runs`.
+- **A worker says what it does**, one line per event on stderr, each starting with local date and time. `run` writes the start and end lines of its runs, not the worker's start line. A worker with nothing to do is silent, and `rowvioli status` shows what is due when. Nothing is stored and nothing is configured: the lines are for a person at a terminal and for the log system you already have (journald, Docker), and what happened to a table stays in `_rowvioli.runs`.
 
   ```
   2026-11-12 14:03:00 worker mac:4711 started with 4 slots on dwh
   2026-11-12 14:03:01 raw_shop.orders started, run 17
   2026-11-12 14:03:01 raw_shop.orders ok after 0.4s: 0 inserted, 3 updated, 10 deleted
   2026-11-12 14:03:05 raw_crm.contacts failed after 2.1s: 62 % of the rows would be deleted
-  2026-11-12 14:03:05 nothing due, next: raw_shop.orders at 14:04:01
   2026-11-12 14:09:12 stopping, 1 run finishes
   ```
 
-  A failure carries the reason of the status view; `worker lost` and `ended after max_seconds` are failures too. The waiting line is written once when the worker runs out of work, not every two seconds (`due since 14:01:00` when the table is due but cannot be claimed yet), and `the target is unreachable` once per outage. Run processes keep their stderr discarded, so no driver message from a source can carry a connection value into a log. The line for an unreachable target keeps the driver's message, with the password of `ROWVIOLI_TARGET_URL` replaced by `***`.
+  A failure carries the reason of the status view; `worker lost` and `ended after max_seconds` are failures too. `the target is unreachable` is written once per outage. Run processes keep their stderr discarded, so no driver message from a source can carry a connection value into a log. The line for an unreachable target keeps the driver's message, with the password of `ROWVIOLI_TARGET_URL` replaced by `***`.
 - **`rowvioli status` shows what is**, without `psql`. It prints the status view as a table; the `due` column says `now` or `in 20m`, so `ok` with an age above the maximum age is a table that is due and that nobody has taken yet (no worker runs). It computes nothing the view does not.
 - A worker has no checkout and no file that describes a source. A new source needs no change on any worker.
 - Source passwords are not on the worker. They are inside the encrypted connections in the target and are decrypted when a run starts.
