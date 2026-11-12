@@ -52,7 +52,8 @@ def loop(slots, source="", table="", once=False):
             return answers, crashed
         for _ in range(0 if stopping or (once and crashed) else min(claimable, slots - len(runs))):
             runs[subprocess.Popen([sys.executable, "-m", "rowvioli.load", worker, source, table],
-                                  stdout=subprocess.PIPE, text=True)] = None
+                                  # nothing unscrubbed on stderr: a driver may print a connection value there
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)] = None
         crashed |= listen(runs, answers, ended, 2)
 
 

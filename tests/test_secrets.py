@@ -40,6 +40,13 @@ def test_a_connector_failing_with_connection_values_in_its_message_leaks_none_of
         assert leaks(erp, value, *out) == [], value
 
 
+def test_a_connector_printing_its_connection_to_stderr_leaks_nothing(erp):
+    out = [lab(erp, "print = true"), erp.run("run", "lab")]
+    assert out[-1].returncode == 0, out[-1].stdout
+    for value in (PASSWORD, TOKEN):
+        assert leaks(erp, value, *out) == [], value
+
+
 def test_key_rotation_with_old_and_new_private_key_in_the_file(erp):
     (erp.dir / "worker.key").rename(erp.dir / "old.key")
     (erp.dir / "worker.pub").rename(erp.dir / "old.pub")
