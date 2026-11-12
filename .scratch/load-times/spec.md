@@ -1,6 +1,6 @@
 # Load times: a table is due at fixed times of day
 
-Status: ready-for-agent
+Status: resolved
 
 ## Problem Statement
 

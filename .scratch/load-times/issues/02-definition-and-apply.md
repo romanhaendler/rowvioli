@@ -2,7 +2,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 Spec: `.scratch/load-times/spec.md`. Behaviour reference: `README.md`, `GLOSSARY.md`, `docs/decisions.md`. Tests: the existing seam (`tests/conftest.py`), real processes against PostgreSQL in Docker, no import of the program.
 
@@ -25,3 +25,5 @@ Found while checking the spec against the code, part of this ticket:
 - [ ] A definition with `at` and `timezone` loads through the `file` or `postgres` connector without the connector seeing them.
 
 ## Comments
+
+Resolved on branch `load-times` (e3ed98f). `apply` now reports every database error of its transaction as "the target refused the definition, nothing was changed", not only an unknown time zone. `--check` uses stdlib `zoneinfo`: a machine without system tzdata refuses every zone. Review fixes: ec757a4.

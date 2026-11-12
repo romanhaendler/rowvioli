@@ -2,7 +2,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 Spec: `.scratch/load-times/spec.md`. Behaviour reference: `README.md`, `GLOSSARY.md`, `docs/decisions.md`. Tests: the existing seam (`tests/conftest.py`), real processes against PostgreSQL in Docker, no import of the program.
 
@@ -22,3 +22,5 @@ Spec sections "The rule" and "Schema". Only `src/rowvioli/sql/schema.sql` and te
 - [ ] A row with a non-empty `at` and no `timezone` does not break the view (it has no next load time).
 
 ## Comments
+
+Resolved on branch `load-times` (1be1231). `SCHEMA_VERSION` in `src/rowvioli/target.py` changed too, and the refusal test names version 2. Review fixes: ec757a4.

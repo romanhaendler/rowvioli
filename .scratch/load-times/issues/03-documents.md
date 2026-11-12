@@ -2,7 +2,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 Spec: `.scratch/load-times/spec.md`. Behaviour reference: `README.md`, `GLOSSARY.md`, `docs/decisions.md`. Tests: the existing seam (`tests/conftest.py`), real processes against PostgreSQL in Docker, no import of the program.
 
@@ -25,3 +25,5 @@ Found while checking the spec against the documents, part of this ticket:
 - [ ] README: settings table, facts table, due formula, state diagram, table of situations, overview "what can be done from where" all carry the load time.
 
 ## Comments
+
+Resolved on branch `load-times` (36e9759). Review fixes (ec757a4): the due formula is the cascade again with the load time as the one addition; decision 23 keeps its text and is marked as changed by decision 36.
