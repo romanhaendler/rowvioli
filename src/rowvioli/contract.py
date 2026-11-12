@@ -9,4 +9,7 @@ def connector(type, where=""):
     found = entry_points(group="rowvioli.connectors", name=type)
     if not found:
         raise SystemExit(f'connector "{type}" is not installed{where}')
-    return next(iter(found)).load()
+    try:
+        return next(iter(found)).load()
+    except (ImportError, OSError) as e:  # a shipped connector without its extra, or without the library it loads
+        raise SystemExit(f'connector "{type}" is not installed{where}: {e}')

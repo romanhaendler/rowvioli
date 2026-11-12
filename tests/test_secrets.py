@@ -11,7 +11,7 @@ from test_run import erp, ok, rows  # noqa: F401 (erp is a fixture)
 PASSWORD, TOKEN = "Kenn@wort%42-geheim", "Marke-0815-geheim"
 
 
-def lab(rv, options=""):
+def lab(rv, options="", connection=""):
     """Applies a source of the foreign connector type `testing`, with a password and a token from the environment."""
     rv.definition({"lab.toml": f"""
 [lab]
@@ -21,6 +21,7 @@ max_age = "1h"
 [lab.connection]
 url = "testing://reader:$LAB_PASSWORD@nowhere/lab"
 token = "$LAB_TOKEN"
+{connection}
 [lab.tables]
 "numbers" = {{ key = ["n"] }}
 """})
@@ -42,6 +43,13 @@ def test_a_connector_failing_with_connection_values_in_its_message_leaks_none_of
     assert "cannot connect" in erp.target("select reason from _rowvioli.runs")[0][0]
     for value in (PASSWORD, TOKEN, "Kenn%40wort%2542-geheim", "Kenn", "wort%"):
         assert leaks(erp, value, *out) == [], value
+
+
+@pytest.mark.parametrize("pwd", ["PWD=Odbc-geheim-77", "pwd = {Odbc-geheim-77}"])
+def test_the_password_inside_an_odbc_connection_string_leaks_nowhere(erp, pwd):
+    out = [lab(erp, 'fail = "at_once"', f'string = "Driver={{X}};UID=reader;{pwd};Encrypt=yes"'), erp.run("run", "lab")]
+    assert out[-1].returncode == 1
+    assert leaks(erp, "Odbc-geheim-77", *out) == []
 
 
 def test_a_connector_printing_its_connection_to_stderr_leaks_nothing(erp):

@@ -24,6 +24,8 @@ import psycopg
 import pytest
 
 IMAGE = "postgres:16-alpine"
+# where the containers' ports are reached: tests/odbc/run.sh runs the tests in a container and sets the Docker host
+HOST = os.environ.get("ROWVIOLI_TEST_HOST", "127.0.0.1")
 ROWVIOLI = shutil.which("rowvioli", path=os.path.dirname(sys.executable))
 
 
@@ -36,7 +38,7 @@ def _start(name):
 def _url(name, db="postgres"):
     port = subprocess.run(["docker", "port", name, "5432/tcp"], check=True, capture_output=True,
                           text=True).stdout.split()[0].rsplit(":", 1)[1]
-    return f"postgresql://postgres:x@127.0.0.1:{port}/{db}"
+    return f"postgresql://postgres:x@{HOST}:{port}/{db}"
 
 
 def _wait(url):

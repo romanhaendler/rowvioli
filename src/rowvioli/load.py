@@ -7,6 +7,7 @@ and {"table": <target table>, "status", ...counts or "reason"} at the end. It pr
 import itertools
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -206,9 +207,13 @@ def widen(conn, table, staged, existing):
             sql(conn, f"ALTER TABLE {table} ADD COLUMN {quote(name)} {type}")
 
 
+# the password of an ODBC connection string: `PWD=secret` or `PWD={se;cret}` with `}}` for a `}`
+ODBC_PASSWORD = re.compile(r"(?:^|;)\s*(?:PWD|Password)\s*=\s*(\{(?:[^}]|\}\})*\}|[^;]*)", re.I)
+
+
 def connection_values(value):
-    """Every text of a connection, and the password of a URL in it as written and decoded, since a driver may quote
-    either (README "What happens to the decrypted connection")."""
+    """Every text of a connection, and the password of a URL or an ODBC string in it as written and decoded, since a
+    driver may quote either (README "What happens to the decrypted connection")."""
     if isinstance(value, dict):
         return [s for v in value.values() for s in connection_values(v)]
     if isinstance(value, list):
@@ -216,7 +221,9 @@ def connection_values(value):
     if not isinstance(value, str):
         return []
     password = urlsplit(value).password if "://" in value else None
-    return [value] + ([password, unquote(password)] if password else [])
+    odbc = [m[1].strip() for m in ODBC_PASSWORD.finditer(value)]
+    return ([value] + ([password, unquote(password)] if password else [])
+            + odbc + [p[1:-1].replace("}}", "}") for p in odbc if p.startswith("{")])
 
 
 def scrub(values, text):

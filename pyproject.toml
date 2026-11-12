@@ -10,13 +10,14 @@ dependencies = ["pyarrow", "adbc-driver-postgresql", "pynacl"]
 
 [project.optional-dependencies]
 file = ["duckdb"]
+odbc = ["arrow-odbc"]
 rest = ["httpx"]
 
 [project.scripts]
 rowvioli = "rowvioli.cli:main"
 
 [dependency-groups]
-dev = ["pytest", "psycopg[binary]", "rowvioli[file,rest]", "rowvioli-testing"]
+dev = ["pytest", "psycopg[binary]", "rowvioli[file,odbc,rest]", "rowvioli-testing"]
 
 [tool.uv.sources]
 rowvioli-testing = { path = "tests/connector", editable = true }
@@ -31,4 +32,5 @@ testpaths = ["tests"]
 [project.entry-points."rowvioli.connectors"]
 postgres = "rowvioli.connectors.postgres"
 file = "rowvioli.connectors.file"
+odbc = "rowvioli.connectors.odbc"
 rest = "rowvioli.connectors.rest"
