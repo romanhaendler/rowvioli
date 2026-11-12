@@ -165,6 +165,18 @@ def test_apply_fails_when_two_sources_share_a_target_schema(ready):
     assert ready.target("select count(*) from _rowvioli.sources") == [(0,)]
 
 
+def test_apply_fails_when_a_target_schema_belongs_to_another_source_in_the_target_also_a_disabled_one(ready):
+    assert apply(ready, {"erp.toml": ERP, "crm.toml": CRM}).returncode == 0
+    (ready.dir / "sources" / "crm.toml").unlink()
+    assert apply(ready, {"erp.toml": ERP}).returncode == 0  # crm is disabled now, raw_crm is still its schema
+    before = everything(ready)
+    sales = CRM.replace("[crm", "[sales").replace('max_age = "1d"', 'max_age = "1d"\ntarget_schema = "raw_crm"')
+    r = apply(ready, {"sales.toml": sales})
+    assert r.returncode != 0 and "raw_crm" in r.stderr and "crm" in r.stderr
+    assert everything(ready) == before
+    assert check(ready, {"sales.toml": sales}).returncode == 0  # --check looks only at the definition
+
+
 def test_meta_holds_the_hash_of_the_definition_and_a_changed_definition_changes_it(ready):
     definition = "select definition from _rowvioli.meta"
     assert apply(ready, {"erp.toml": ERP}).returncode == 0
