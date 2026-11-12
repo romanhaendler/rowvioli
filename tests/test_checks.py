@@ -1,9 +1,8 @@
-"""Checks, failure reasons and secrets (spec tests 15, 16, 17, 18)."""
+"""Checks, schema changes, failure reasons and secrets (spec tests 12, 13, 15, 16, 17, 18)."""
 import pytest
 
 from test_run import apply, definition, erp, ok, rows, run  # noqa: F401 (erp is a fixture)
 
-checks = pytest.mark.skip(reason="ticket 04: checks")
 secrets = pytest.mark.skip(reason="ticket 05: secrets and keys")
 
 
@@ -21,7 +20,6 @@ def failed(rv, *args):
 MIRROR = "select * from raw_erp.customers"
 
 
-@checks
 @pytest.mark.parametrize("change, expected", [
     ("insert into customers values (4, 'Dora', null); alter table customers drop constraint customers_pkey;"
      " insert into customers values (1, 'Anna2', null)", "occurs twice"),
@@ -29,8 +27,8 @@ MIRROR = "select * from raw_erp.customers"
      " insert into customers values (null, 'Nobody', null)", "is null"),
     ("delete from customers", "zero rows"),
     ("delete from customers where customer_no <> 1", "67 % of the rows would be deleted"),
-    ("alter table customers add column phone text", "columns differ"),
-    ("alter table customers alter customer_no type bigint", "columns differ"),
+    ("alter table customers drop column city", "column city is missing"),
+    ("alter table customers alter customer_no type bigint", "column customer_no has changed its type"),
 ])
 def test_a_check_fails_the_run_and_leaves_the_mirror_unchanged(erp, change, expected):
     ok(erp)
@@ -42,7 +40,6 @@ def test_a_check_fails_the_run_and_leaves_the_mirror_unchanged(erp, change, expe
     assert rows(erp.target, MIRROR) == before
 
 
-@checks
 def test_a_key_that_differs_from_the_mirrors_primary_key_fails_the_run(erp):
     ok(erp)
     before = rows(erp.target, MIRROR)
@@ -50,6 +47,39 @@ def test_a_key_that_differs_from_the_mirrors_primary_key_fails_the_run(erp):
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert "key" in failed(erp)
     assert rows(erp.target, MIRROR) == before
+
+
+def test_a_new_source_column_appears_in_the_mirror_and_the_change_log_with_values(erp):
+    ok(erp)
+    erp.source("alter table customers add column phone text")
+    erp.source("update customers set phone = '0228' where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
+    # a row whose new column is null equals its mirror row, so only Anna changed
+    assert erp.target("select _op, customer_no, name, phone from raw_erp.customers__log where _run = "
+                      "(select max(run) from _rowvioli.runs)") == [("U", 1, "Anna", "0228")]
+
+
+def test_a_table_without_a_key_fails_when_it_would_shrink_by_more_than_max_delete_share(erp):
+    apply(erp, definition(erp, '"public.notes" = {}\n'))
+    ok(erp)
+    before = rows(erp.target, "select * from raw_erp.notes")
+    erp.source("delete from notes where txt = 'a'")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert "67 % of the rows would be deleted" in failed(erp)
+    assert rows(erp.target, "select * from raw_erp.notes") == before
+
+
+def test_max_delete_share_of_a_table_overrides_the_sources(erp):
+    text = definition(erp, '"public.customers" = { key = ["customer_no"], max_delete_share = 0.9 }\n')
+    apply(erp, text.replace('max_age = "1h"', 'max_age = "1h"\nmax_delete_share = 0.1'))
+    ok(erp)
+    erp.source("delete from customers where customer_no <> 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    code, answer = run(erp)
+    assert code == 0, answer
+    assert answer["tables"]["raw_erp.customers"]["deleted"] == 2
 
 
 @secrets
