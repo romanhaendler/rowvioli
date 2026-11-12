@@ -466,7 +466,7 @@ The prototype claimed this way with 6 workers of 4 slots, two sources with `para
 |---|---|---|
 | Worker crashes while Postgres waits for it | transaction discarded, run dead, retried after the pause | under 0.3 s (measured) |
 | Worker crashes while Postgres is computing a statement or waiting for a lock | as above, as soon as Postgres notices the loss | under 4 s with a connection check every 2 s (measured), otherwise when the statement ends |
-| Machine or network drops out | as above, detected through TCP keepalive | about 60 s (not measured) |
+| Machine or network drops out | as above, detected through the server's TCP keepalive | about 60 s (62 s with a container's network cut) |
 | Source is unreachable for a moment | the run fails, the next one starts a minute later | right after |
 | Source stops answering | the worker ends the run's process after `max_seconds` | right after |
 | A table fails again and again | the pause doubles up to `max_age`. The status shows the reason and the number of attempts. | |
@@ -478,7 +478,8 @@ In no case does anything half-done become visible: a COMMIT needs a command from
 
 The program sets on its own connections:
 
-- Keepalive: `keepalives_idle=30`, `keepalives_interval=10`, `keepalives_count=3`, `tcp_user_timeout=60000`
+- Keepalive: `keepalives_idle=30`, `keepalives_interval=10`, `keepalives_count=3`, `tcp_user_timeout=60000` in the URL, so the worker notices a dead server
+- The same for the server's side of the session, `tcp_keepalives_idle = 30`, `tcp_keepalives_interval = 10`, `tcp_keepalives_count = 3`, `tcp_user_timeout = 60000`, so Postgres notices a dead worker and frees its locks. Without them the server's default applies, two hours on Linux.
 - `client_connection_check_interval = 2s`, so that Postgres looks for the client during a long statement too
 - `lock_timeout = 10s` for adding a column, so that a long-reading consumer cannot block the run forever. The run then fails with `lock timeout` and loads after its pause; meanwhile new readers of that table wait behind it for up to 10 s.
 

@@ -6,8 +6,12 @@ import adbc_driver_postgresql.dbapi as adbc
 
 SCHEMA_VERSION = 2
 
-# README "Failures": a dead client or network is noticed by Postgres within seconds to a minute
+# README "Failures": a dead client or network is noticed by Postgres within seconds to a minute. The URL's keepalive
+# is libpq's, so the worker notices a dead server; SESSION is the server's, so Postgres notices a dead worker and
+# frees its locks (measured: 62 s after the network was cut, without it still held after 240 s)
 KEEPALIVE = "keepalives_idle=30&keepalives_interval=10&keepalives_count=3&tcp_user_timeout=60000"
+SESSION = {"client_connection_check_interval": "2s", "tcp_keepalives_idle": "30", "tcp_keepalives_interval": "10",
+           "tcp_keepalives_count": "3", "tcp_user_timeout": "60000"}
 
 # what a worker may start and a run may claim, asked with the same counts by both (decision 34)
 CLAIMABLE = files(__package__).joinpath("sql/claimable.sql").read_text()
@@ -24,7 +28,8 @@ def connect(init=False, versioned=True):
     if not url:
         raise SystemExit("ROWVIOLI_TARGET_URL is not set")
     conn = adbc.connect(url + ("&" if "?" in url else "?") + KEEPALIVE, autocommit=True)
-    sql(conn, "SET client_connection_check_interval = '2s'")
+    for name, value in SESSION.items():
+        sql(conn, f"SET {name} = '{value}'")
     if not versioned:
         if not sql(conn, "SELECT to_regclass('_rowvioli.status') IS NOT NULL")[0][0]:
             raise SystemExit(NO_SCHEMA)

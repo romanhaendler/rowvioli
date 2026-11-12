@@ -42,3 +42,13 @@ def test_every_command_using_the_target_refuses_another_schema_version_naming_bo
     assert re.search(r"\b99\b", r.stderr) and re.search(r"\b2\b", r.stderr), r.stderr
     assert rv.target(SHAPE) == shape
     assert rv.target("select count(*) from _rowvioli.sources") == [(0,)]
+
+
+def test_the_control_connection_asks_postgres_to_notice_a_dead_worker_within_a_minute(rv, monkeypatch):
+    # a worker machine that vanishes closes nothing; the server's own keepalive frees its locks (measured: 62 s)
+    from rowvioli import target
+    monkeypatch.setenv("ROWVIOLI_TARGET_URL", rv.target_url)
+    conn = target.connect(init=True)
+    names = ["tcp_keepalives_idle", "tcp_keepalives_interval", "tcp_keepalives_count", "tcp_user_timeout"]
+    assert [target.sql(conn, f"SELECT current_setting('{n}')")[0][0] for n in names] == ["30", "10", "3", "60000"]
+    conn.close()

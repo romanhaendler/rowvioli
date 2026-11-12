@@ -25,7 +25,7 @@ From the second round:
 
 Unchanged from the first round:
 
-- **Machine or network failure.** Nobody closes the connection then. Release of the lock depends on TCP keepalive, expected after about 60 s. `data-extractor` could not reproduce this locally either.
+- **Machine failure.** Nobody closes the connection then. With a container's network cut, Postgres freed the lock after 62 s through the keepalive the session asks for (`target.SESSION`); without it the lock was still held after 240 s. A real machine or a real network was not tried.
 - **`client_connection_check_interval`** was measured on Linux. Postgres supports it only on some operating systems.
 - **The connectors themselves**: arrow-odbc for MSSQL and Informix, DuckDB for files. `data-extractor` has experience with ODBC. The `postgres`, `file`, `odbc` and `rest` connectors are tested; `odbc` only against PostgreSQL through psqlODBC, SQL Server and Informix not at all.
 - **Wide tables with many rows.** 900 columns were measured with 100,000 rows only.
