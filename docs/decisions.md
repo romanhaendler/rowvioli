@@ -2,7 +2,7 @@
 
 Every decision of the concept with its reason, its price and what was rejected. The order follows the discussion of 2026-11-11, so the document also shows how the design got to where it is.
 
-There were two rounds on that day. Decisions 1 to 19 are the first round. The second round (decisions 20 to 30) replaced the model of orders, a jobs repo and an external scheduler with a maximum age per table, definitions in the target and stateless workers. Decisions of the first round that no longer hold are marked and kept, with their text unchanged. A third round (decisions 32 to 35) followed on 2026-11-12, after a throwaway prototype had tried out the model of the second round.
+There were two rounds on that day. Decisions 1 to 19 are the first round. The second round (decisions 20 to 30) replaced the model of orders, a jobs repo and an external scheduler with a maximum age per table, definitions in the target and stateless workers. Decisions of the first round that no longer hold are marked and kept, with their text unchanged. A third round (decisions 32 to 35) followed on 2026-11-12, after a throwaway prototype had tried out the model of the second round. A fourth round (decision 36) added load times, a fifth (decision 37) the lines of a worker.
 
 Evidence refers to `docs/measurements.md` and to the earlier projects `hpdl`, `data-extractor` and `dataly` in the same workspace.
 
@@ -505,6 +505,24 @@ On 2026-11-12 the owner asked for tables that are loaded at a fixed time of day 
 - *Aligning `max_age` to a grid* ("daily, anchored at 14:00"). A second meaning for the one setting everybody knows, and it cannot say 06:00 and 14:00.
 - *Cron syntax or weekdays.* A schedule language where a list of times answers what was asked.
 - *A default time zone.* 14:00 that silently means UTC is a mistake found in production.
+
+## Fifth round: visibility
+
+On 2026-11-12 the owner asked to see what a worker does (`.scratch/visibility/spec.md`).
+
+## 37. A worker says what it does, and nothing keeps it
+
+**Decision.** `work` and `run` write one line per event to stderr: start, a run's start and end, a failure, waiting, an unreachable target, stopping. Each begins with local date and time, and there is no setting for them. The lines are not stored. `rowvioli status` prints the status view as a table; the target stays the truth.
+
+**Why.** The target already holds everything (`status`, `runs`), but looking needed `psql`, and a worker that waits looked the same as one that hangs. The loop already hears each run's claim and answer, so the lines cost nothing new, and the log system the operator has (journald, Docker) is the right place for them. A second record would have to agree with `runs`.
+
+**Price.** The lines are only as durable as the operator's log system, and a worker says only what it does itself; what the others do is in the status view. Run processes still say nothing, because a driver message may quote a connection value (decision 32).
+
+**Rejected.**
+- *A log table in the target.* `runs` is that.
+- *Python's `logging` with levels and handlers.* Nothing to configure is the point.
+- *JSON lines.* The structured data is in the target.
+- *Progress lines during a run.* The status view has the progress; a worker writes nothing for it.
 
 ## Corrections after the prototype
 
