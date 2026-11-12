@@ -1,0 +1,15 @@
+# A merge request checks the definition, a merge applies it. The pipeline needs the target and no route to a source.
+# CI/CD variables: ROWVIOLI_TARGET_URL and every $NAME the sources use (ERP_PASSWORD), from the secret manager.
+image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+
+check:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - uv run --locked rowvioli apply --check sources/
+
+apply:
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - uv run --locked rowvioli apply sources/

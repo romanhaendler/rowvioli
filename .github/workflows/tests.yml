@@ -11,3 +11,19 @@ jobs:
       - run: uv sync --locked
       # the harness starts its own Postgres containers with the runner's Docker
       - run: uv run pytest
+
+  quickstart:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: examples/quickstart
+    steps:
+      - uses: actions/checkout@v4
+      # fails if the load fails; status starts only after a successful load
+      - run: docker compose up -d
+      # fails if status cannot show the mirror
+      - run: docker compose wait status
+      - if: always()
+        run: docker compose logs rowvioli status
+      - if: always()
+        run: docker compose down -v --rmi local

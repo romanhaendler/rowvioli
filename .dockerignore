@@ -1,0 +1,7 @@
+# what examples/Dockerfile may see of this repo: the package and nothing else
+*
+!src
+!pyproject.toml
+!README.md
+!LICENSE
+**/__pycache__

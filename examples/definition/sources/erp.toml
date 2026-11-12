@@ -1,0 +1,11 @@
+[erp]
+type    = "postgres"
+max_age = "1h"
+
+[erp.connection]
+url = "postgresql://reader:$ERP_PASSWORD@erp-db01/erp"
+
+[erp.tables]
+"public.customers" = { key = ["customer_no"] }
+"public.items"     = { key = ["item_no"] }
+"public.orders"    = { key = ["order_no"], max_age = "5m" }
