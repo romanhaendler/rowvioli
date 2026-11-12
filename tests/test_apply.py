@@ -1,5 +1,6 @@
 """`rowvioli apply`: the definition written into the target (spec tests 1-4, 18 first part, 20)."""
 from datetime import timedelta
+from decimal import Decimal
 
 import pytest
 
@@ -148,3 +149,76 @@ def test_apply_without_the_public_key_fails_and_changes_nothing(ready):
     r = apply(ready, {"erp.toml": ERP})
     assert r.returncode != 0
     assert ready.target("select count(*) from _rowvioli.sources") == [(0,)]
+
+
+def test_apply_against_a_target_without_init_says_to_run_init_first(rv):
+    assert rv.run("key", "new").returncode == 0
+    r = apply(rv, {"erp.toml": ERP})
+    assert r.returncode != 0 and "rowvioli init" in r.stderr
+    assert rv.target("select count(*) from pg_namespace where nspname = '_rowvioli'") == [(0,)]
+
+
+def test_apply_fails_when_two_sources_share_a_target_schema(ready):
+    crm = CRM.replace('max_age = "1d"', 'max_age = "1d"\ntarget_schema = "raw_erp"')
+    r = apply(ready, {"erp.toml": ERP, "crm.toml": crm})
+    assert r.returncode != 0 and "raw_erp" in r.stderr
+    assert ready.target("select count(*) from _rowvioli.sources") == [(0,)]
+
+
+def test_meta_holds_the_hash_of_the_definition_and_a_changed_definition_changes_it(ready):
+    definition = "select definition from _rowvioli.meta"
+    assert apply(ready, {"erp.toml": ERP}).returncode == 0
+    [(first,)] = ready.target(definition)
+    assert first
+    assert apply(ready, {"erp.toml": ERP}).returncode == 0
+    assert ready.target(definition) == [(first,)]
+    assert apply(ready, {"erp.toml": ERP.replace('max_age = "1h"', 'max_age = "2h"')}).returncode == 0
+    assert ready.target(definition) != [(first,)]
+
+
+def test_a_table_overrides_the_source_settings_and_other_keys_reach_the_connector_as_options(ready):
+    erp = ERP.replace('parallel = 4', 'parallel = 4\nlog = false\nmax_seconds = 60\nschema_hint = "dbo"').replace(
+        '"dbo.Notes"     = {}', '"dbo.Notes"     = { log = true, max_delete_share = 0.9, max_seconds = 5, sheet = "A" }')
+    r = apply(ready, {"erp.toml": erp})
+    assert r.returncode == 0, r.stderr
+    assert ready.target("select options from _rowvioli.sources") == [({"schema_hint": "dbo"},)]
+    assert ready.target("select source_table, log, max_delete_share, max_seconds, options from _rowvioli.tables "
+                        "order by 1") == [("dbo.Customers", False, Decimal("0.5"), 60, {}),
+                                          ("dbo.Notes", True, Decimal("0.9"), 5, {"sheet": "A"}),
+                                          ("dbo.Orders", False, Decimal("0.5"), 60, {})]
+
+
+NO_TARGET = {"ROWVIOLI_TARGET_URL": "postgresql://nobody@nowhere.invalid:1/none"}
+
+
+def check(rv, files):
+    rv.definition(files)
+    return rv.run("apply", "--check", "sources", env=NO_TARGET)
+
+
+def test_check_passes_a_valid_definition_without_a_target_a_key_or_the_variables(rv):
+    r = check(rv, {"erp.toml": ERP.replace("$ERP_PASSWORD", "$ERP_PASSWORD$$"), "crm.toml": CRM})
+    assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.parametrize("old, new, says", [
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = {', "erp.toml"),               # syntax
+    ('type = "postgres"', "", "type"),                                          # required setting missing
+    ('max_age = "1h"', "", "max_age"),
+    ('max_age = "1h"', 'max_age = "1 hour"', "max_age"),                        # unit
+    ('max_age = "1h"', 'max_age = "90"', "max_age"),
+    ('max_age = "5m"', 'max_age = "5w"', "5w"),
+    ("parallel = 4", 'parallel = "4"', "parallel"),                             # kind of value
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { log = "no" }', "log"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { key = "id" }', "key"),            # keys
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { key = [] }', "key"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = {}\n"sales.NOTES" = {}', "notes"),  # duplicate target table
+    ("parallel = 4", 'parallel = 4\ntarget_schema = "raw_crm"', "raw_crm"),     # shared target schema
+    ("$ERP_PASSWORD", "$erp_password", "$"),                                    # malformed placeholder
+    ("$ERP_PASSWORD", "pa$", "$"),
+])
+def test_check_fails_each_invalid_definition_without_a_target_or_the_variables(rv, old, new, says):
+    assert old in ERP
+    r = check(rv, {"erp.toml": ERP.replace(old, new), "crm.toml": CRM})
+    assert r.returncode != 0 and says in r.stderr, r.stderr
+    assert "Traceback" not in r.stderr
