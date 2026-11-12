@@ -105,6 +105,16 @@ def interval(value, where):
     return f"{m[1]} {UNITS[m[2]]}"
 
 
+def duration(seconds):
+    """Seconds as the definition writes them, the largest two units: `5m`, `1h 3m`. The way back from `interval`."""
+    parts = []
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60), ("s", 1)):
+        if seconds >= size and len(parts) < 2:
+            parts.append(f"{seconds // size}{unit}")
+            seconds %= size
+    return " ".join(parts) or "0s"
+
+
 def fill(template, where, env):
     """`$NAME` from env, `$$` a literal `$`, in every string of the connection, also nested ones. A value landing
     in the user info of a URL is percent-encoded (decision 32). Without env, the placeholders are only checked. No
