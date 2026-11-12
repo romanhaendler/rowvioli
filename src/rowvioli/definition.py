@@ -106,7 +106,7 @@ def interval(value, where):
 
 
 def duration(seconds):
-    """Seconds as the definition writes them, the largest two units: `5m`, `1h 3m`. The way back from `interval`."""
+    """Seconds as a person reads them, the largest two units: `5m`, `1h 3m`. For the status, not for the definition."""
     parts = []
     for unit, size in (("d", 86400), ("h", 3600), ("m", 60), ("s", 1)):
         if seconds >= size and len(parts) < 2:
