@@ -1,5 +1,6 @@
 """The worker loop of `run` and `work`: ask what is claimable, start a fresh process per run."""
 import json
+import math
 import os
 import select
 import socket
@@ -23,8 +24,12 @@ def loop(slots, source="", table="", once=False):
     starts no more, so it cannot start processes forever."""
     worker = f"{socket.gethostname()}:{os.getpid()}"
     answers, runs, crashed = {}, {}, False  # runs: process -> what it said after its claim, None until then
+    ended = []  # runs killed after max_seconds whose reason is not yet recorded
     conn = target.connect()
     while True:
+        while ended:
+            record(conn, ended[0])
+            ended.pop(0)
         claimable, busy = sql(conn, ASK, [source, table])[0]
         if once and not runs and (crashed or not busy):
             conn.close()
@@ -32,22 +37,30 @@ def loop(slots, source="", table="", once=False):
         for _ in range(0 if once and crashed else min(claimable, slots - len(runs))):
             runs[subprocess.Popen([sys.executable, "-m", "rowvioli.load", worker, source, table],
                                   stdout=subprocess.PIPE, text=True)] = None
-        crashed |= listen(runs, answers, 2)
+        crashed |= listen(runs, answers, ended, 2)
 
 
-def listen(runs, answers, seconds):
-    """Reads what the run processes say, for `seconds` or until one ends. Returns True if one died before it
-    claimed anything."""
+def listen(runs, answers, ended, seconds):
+    """Reads what the run processes say, for `seconds` or until one ends, and kills a run that exceeds its
+    `max_seconds`; its claim goes to `ended`. Returns True if one died before it claimed anything."""
     end = time.monotonic() + seconds
-    while (left := end - time.monotonic()) > 0:
-        readable, _, _ = select.select([p.stdout for p in runs], [], [], left)
+    while (now := time.monotonic()) < end:
+        for p, claim in runs.items():
+            if claim and claim["deadline"] <= now:
+                p.kill()  # README "Order when finishing": kill first, write the reason afterwards
+                claim["deadline"], claim["reason"] = math.inf, f"ended after max_seconds = {claim['max_seconds']}"
+                answers[claim["claimed"]] = claim["answer"] = {"status": "failed", "reason": claim["reason"]}
+                ended.append(claim)
+        wake = min([end] + [c["deadline"] for c in runs.values() if c])
+        readable, _, _ = select.select([p.stdout for p in runs], [], [], wake - now)
         for p in [p for p in runs if p.stdout in readable]:
             if line := p.stdout.readline():
                 said = json.loads(line)
-                if "claimed" in said:
-                    runs[p] = said
+                if "claimed" in said:  # the clock for max_seconds starts here
+                    runs[p] = said | {"deadline": time.monotonic() + said["max_seconds"]}
                 else:
                     answers[said.pop("table")] = runs[p]["answer"] = said
+                    runs[p]["deadline"] = math.inf
                 continue
             p.wait()  # end of its output: the process has ended
             claim = runs.pop(p)
@@ -55,6 +68,14 @@ def listen(runs, answers, seconds):
                 answers[claim["claimed"]] = {"status": "failed", "reason": "worker lost"}
             return claim is None and p.returncode != 0
     return False
+
+
+def record(conn, claim):
+    """The reason of a run killed after max_seconds, on the run and its table, if the run is still running."""
+    sql(conn, """WITH r AS (UPDATE _rowvioli.runs SET status = 'failed', finished_at = clock_timestamp(), reason = $2
+                             WHERE run = $1 AND status = 'running' RETURNING "table")
+                 UPDATE _rowvioli.tables SET reason = $2 WHERE id IN (SELECT "table" FROM r)""",
+        [claim["run"], claim["reason"]])
 
 
 def run(source, table, slots):
