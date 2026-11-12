@@ -3,6 +3,7 @@ import json
 import math
 import os
 import select
+import signal
 import socket
 import subprocess
 import sys
@@ -21,20 +22,24 @@ def loop(slots, source="", table="", once=False):
     """Every two seconds, or as soon as a run process ends, asks what in scope is claimable and starts a run
     process for each, up to `slots` at a time. With `once` it returns ({target table: answer}, crashed) when
     nothing in scope is due or loading. `crashed`: a run process died before it claimed anything; `once` then
-    starts no more, so it cannot start processes forever."""
+    starts no more, so it cannot start processes forever. Without `once`, SIGTERM makes it start nothing new
+    and return once its runs have ended (decision 33)."""
     worker = f"{socket.gethostname()}:{os.getpid()}"
     answers, runs, crashed = {}, {}, False  # runs: process -> what it said after its claim, None until then
     ended = []  # runs killed after max_seconds whose reason is not yet recorded
+    stopping = []
+    if not once:
+        signal.signal(signal.SIGTERM, lambda *_: stopping.append(True))
     conn = target.connect()
     while True:
         while ended:
             record(conn, ended[0])
             ended.pop(0)
         claimable, busy = sql(conn, ASK, [source, table])[0]
-        if once and not runs and (crashed or not busy):
+        if (once and not runs and (crashed or not busy)) or (stopping and not runs):
             conn.close()
             return answers, crashed
-        for _ in range(0 if once and crashed else min(claimable, slots - len(runs))):
+        for _ in range(0 if stopping or (once and crashed) else min(claimable, slots - len(runs))):
             runs[subprocess.Popen([sys.executable, "-m", "rowvioli.load", worker, source, table],
                                   stdout=subprocess.PIPE, text=True)] = None
         crashed |= listen(runs, answers, ended, 2)

@@ -1,7 +1,10 @@
-"""`rowvioli work`, the order of loading, both limits and `max_seconds` (spec tests 13, 14, 19)."""
+"""`rowvioli work`, the order of loading, both limits, `max_seconds`, SIGTERM and an unreachable target
+(spec tests 9, 10, 11, 13, 14, 19)."""
+import signal
 import time
 
 import pytest
+from conftest import until
 from test_run import apply, ok, run
 
 
@@ -99,3 +102,25 @@ def test_run_ends_with_1_when_a_run_process_dies_before_claiming(ready):
     r = ready.run("run", timeout=20)
     assert r.returncode == 1
     assert ready.target("select status from _rowvioli.status") == [("new",)]
+
+
+def test_a_tables_max_seconds_overrides_the_sources(ready):
+    slow(ready, "patient", 3, 1)
+    slow(ready, "hasty", 3, 1)
+    apply(ready, source(ready, "erp", "max_seconds = 2\nparallel = 2",
+                        '"public.patient" = { key = ["id"], max_seconds = 30 }\n"public.hasty" = { key = ["id"] }'))
+    code, answer = run(ready)
+    assert answer["tables"]["raw_erp.patient"]["status"] == "ok"
+    assert "max_seconds" in answer["tables"]["raw_erp.hasty"]["reason"]
+
+
+def test_work_on_sigterm_lets_the_run_publish_starts_nothing_new_and_exits_0(ready):
+    slow(ready, "first", 3, 1)
+    slow(ready, "second", 3, 1)
+    apply(ready, source(ready, "erp", "", '"public.first" = { key = ["id"] }\n"public.second" = { key = ["id"] }'))
+    worker = ready.start("work", "--slots", "1")
+    until(lambda: ready.target("select count(*) from _rowvioli.status where status = 'loading'") == [(1,)])
+    worker.send_signal(signal.SIGTERM)
+    assert worker.wait(timeout=20) == 0
+    assert sorted(ready.target("select status from _rowvioli.status")) == [("new",), ("ok",)]
+    assert ready.target("select count(*) from _rowvioli.runs") == [(1,)]

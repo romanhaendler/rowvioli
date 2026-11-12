@@ -648,6 +648,7 @@ EnvironmentFile=/etc/rowvioli/env
 ExecStart=rowvioli work --slots 4
 Restart=always
 TimeoutStopSec=3600   # as long as max_seconds, so running tables can finish
+KillMode=mixed        # SIGTERM to the worker only, so its run processes are not ended with it
 ```
 
 - A worker has no checkout and no file that describes a source. A new source needs no change on any worker.
