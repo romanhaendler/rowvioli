@@ -361,7 +361,7 @@ meta      schema_version, max_running, definition (hash of the definition last a
 - The second line of `tables` is what the workers experienced, plus `requested_at`.
 - `runs` is a log: one row per run. Nothing reads it to decide anything.
 - `status` is what people look at. It shows a table as `new`, `loading`, `ok` or `failed`, with the `reason` of a failure in a column of its own. A table whose run died shows as `failed` with the reason `worker lost`.
-- Progress is computed there too, for example `loading, 485,000 of about 1,000,000 rows`: while a table is loading, `rows_written` shows its rows so far and `rows_last_run` the rows read by its last successful run. The holder of the table lock is in `pg_locks`, its rows so far are in Postgres' own `pg_stat_progress_copy`. A worker writes nothing for it. Both are empty when the reading role cannot see them.
+- Progress is computed there too, for example `loading, 485,000 of about 1,000,000 rows`: while a table is loading, `rows_written` shows its rows so far and `rows_last_run` the rows read by its last successful run. The holder of the table lock is in `pg_locks`, its rows so far are in Postgres' own `pg_stat_progress_copy`. A worker writes nothing for it. `rows_written` is empty for a role that is neither the workers' role nor a member of `pg_read_all_stats`.
 
 Today's state is read from the mirror. What changed when is in the change log. Validity periods can be computed from it as a view.
 
@@ -696,7 +696,7 @@ Rights in the target:
 |---|---|
 | The pipeline that runs `apply` | to write the definition |
 | The workers | to read the definition, to write what they experienced, to create and write the mirrors |
-| Whoever may request a load, for example a web UI | to read the status view, to write `requested_at` and nothing else |
+| Whoever may request a load, for example a web UI | to read the status view, to write `requested_at` and nothing else; to see progress, membership in `pg_read_all_stats` |
 | Consumers | to read the mirrors |
 
 The program creates no roles. Whoever can write the definition decides what is loaded, so that right belongs to the pipeline alone. A small set-up can use one user for everything.
@@ -836,7 +836,7 @@ Everything a UI needs is in the target. It is a small application of its own wit
 | Show which definition a run used | `runs.definition` | yes, as a hash |
 | Load a table now | `requested_at` in `_rowvioli.tables` | yes |
 | Load a table at a fixed time | | no. That is `at` in the definition, and it changes through `apply`. |
-| Show the progress of a running run | `_rowvioli.status`, columns `rows_written` and `rows_last_run` | yes, while the staging table is filled. Not tried with a role without special rights. |
+| Show the progress of a running run | `_rowvioli.status`, columns `rows_written` and `rows_last_run` | yes, while the staging table is filled, for the workers' role and members of `pg_read_all_stats` |
 | Cancel a run | Postgres terminates the run's control connection | only for the moment: the retry starts it again after a minute |
 | Stop a table for good | | no. It is removed from the definition, and `apply` disables it. |
 | Change a source or its password | | no. That is the definition, and it changes through `apply`. |

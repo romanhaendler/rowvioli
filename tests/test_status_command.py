@@ -82,6 +82,29 @@ def test_a_loading_table_without_progress_shows_no_reason(rv, add):
         assert rv.target("select reason from _rowvioli.status") == [("old failure",)]
 
 
+def test_progress_shows_to_a_role_with_pg_read_all_stats_and_is_empty_without(rv, add):
+    add("erp", "t")
+    [(source_id, id)] = rv.target("select source_id, id from _rowvioli.status")
+    for role, extra in (("viewer", ""), ("stats", " in role pg_read_all_stats")):
+        rv.target(f"create role {role} login password 'v'{extra}")
+        rv.target(f"grant usage on schema _rowvioli to {role}")
+        rv.target(f"grant select on _rowvioli.status to {role}")
+
+    def written(role):
+        url = rv.target_url.replace("postgres:x@", f"{role}:v@")
+        with psycopg.connect(url) as c:
+            return c.execute("select status, rows_written from _rowvioli.status").fetchone()
+    # a run's session as the worker's role: the table lock, then a COPY into staging that is still going on
+    with psycopg.connect(rv.target_url, autocommit=True) as run:
+        run.execute("select pg_advisory_lock(%s, %s)", [source_id, id])
+        run.execute("create temp table _stage (i int)")
+        with run.cursor().copy("copy _stage from stdin") as copy:
+            for i in range(200_000):  # enough that psycopg has sent most of it
+                copy.write_row([i])
+            assert written("viewer") == ("loading", None)
+            assert written("stats")[0] == "loading" and written("stats")[1] > 0
+
+
 def test_a_role_that_may_only_read_the_status_view_can_run_status(rv, add):
     add("erp", "t")
     rv.target("create role viewer login password 'v'")

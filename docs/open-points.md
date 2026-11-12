@@ -20,7 +20,6 @@ These follow from the design or from documentation and were not tried out. The p
 
 From the second round:
 
-- **Progress from `pg_stat_progress_copy`.** Experiment 8 read it from a second connection as a superuser. Whether a role without special rights sees the rows of another session was not checked.
 - **A target address with several nodes** through ADBC, and the behaviour during a failover.
 - **ADBC from a Linux client.** Experiment 8 and the prototype ran on macOS against Postgres in Docker. The tests and the quickstart are set up to run on Linux in CI (`.github/workflows/tests.yml`), but the repo has no remote, so that has never run.
 
