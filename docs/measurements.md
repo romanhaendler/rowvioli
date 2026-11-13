@@ -227,6 +227,36 @@ The keepalive in a libpq URL acts on the client's socket only, so the program se
 
 2026-11-12, two local `postgres:16-alpine` servers, the first with `default_transaction_read_only = on`. With `postgresql://…@127.0.0.1:<first>,127.0.0.1:<second>/postgres?target_session_attrs=read-write`, `rowvioli init` created `_rowvioli` on the second server and `rowvioli status` read it there. Without `target_session_attrs`, `status` reached the first server and found no schema. A failover was not tried.
 
+## 13. The history view on a long change log
+
+2026-11-13, `bench/history.py 100000 400`. The same laptop and container as section 9 (Apple Silicon, `postgres:16-alpine` with 2 CPUs and 4 GB, PostgreSQL 16.15). The log was built by 400 real runs of the program (`rowvioli run`, one process each) against a source table `lineitem (id bigint primary key, qty int, comment text)` of 100 000 rows. Before each run after the first, 1 % of the rows (`id % 100 = run % 100`) were updated, so every key has 5 versions. Result: a change log of 499 000 rows (48 MB), 400 moments, and a history view of 499 000 rows; at the moment of the 201st run the view shows 100 000 rows. The whole build took 4 min 46 s. Each time is the median of three `EXPLAIN (ANALYZE)` runs of `SELECT *`, so it excludes sending the rows. The index is the one a person might create, `CREATE INDEX ON raw_bench.lineitem__log (id, _loaded_at)`, followed by `ANALYZE`; the run builds none.
+
+The direct query for one moment, per key the last log row up to the moment, leaving out the keys whose last row is a delete:
+
+```sql
+SELECT * FROM (SELECT DISTINCT ON (id) * FROM raw_bench.lineitem__log WHERE _loaded_at <= :moment
+               ORDER BY id, _loaded_at DESC) l WHERE _op <> 'D'
+```
+
+The script checks before timing that it returns the same rows as the view with `WHERE _valid_from <= :moment AND (_valid_to > :moment OR _valid_to IS NULL)` (`EXCEPT ALL` both ways on the table's columns: no difference).
+
+| Query | No index | Index on (id, _loaded_at) |
+|---|---|---|
+| The whole view | 314.5 ms | 304.6 ms |
+| The view at one moment | 304.5 ms | 286.9 ms |
+| The view for one key (`WHERE id = 5000`) | 8.9 ms | 0.1 ms |
+| The direct query for the same moment | 116.9 ms | 122.0 ms |
+
+What the numbers say:
+
+- **A condition on the key is pushed below the window**: the view for one key reads one key's rows only, and an index on (key, `_loaded_at`) turns a scan of the log (8.9 ms) into an index scan (0.1 ms).
+- **A condition on a moment is not**: the view at one moment costs as much as the whole view, because the window runs over the whole log first. The index changes nothing there (305 against 287 ms is noise).
+- **The direct query is 2.6 times faster than the view at the same moment without an index** and unchanged by the index: it still reads the whole log, but sorts it once and has no window. Its cost grows with the log, not with the size of the answer.
+
+Limitations: one series, one key shape (a single `bigint` column), versions spread evenly over all keys, a log that fits in memory (48 MB, cached), no concurrent writes. A log some hundred times larger, or one whose rows do not fit in memory, was not measured.
+
+Recommendation: the README names an index, and says it is for one key and a person's choice (a run never builds it): `CREATE INDEX ON <schema>.<table>__log (<key columns>, _loaded_at)`. It also names the direct query above for one moment, with `:moment` replaced and the key columns in `DISTINCT ON` and `ORDER BY`, as the faster way to ask for a moment; the view stays the answer for the versions of one key and for all of history. It names no index for a moment, because none helps.
+
 ## Reference: hpdl
 
 From `hpdl/docs/performance.md`, same table shape, source and target with 2 CPUs and 4 GB each, worker with 3 CPUs:
