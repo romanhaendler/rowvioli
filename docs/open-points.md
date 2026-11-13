@@ -1,12 +1,12 @@
 # Open points
 
-What is undecided, unverified or unbuilt as of 2026-11-12, after versions 0.1 and 0.2, load times and visibility.
+What is undecided, unverified or unbuilt as of 2026-11-13, after versions 0.1 and 0.2, load times, visibility, target names and history.
 
 ## Decisions for the owner
 
 None at the moment.
 
-Decided after the prototype and no longer open: percent-encoding a password in a URL, stopping `work`, asking what is claimable, and one `target_schema` per source (decisions 32 to 35).
+Decided after the prototype and no longer open: percent-encoding a password in a URL, stopping `work`, asking what is claimable, and one `target_schema` per source (decisions 32 to 35; the rule about names is replaced by decision 39).
 
 Decided in the second round and no longer open: new tables of the source do not arrive by themselves (decision 21), one key pair for all workers (decision 26), no second Postgres driver (decision 28), the address of the target comes from the worker's environment (decision 30), and the smaller points collected in decision 31.
 
@@ -29,7 +29,7 @@ Unchanged from the first round:
 - **`client_connection_check_interval`** was measured on Linux. Postgres supports it only on some operating systems.
 - **The connectors themselves**: arrow-odbc for MSSQL and Informix, DuckDB for files. `data-extractor` has experience with ODBC. The `postgres`, `file`, `odbc` and `rest` connectors are tested; `odbc` only against PostgreSQL through psqlODBC, SQL Server and Informix not at all.
 - **Wide tables with many rows.** 900 columns were measured with 100,000 rows only.
-- **A view that computes validity periods from the change log**, and its speed on a long history.
+- **The history view on a log some hundred times larger** than the 48 MB measured, or one that does not fit in memory (section 13).
 - **The COPY from a client over a real network.** Experiment 8 filled the staging table from a client on the same machine.
 
 ## Known limits
@@ -52,7 +52,11 @@ Unchanged from the first round:
 - **Removing secrets from error texts is best effort.** A driver can reformat a connection string or quote part of a value in ways the program does not recognise.
 - **The private key file has to reach every worker** once, by whatever the organisation uses for that.
 - **No common point in time in the source.** Two tables are not read at the same moment.
-- **A table with a key cannot have a column `_op`**, nor `_run` with a change log. The diff and the change log use these names.
+- **A table with a key cannot have a column `_op`**, nor `_run`, `_loaded_at`, `_valid_from` or `_valid_to` with a change log. The diff, the change log and the history view use these names.
+- **Dropping a change log needs `CASCADE`**, or dropping the history view first.
+- **A clock set back between two runs of one table** by more than the time between them would put their rows in the wrong order in the history.
+- **A change log left under a name the definition no longer has** keeps a history view that nobody updates.
+- **A history view left behind under a name a new change log takes** is replaced by the next run, or the run fails if its columns do not fit.
 - **Tables without a key** are replaced as a whole on every run, have no change log, and bloat until autovacuum has run.
 - **Advisory locks share one number space per database.** Another application using two-key advisory locks in the same database could collide.
 - **An idle worker keeps one connection to the target open**, with which it asks whether something is claimable.

@@ -139,11 +139,15 @@ string = "Driver={ODBC Driver 18 for SQL Server};Server=sqlsrv01;Database=erp;UI
 "dbo.Items"      = { key = ["item_no"], log = false }
 "dbo.Orders"     = { key = ["order_no"], max_age = "5m" }
 "dbo.OrderLines" = { key = ["order_no", "line_no"] }
+"sales.Customers" = { key = ["customer_no"], target_table = "sales_customers" }
+"hr.Staff"        = { key = ["staff_no"], target_schema = "raw_hr" }
 ```
 
 What follows from it:
 
-- Every listed table gets a target table in `raw_erp`, named after the last part of its name in lower case: `dbo.Customers` becomes `raw_erp.customers`. A file loses its extension: `customers.csv` becomes `customers`. Since Postgres cuts names at 63 bytes and the change log adds `__log`, `apply` refuses a target name longer than 58 bytes, a target schema longer than 63 bytes (also `raw_<name>` of a long source name), and a target name that is another table's name plus `__log`. Nothing else is loaded. A new table in the source arrives when somebody adds its name.
+- Every listed table gets a target table in `raw_erp`, named after the last part of its name in lower case: `dbo.Customers` becomes `raw_erp.customers`. A file loses its extension: `customers.csv` becomes `customers`. A table says where it lives: `sales.Customers` would also become `customers`, so `target_table` names it `sales_customers`; `hr.Staff` sets `target_schema` and becomes `raw_hr.staff`. Nothing else is loaded. A new table in the source arrives when somebody adds its name.
+- The definition gives no target name twice. A table takes three names in its schema, its own, `<name>__log` and `<name>__history`, and `apply` and `list` fail when two tables of the definition, of whichever sources, would take the same one. The error names both tables and says to set `target_table` at one of them. Since Postgres cuts names at 63 bytes and the history view adds `__history`, a target table may have 54 bytes, a schema 63 (also `raw_<name>` of a long source name). Neither may be empty, and the schema is not `_rowvioli`. Sources may share a schema.
+- When `apply` finds that a loaded table gets another target name, it says so and moves nothing: the old tables stay where they are, and the next run builds new ones. [What a person does by hand](#what-a-person-does-by-hand) keeps the old ones.
 - `dbo.Orders` is never older than five minutes, the other tables never older than an hour.
 - At most four tables of this source load at the same time, across all workers.
 - Every table with a key gets a change log, except `dbo.Items`, where it is switched off.
@@ -157,7 +161,8 @@ What follows from it:
 | `at` | source or table | none | Load times: times of day at which the table is due whatever its age, for example `["06:00", "14:00"]`. A table's list replaces the source's, and `[]` switches it off. A load after an event in the source is a request, not a load time: see [Loading now](#loading-now). |
 | `timezone` | source or table | | The time zone the load times are meant in, for example `"Europe/Berlin"`. Required where `at` is not empty. There is no default. |
 | `tables` | source | | The tables to load, by name. |
-| `target_schema` | source | `raw_<name>` | Schema of the target tables. A schema belongs to exactly one source: `apply` fails if two share one. |
+| `target_schema` | source or table | `raw_<name>` | Schema of the target tables. At the source it is the default of its tables. |
+| `target_table` | table | last part of the name | Name of the target table. Refused at the source: it can belong to one table only. |
 | `parallel` | source | 2 | Maximum number of tables of this source loading at the same time. |
 | `key` | table | none | Columns that identify a row. Without a key the table is replaced as a whole. |
 | `log` | source or table | on | Keep a change log. `log = false` switches it off. Tables without a key never have one. |
@@ -286,10 +291,35 @@ Data passes through the program only in the lines `read` and `copy_into_staging`
 | Schema | a column is missing or has changed its type, as far as the driver tells types apart (see [Types](#types)). A new column is added to the target. |
 | Key | a key combination occurs twice in the staging table, a key column is null, or the key in the definition differs from the primary key of the mirror. |
 | Safety limits | the source delivers zero rows, or more than `max_delete_share` of the rows would disappear. |
+| Change log | a change log exists and this run would not write to it (`log = false`, or the key was taken away), or it exists and its mirror does not. |
 
 The share of deletions is known only from the diff, so it is checked after step 5. The safety limits keep a broken source from emptying the mirror in a perfectly consistent way.
 
-A changed key is never converted. A person drops or renames the old mirror, and the next run builds it anew.
+A table with a key cannot have a column `_op`, and with a change log neither `_run`, `_loaded_at`, `_valid_from` nor `_valid_to`: the diff, the change log and the history view use these names.
+
+A change log that exists is complete, so a run that could not keep it complete fails and names the log. A changed key is never converted, and the program never renames or drops a table. A person does, and the next run builds anew.
+
+### What a person does by hand
+
+Every failure above and every changed name ends in one of two statements, here for `raw_erp.customers`.
+
+**The target name changed** (`apply` said so), and mirror and history should come along. Rename the three before the next run, here to `clients`:
+
+```sql
+ALTER TABLE raw_erp.customers RENAME TO clients;
+ALTER TABLE raw_erp.customers__log RENAME TO clients__log;
+ALTER VIEW raw_erp.customers__history RENAME TO clients__history;
+```
+
+Left alone, the old three stay where they are, and the next run builds a mirror under the new name with every row as `I`.
+
+**`log = false` was set, the key was taken away, the mirror was dropped or the key changed.** The change log would no longer be complete. Drop it, and its view goes with it:
+
+```sql
+DROP TABLE raw_erp.customers__log CASCADE;
+```
+
+After a changed key the old mirror has to go as well (`DROP TABLE raw_erp.customers`). The next run builds anew and the history begins there. To keep the old history instead, rename mirror, change log and history view as above.
 
 ## Comparing in the target
 
@@ -322,7 +352,8 @@ Publishing itself:
 
 ```sql
 BEGIN;
-INSERT INTO raw_erp.customers__log SELECT :run, d.* FROM diff d;            -- unless log = false
+INSERT INTO raw_erp.customers__log (_run, _loaded_at, _op, customer_no, name, city)
+SELECT :run, now(), _op, customer_no, name, city FROM diff;                 -- unless log = false
 DELETE FROM raw_erp.customers m USING diff d
  WHERE d._op IN ('D','U') AND d.customer_no = m.customer_no;
 INSERT INTO raw_erp.customers SELECT customer_no, name, city FROM diff WHERE _op IN ('I','U');
@@ -339,7 +370,10 @@ Per target table:
 ```
 raw_erp.customers          mirror: columns of the source, primary key = key
 raw_erp.customers__log     change log, unless log = false
-  _run, _op                run and I, U or D
+  _run, _op, _loaded_at    run, I, U or D, and the moment the run published
+  ... all columns
+raw_erp.customers__history view over the change log: every version of a row
+  _valid_from, _valid_to   from and until (not included); empty while current
   ... all columns
 ```
 
@@ -348,8 +382,8 @@ Staging table and diff are TEMP tables on the control connection. They have no f
 Bookkeeping in the schema `_rowvioli`:
 
 ```
-sources   id, name, type, target_schema, parallel, options, connection (ciphertext), key_id, enabled
-tables    id, source, source_table, target_table, key, max_age, at, timezone, log, max_delete_share, max_seconds,
+sources   id, name, type, parallel, options, connection (ciphertext), key_id, enabled
+tables    id, source, source_table, target_schema, target_table, key, max_age, at, timezone, log, max_delete_share, max_seconds,
           options, enabled, loaded_at, attempted_at, attempts, requested_at, reason
 runs      run, table, worker, started_at, finished_at, status,
           rows_read, inserted, updated, deleted, reason, definition
@@ -363,17 +397,50 @@ meta      schema_version, max_running, definition (hash of the definition last a
 - `status` is what people look at. It shows a table as `new`, `loading`, `ok` or `failed`, with the `reason` of a failure in a column of its own. A table whose run died shows as `failed` with the reason `worker lost`.
 - Progress is computed there too, for example `loading, 485,000 of about 1,000,000 rows`: while a table is loading, `rows_written` shows its rows so far and `rows_last_run` the rows read by its last successful run. The holder of the table lock is in `pg_locks`, its rows so far are in Postgres' own `pg_stat_progress_copy`. A worker writes nothing for it. `rows_written` is empty for a role that is neither the workers' role nor a member of `pg_read_all_stats`.
 
-Today's state is read from the mirror. What changed when is in the change log. Validity periods can be computed from it as a view.
+Today's state is read from the mirror. What changed when is in the change log, and every row of it says when: `_loaded_at` is the moment its run published, the same `now()` that goes into `loaded_at`. Next to the log stands the view `<target table>__history`, which reads nothing but the log and gives every version of a row with the time it was valid.
 
-Example: customer 7 moves between run 41 and 42, customer 9 is deleted.
+**A change log that exists is complete.** Replaying it from its first row gives the mirror, always. A log that is created begins with every row of the mirror as `I` (for a table on its first run that is the diff; for a mirror that was there before, for example after `log = false` was taken away, it replaces the diff, while the run still reports its diff counts). A run that would leave the log behind its mirror fails instead ([Checks before publishing](#checks-before-publishing)). So the history is either complete from its first moment or there is none.
+
+Example: customer 7 moves and customer 9 is deleted between two runs. The time is the time of the run, which is the time consumers first saw the change. It is never a time of the source.
 
 ```
-mirror  raw_erp.customers        change log  raw_erp.customers__log
-id | city                        _run | _op | id | city
- 7 | Cologne                       40 | I   | 7  | Bonn
-                                   40 | I   | 9  | Essen
-                                   42 | U   | 7  | Cologne
-                                   42 | D   | 9  | Essen
+mirror  raw_erp.customers
+ customer_no |  city
+-------------+---------
+           7 | Cologne
+
+change log  raw_erp.customers__log
+ _run | _op |          _loaded_at           | customer_no |  city
+------+-----+-------------------------------+-------------+---------
+    1 | I   | 2026-11-13 07:58:57.722619+00 |           7 | Bonn
+    1 | I   | 2026-11-13 07:58:57.722619+00 |           9 | Essen
+    3 | U   | 2026-11-13 07:59:06.861926+00 |           7 | Cologne
+    3 | D   | 2026-11-13 07:59:06.861926+00 |           9 | Essen
+
+history  raw_erp.customers__history
+          _valid_from          |           _valid_to           | customer_no |  city
+-------------------------------+-------------------------------+-------------+---------
+ 2026-11-13 07:58:57.722619+00 | 2026-11-13 07:59:06.861926+00 |           7 | Bonn
+ 2026-11-13 07:59:06.861926+00 |                               |           7 | Cologne
+ 2026-11-13 07:58:57.722619+00 | 2026-11-13 07:59:06.861926+00 |           9 | Essen
+```
+
+A version is valid from `_valid_from` up to but not including `_valid_to`. The current version has an empty `_valid_to`, and a deleted row ends its last version and appears no further. The table as it was at a moment is one condition on the view:
+
+```sql
+SELECT * FROM raw_erp.customers__history
+ WHERE _valid_from <= '2026-11-13 07:59:00' AND (_valid_to > '2026-11-13 07:59:00' OR _valid_to IS NULL);
+```
+
+This returns customers 7 (Bonn) and 9 (Essen). The view exists whenever the change log does, and a column the source adds later appears in it, empty for the versions before. Both exist only for a table with a key and without `log = false`.
+
+On a long history the view is fast for one key and slow for one moment, measured on a log of 499 000 rows ([section 13](docs/measurements.md#13-the-history-view-on-a-long-change-log)). A person who asks for the versions of one key may create an index, which the program never does: `CREATE INDEX ON raw_erp.customers__log (customer_no, _loaded_at)` took such a query from 8.9 to 0.1 ms. For one moment the view takes the time of the whole view (305 ms there) and no index helps; the same moment asked of the log directly took 117 ms, 2.6 times less:
+
+```sql
+SELECT customer_no, city
+  FROM (SELECT DISTINCT ON (customer_no) * FROM raw_erp.customers__log
+         WHERE _loaded_at <= '2026-11-13 07:59:00' ORDER BY customer_no, _loaded_at DESC) l
+ WHERE _op <> 'D';
 ```
 
 ## Workers
@@ -596,9 +663,16 @@ Every command that needs the target finds it in `ROWVIOLI_TARGET_URL`. A worker 
 
 - **Idempotent.** Applying the same definition twice gives the same state. Sources and tables are created or updated by name.
 - **It never touches what the workers experienced.** `loaded_at`, `attempted_at`, `attempts` and `requested_at` stay as they are. A deployment by itself triggers no load and loses no request. A changed `max_age` or `at` takes effect with the next query: a table that is due by the new values is loaded. A table that is new in the definition has never been attempted and is therefore due at once.
-- **The definition is always the whole.** `apply` gets a directory. What is no longer in it is disabled, never deleted, and its target table stays. Applying the wrong directory by mistake is undone by applying the right one.
+- **The definition is always the whole.** `apply` gets a directory. What is no longer in it is disabled, never deleted, and its target tables stay, but it holds no name any more: the definition alone says who owns a name. Whoever takes the name over meets the checks before publishing on the first run. Applying the wrong directory by mistake is undone by applying the right one.
 - **Disabling is the only way to stop a table.** Until then it is loaded and retried. A run that is loading the table when it is disabled finishes.
-- **It fails rather than guess.** On a missing variable, two tables with the same target table, two sources with the same `target_schema`, or a target without the schema `_rowvioli` (then it says: run `rowvioli init` first).
+- **It fails rather than guess.** On a missing variable, a target name given twice (`list` fails the same way, see [Defining a source](#defining-a-source)), or a target without the schema `_rowvioli` (then it says: run `rowvioli init` first).
+- **It says a changed name.** For every table that is already in the target and gets another target name, `apply` prints one line, after it has written the definition. A table that was disabled and comes back under another name gets it too:
+
+  ```
+  erp dbo.customers: target name changes from raw_erp.customers to raw_erp.clients; the old tables (raw_erp.customers, its __log and __history) stay where they are
+  ```
+
+  Nothing in the target is renamed or dropped ([what a person does by hand](#what-a-person-does-by-hand)).
 - **One transaction.** If anything fails, nothing changes.
 
 Answer of `run` on stdout:
@@ -698,7 +772,7 @@ Rights in the target:
 | The pipeline that runs `apply` | to write the definition |
 | The workers | to read the definition, to write what they experienced, to create and write the mirrors |
 | Whoever may request a load, for example a web UI | to read the status view, to write `requested_at` and nothing else; to see progress, membership in `pg_read_all_stats` |
-| Consumers | to read the mirrors |
+| Consumers | to read the mirrors and, for history, the views `<target table>__history`. A view is a plain view and runs with its owner's rights, so the right to read it is enough; the change log needs none. Default privileges on tables cover views. |
 
 The program creates no roles. Whoever can write the definition decides what is loaded, so that right belongs to the pipeline alone. A small set-up can use one user for everything.
 

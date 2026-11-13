@@ -2,7 +2,7 @@
 
 Every decision of the concept with its reason, its price and what was rejected. The order follows the discussion of 2026-11-11, so the document also shows how the design got to where it is.
 
-There were two rounds on that day. Decisions 1 to 19 are the first round. The second round (decisions 20 to 30) replaced the model of orders, a jobs repo and an external scheduler with a maximum age per table, definitions in the target and stateless workers. Decisions of the first round that no longer hold are marked and kept, with their text unchanged. A third round (decisions 32 to 35) followed on 2026-11-12, after a throwaway prototype had tried out the model of the second round. A fourth round (decision 36) added load times, a fifth (decision 37) the lines of a worker.
+There were two rounds on that day. Decisions 1 to 19 are the first round. The second round (decisions 20 to 30) replaced the model of orders, a jobs repo and an external scheduler with a maximum age per table, definitions in the target and stateless workers. Decisions of the first round that no longer hold are marked and kept, with their text unchanged. A third round (decisions 32 to 35) followed on 2026-11-12, after a throwaway prototype had tried out the model of the second round. A fourth round (decision 36) added load times, a fifth (decision 37) the lines of a worker, a sixth (decision 38) the rule for licences, a seventh (decisions 39 and 40) target names and history.
 
 Evidence refers to `docs/measurements.md` and to the earlier projects `hpdl`, `data-extractor` and `dataly` in the same workspace.
 
@@ -55,7 +55,7 @@ The first idea for a new attempt was a very fast Rust program. The discussion sh
 
 **Why.** Consumers read a normal table without validity columns, views or filters. The diff exists anyway, so the change log costs one more insert. History is not a mode but a by-product.
 
-**Price.** Validity periods (SCD2) have to be computed by a view over the change log. Its speed on a long history is not measured. Tables without a key have no change log.
+**Price.** Validity periods (SCD2) are read from a view over the change log (decision 40), measured in section 13 of `docs/measurements.md`. Tables without a key have no change log.
 
 ## 5. Compute the diff before the transaction
 
@@ -482,6 +482,8 @@ On 2026-11-12 a throwaway prototype tried out the model of the second round as a
 
 ## 35. `apply` fails when two sources share a `target_schema`
 
+> **Changed by decision 39.** The rule that a schema belongs to one source is gone; the definition gives no target name twice.
+
 **Decision.** `apply` fails if two sources have the same `target_schema`, as it fails if two tables of a source get the same target table.
 
 **Why.** The README said that a schema belongs to exactly one source, but nothing checked it, so the mirrors of two sources could collide. One check in `apply` turns the rule into a fact.
@@ -549,6 +551,40 @@ On 2026-11-12 the owner asked how more connectors can be built without violating
 - *A contributor licence agreement.*
 
 This is the project's rule, not legal advice. A connector for a source whose SDK is under a vendor licence is looked at by a lawyer before it is published, even as a separate package.
+
+## Seventh round: target names and history
+
+On 2026-11-13 the owner asked for ways to set the name and the schema of a table in the target, and for a table as it was at a moment (`.scratch/target-names-and-history/spec.md`).
+
+## 39. A table says where it lives, and the definition gives no target name twice
+
+**Decision.** `target_schema` stands at the source as the default and may stand at a table. `target_table` stands at a table only. A table takes three names in its schema: its own, `<name>__log` and `<name>__history`. `apply` and `list` fail when two tables of the definition, of whichever sources, take the same one, name both and name `target_table` as the way out. This replaces decision 35: the rule that a schema belongs to one source was a means, the rule that no two tables load into one mirror is the point. A target table may have 54 bytes (63 minus `__history`), a schema 63; neither may be empty, and the schema is not `_rowvioli`. Only the definition owns names: a table that left it holds no name. A changed name moves nothing, and `apply` says one line for it.
+
+**Why.** Two tables of one source with the same last name part could not both be loaded, a source could not spread over schemas and two sources could not share one, though no mirror would have collided. Checking names instead of schemas allows all three and still stops the one real danger. A table that left the definition is disabled and holds nothing: a user who renames a table in the source expects one edit in the definition, and a name that stayed taken would have asked for a hand-deleted row in the bookkeeping, for which no command exists. If another table takes the name over, the checks before publishing decide on the first run. The line of `apply` is there because the alternative is a stale table under the old name that consumers keep reading without a failure.
+
+**Price.** A changed name leaves the old tables where they are, and a person renames or drops them (README, "What a person does by hand"). One number, 54, now holds for every table, though only a table with a log needs the room.
+
+**Rejected.**
+- *A fixed layout* such as one `staging` schema, a prefix or a name pattern. The two settings express each of them.
+- *`apply` renaming or dropping.* The program never does, as with a changed key.
+- *Names that stay taken by tables the definition no longer has.* Needs a command for something the definition should say.
+- *Keeping the check for schemas next to the new one.* It would forbid what the new rule allows.
+
+## 40. A change log says when, is complete or absent, and history is a view
+
+**Decision.** Every row of a change log carries `_loaded_at`, the `now()` of the publishing transaction, the same value as `tables.loaded_at`. A change log that exists is complete: a log that is created begins with every row of the mirror as `I`, and a run that would publish without writing to a log that exists, or build a new mirror beside it, fails and names the log. The view `<target table>__history` reads nothing but the log: `_valid_from` is a row's `_loaded_at`, `_valid_to` that of the next row with the same key, ordered by `_loaded_at`, rows with `D` left out afterwards; an open period is null. The table at a moment is one condition on the view. A run creates the view when it is missing and replaces it when the log got a column, and touches it never otherwise. No index is built.
+
+**Why.** The time was in `_rowvioli.runs`, which is bookkeeping, may be cleaned up and needs rights on `_rowvioli`; with it in the log, the right to read the log is the right to read the history. A history that is silently wrong is worse than none: a log switched on late misses every unchanged row, one switched off shows outdated versions as current. Failing is the project's own answer, and a changed key already asks for a person. The view orders by `_loaded_at` and not by `_run` because run numbers start again when `_rowvioli` is built anew. Null for an open period is what readers of validity columns know, where drivers and BI tools disagree about `infinity`. A plain view lets a consumer read history with one right and takes no lock in an ordinary run. The measurement (section 13) shows what it costs: fast for one key with an index a person may create, as slow as the whole view for one moment, where the same moment asked of the log directly is 2.6 times faster. The README names both as advice.
+
+**Price.** A table whose log is dropped or renamed needs a person to drop or rename the view with it. The view for a moment reads the whole log. A clock set back between two runs of one table would put their rows in the wrong order. A target built before this decision has no `_loaded_at`, and nothing converts it (schema version 3, nothing was published).
+
+**Rejected.**
+- *The time from `runs`.* The bookkeeping is not for readers.
+- *A function `as_of(table, time)` in place of the view,* or a second view per moment. The condition is one line and works for two tables at the same moment.
+- *A history table kept by the run.* Decision 4 stands: the log is a by-product of the diff.
+- *`infinity` for an open period.*
+- *A log that may have gaps,* with a note that it does.
+- *An index built by the run.* It costs every insert, and no index helps the query for a moment.
 
 ## Corrections after the prototype
 

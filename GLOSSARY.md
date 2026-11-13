@@ -7,9 +7,10 @@ The binding vocabulary of the concept. If a term changes, it changes here and in
 | **Source** | A source system with a connection and a list of tables. By convention one file `sources/<name>.toml` in the definition. |
 | **Source table** | A table, file or endpoint of the source that a connector delivers as rows. |
 | **Target** | The one PostgreSQL database that holds the mirrors and the bookkeeping. The word is used for nothing else. |
-| **Target table** | The table in the target that exactly one source table is loaded into. It belongs to exactly one source. Its name is the last part of the source table's name in lower case (`dbo.Customers` → `customers`); a file's name loses its extension (`customers.csv` → `customers`). |
+| **Target table** | The table in the target that exactly one source table is loaded into. A table says where it lives: `target_schema` (default `raw_<source>`) and `target_table` (default the last part of the source table's name in lower case, `dbo.Customers` → `customers`; a file's name loses its extension, `customers.csv` → `customers`). The definition gives no target name twice, counting `<name>__log` and `<name>__history`. |
 | **Mirror** | The content of the target table: what the source table looked like at the last successful run. |
-| **Change log** | Second table `<target table>__log`, kept for every table with a key unless switched off. Every run appends what was inserted (`I`), updated (`U`) or deleted (`D`). Nothing is ever removed from it. |
+| **Change log** | Second table `<target table>__log`, kept for every table with a key unless switched off. Every run appends what was inserted (`I`), updated (`U`) or deleted (`D`) and the moment it published (`_loaded_at`). It is complete or absent: replaying it from its first row gives the mirror. Nothing is ever removed from it. |
+| **History** | The view `<target table>__history` over the change log: every version of a row with `_valid_from` and `_valid_to`, empty while the version is current. The table as it was at a moment is one condition on it. |
 | **Key** | The columns that identify a row. Named in the definition. |
 | **Definition** | The directory of source files plus the public key. It names every table. `apply` writes it into the target. |
 | **Connection** | Everything a connector needs to reach its source: address, user, password or token. A block in the definition, stored in the target as one ciphertext per source. |
