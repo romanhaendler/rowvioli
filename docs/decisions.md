@@ -50,12 +50,14 @@ The first idea for a new attempt was a very fast Rust program. The discussion sh
 ## 4. Mirror plus change log instead of a history table
 
 > **Changed by decision 31.** The change log is on unless it is switched off.
+>
+> **Changed by decision 40.** The validity periods are a view over the change log, and its speed is measured (section 13 of `docs/measurements.md`).
 
 **Decision.** The target table is an exact mirror. An optional second table records per run what was inserted, updated and deleted, and only ever grows.
 
 **Why.** Consumers read a normal table without validity columns, views or filters. The diff exists anyway, so the change log costs one more insert. History is not a mode but a by-product.
 
-**Price.** Validity periods (SCD2) are read from a view over the change log (decision 40), measured in section 13 of `docs/measurements.md`. Tables without a key have no change log.
+**Price.** Validity periods (SCD2) have to be computed by a view over the change log. Its speed on a long history is not measured. Tables without a key have no change log.
 
 ## 5. Compute the diff before the transaction
 
@@ -482,7 +484,7 @@ On 2026-11-12 a throwaway prototype tried out the model of the second round as a
 
 ## 35. `apply` fails when two sources share a `target_schema`
 
-> **Changed by decision 39.** The rule that a schema belongs to one source is gone; the definition gives no target name twice.
+> **Replaced by decision 39.** The rule that a schema belongs to one source is gone; the definition gives no target name twice.
 
 **Decision.** `apply` fails if two sources have the same `target_schema`, as it fails if two tables of a source get the same target table.
 
@@ -574,7 +576,7 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 
 **Decision.** Every row of a change log carries `_loaded_at`, the `now()` of the publishing transaction, the same value as `tables.loaded_at`. A change log that exists is complete: a log that is created begins with every row of the mirror as `I`, and a run that would publish without writing to a log that exists, or build a new mirror beside it, fails and names the log. The view `<target table>__history` reads nothing but the log: `_valid_from` is a row's `_loaded_at`, `_valid_to` that of the next row with the same key, ordered by `_loaded_at`, rows with `D` left out afterwards; an open period is null. The table at a moment is one condition on the view. A run creates the view when it is missing and replaces it when the log got a column, and touches it never otherwise. No index is built.
 
-**Why.** The time was in `_rowvioli.runs`, which is bookkeeping, may be cleaned up and needs rights on `_rowvioli`; with it in the log, the right to read the log is the right to read the history. A history that is silently wrong is worse than none: a log switched on late misses every unchanged row, one switched off shows outdated versions as current. Failing is the project's own answer, and a changed key already asks for a person. The view orders by `_loaded_at` and not by `_run` because run numbers start again when `_rowvioli` is built anew. Null for an open period is what readers of validity columns know, where drivers and BI tools disagree about `infinity`. A plain view lets a consumer read history with one right and takes no lock in an ordinary run. The measurement (section 13) shows what it costs: fast for one key with an index a person may create, as slow as the whole view for one moment, where the same moment asked of the log directly is 2.6 times faster. The README names both as advice.
+**Why.** The time was in `_rowvioli.runs`, which is bookkeeping, may be cleaned up and needs rights on `_rowvioli`; with it in the log, the history needs nothing in `_rowvioli`. The view is a plain view, so the right to read the view is enough: the reader needs no right on the log and none in `_rowvioli`. A history that is silently wrong is worse than none: a log switched on late misses every unchanged row, one switched off shows outdated versions as current. Failing is the project's own answer, and a changed key already asks for a person. The view orders by `_loaded_at` and not by `_run` because run numbers start again when `_rowvioli` is built anew. Null for an open period is what readers of validity columns know, where drivers and BI tools disagree about `infinity`. A plain view lets a consumer read history with one right and takes no lock in an ordinary run. The measurement (section 13) shows what it costs: fast for one key with an index a person may create, as slow as the whole view for one moment, where the same moment asked of the log directly is 2.6 times faster. The README names both as advice.
 
 **Price.** A table whose log is dropped or renamed needs a person to drop or rename the view with it. The view for a moment reads the whole log. A clock set back between two runs of one table would put their rows in the wrong order. A target built before this decision has no `_loaded_at`, and nothing converts it (schema version 3, nothing was published).
 

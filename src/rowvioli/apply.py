@@ -24,16 +24,16 @@ def apply(directory, key_file):
     # a changed target name moves nothing: say so, so that no stale mirror is left behind unknowingly
     old = {(src, tbl): f"{schema}.{name}" for src, tbl, schema, name in target.sql(
         conn, "SELECT source, source_table, target_schema, target_table FROM _rowvioli.tables")}
-    said = []
+    changed = []
     for t in tables:
         was, now = old.get((t["source"], t["source_table"])), f"{t['target_schema']}.{t['target_table']}"
         if was not in (None, now):
-            said.append(f"{t['source']} {t['source_table']}: target name changes from {was} to {now}; the old tables "
-                  f"({was}, its __log and __history) stay where they are")
+            changed.append(f"{t['source']}: {t['source_table']}: target name changes from {was} to {now}; the old "
+                           f"tables ({was}, its __log and __history) stay where they are")
     payload = json.dumps({"sources": sources, "tables": tables, "definition": digest}, default=str)
     try:
         target.transaction(conn, files(__package__).joinpath("sql/apply.sql").read_text(), [payload])
     except adbc.Error as e:  # Postgres names what it refused, for example a time zone it does not know
         raise SystemExit(f"the target refused the definition, nothing was changed: {e}")
-    print(*said, sep="\n", end="\n" if said else "")
+    print(*changed, sep="\n", end="\n" if changed else "")
     print(f"applied {len(sources)} sources with {len(tables)} tables")

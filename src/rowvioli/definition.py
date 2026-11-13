@@ -11,6 +11,8 @@ UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days"}
 # a table may override these; its row carries them with the source's filled in
 TABLE_SETTINGS = {"max_age": str, "log": bool, "max_delete_share": (int, float), "max_seconds": int, "at": list,
                   "timezone": str, "target_schema": str}
+# settings of a table only, not of the source and not a connector option
+TABLE_ONLY = {"key": list, "target_table": str}
 DEFAULTS = {"log": True, "max_delete_share": 0.5, "max_seconds": 3600}
 SOURCE_SETTINGS = {"type": str, "connection": dict, "tables": dict, "parallel": int,
                    **TABLE_SETTINGS}
@@ -42,10 +44,8 @@ def read(directory, env=None, only=None):
                 raise SystemExit(f"{where}: source {name} is defined twice")
             whole[name] = s
             settings(s, SOURCE_SETTINGS, where)
-            if "key" in s:  # rowvioli's name, so not a connector option either (README "Defining a source")
-                raise SystemExit(f"{where}: key belongs to a table, not to the source")
-            if "target_table" in s:  # it names one table, so it cannot be a default for all
-                raise SystemExit(f"{where}: target_table belongs to a table, not to the source")
+            for k in TABLE_ONLY.keys() & s.keys():  # one table's, so no default for all, no connector option either
+                raise SystemExit(f"{where}: {k} belongs to a table, not to the source")
             for required in ("type", "max_age", "connection", "tables"):
                 if required not in s:
                     raise SystemExit(f"{where}: {required} is missing")
@@ -56,7 +56,7 @@ def read(directory, env=None, only=None):
                                               env if only in (None, name) else None)})
             for table, t in s["tables"].items():
                 spot = f"{where}: {table}"
-                settings(t, {**TABLE_SETTINGS, "key": list, "target_table": str}, spot)
+                settings(t, {**TABLE_SETTINGS, **TABLE_ONLY}, spot)
                 for k in (SOURCE_SETTINGS.keys() - TABLE_SETTINGS.keys()) & t.keys():
                     raise SystemExit(f"{spot}: {k} belongs to the source, not to a table")
                 key = t.get("key")
@@ -76,18 +76,23 @@ def read(directory, env=None, only=None):
                                      "and the schema must not be _rowvioli")
                 for suffix in ("", "__log", "__history"):
                     if (schema, target + suffix) in names:
-                        raise SystemExit(f"{path.name}: {names[schema, target + suffix]} and {name}: {table} both become "
-                                         f"{schema}.{target + suffix}; set target_table at one of them")
-                    names[schema, target + suffix] = f"{name}: {table}"
+                        first_path, first = names[schema, target + suffix]
+                        both = (f"{first_path}: {first} and {path.name}: {name}: {table}" if first_path != path.name
+                                else f"{path.name}: {first} and {name}: {table}")
+                        raise SystemExit(f"{both} both become {schema}.{target + suffix}; "
+                                         "set target_table at one of them")
+                    names[schema, target + suffix] = path.name, f"{name}: {table}"
                 # no default zone: 14:00 that silently means UTC is found in production (decision 36)
                 times = {k: t.get(k, s.get(k)) for k in ("at", "timezone")}
                 if times["at"] and not times["timezone"]:
                     raise SystemExit(f"{spot}: at needs a timezone, from the table or the source")
-                tables.append({"source": name, "source_table": table, "target_schema": schema, "target_table": target, "key": key,
+                tables.append({"source": name, "source_table": table, "target_schema": schema,
+                               "target_table": target, "key": key,
                                "max_age": interval(t.get("max_age", s["max_age"]), spot),
                                **{k: t.get(k, s.get(k, DEFAULTS[k])) for k in DEFAULTS},
                                **times,
-                               "options": {k: v for k, v in t.items() if k not in TABLE_SETTINGS and k not in ("key", "target_table")}})
+                               "options": {k: v for k, v in t.items()
+                                           if k not in TABLE_SETTINGS and k not in TABLE_ONLY}})
     # of the text as written: placeholders stay unfilled, so the hash says nothing about a secret
     digest = hashlib.sha256(json.dumps(whole, sort_keys=True, default=str).encode()).hexdigest()
     return sources, tables, digest

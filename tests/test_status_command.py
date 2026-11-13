@@ -24,7 +24,7 @@ def rows(rv, *args):
     r = rv.run("status", *args)
     assert r.returncode == 0, r.stderr
     header, *lines = r.stdout.splitlines()
-    assert header.split() == ["source", "table", "max_age", "age", "due", "status", "reason"]
+    assert header.split() == ["source", "table", "target", "max_age", "age", "due", "status", "reason"]
     return [line.split() for line in lines]
 
 
@@ -36,7 +36,7 @@ def test_one_row_per_table_with_max_age_due_and_status(rv, add):
     got = {r[1]: r for r in rows(rv)}
     assert got["late"][-2:] == ["now", "ok"]  # ok, yet due: nobody took it
     assert "in" in got["fresh"] and got["fresh"][-1] == "ok"  # how the age splits depends on rounding
-    assert got["never"][2:] == ["1h", "now", "new"]  # no age
+    assert got["never"][2:] == ["raw_erp.never", "1h", "now", "new"]  # the target name; no age
 
 
 def test_a_failed_table_shows_its_reason_and_a_dead_run_worker_lost(rv, add):
@@ -51,8 +51,8 @@ def test_durations_use_the_notation_of_the_definition(rv, add):
     add("erp", "t", max_age="2d")
     add("erp", "u", max_age="63m")
     got = {r[1]: r for r in rows(rv)}
-    assert got["t"][2] == "2d"
-    assert got["u"][2:4] == ["1h", "3m"]
+    assert got["t"][2:4] == ["raw_erp.t", "2d"]
+    assert got["u"][3:5] == ["1h", "3m"]
 
 
 def test_names_narrow_the_rows_and_a_disabled_table_is_not_shown(rv, add):

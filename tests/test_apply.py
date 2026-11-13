@@ -37,8 +37,8 @@ def apply(rv, files, env=ENV):
 
 
 def tables(rv):
-    return rv.target("""select t.id, t.source, source_table, target_schema, target_table, key, max_age, log, max_delete_share,
-                               max_seconds, options, t.enabled, loaded_at, attempted_at, attempts, requested_at, reason
+    return rv.target("""select t.id, t.source, source_table, target_schema, target_table, key, max_age, log,
+                               max_delete_share, max_seconds, options, t.enabled, loaded_at, attempted_at, attempts, requested_at, reason
                           from _rowvioli.tables t order by source_table""")
 
 
@@ -101,8 +101,16 @@ def test_apply_fails_when_two_tables_of_a_source_get_the_same_target_table(ready
     twice = ERP + '"sales.CUSTOMERS" = { key = ["id"] }\n'
     r = apply(ready, {"erp.toml": twice})
     assert r.returncode != 0
-    assert "customers" in r.stderr.lower()
+    assert "erp: dbo.Customers" in r.stderr and "erp: sales.CUSTOMERS" in r.stderr and "target_table" in r.stderr
     assert ready.target("select count(*) from _rowvioli.tables") == [(0,)]
+
+
+@pytest.mark.parametrize("other, name", [('"dbo.notes__log" = {}', "dbo.notes__log"),
+                                         ('"dbo.x" = { target_table = "notes__history" }', "dbo.x")])
+def test_apply_fails_when_a_table_takes_the_log_or_history_name_of_another_and_names_both(ready, other, name):
+    r = apply(ready, {"erp.toml": ERP.replace('"dbo.Notes"     = {}', '"dbo.Notes" = {}\n' + other)})
+    assert r.returncode != 0 and "erp: dbo.Notes" in r.stderr and f"erp: {name}" in r.stderr
+    assert "target_table" in r.stderr
 
 
 def test_a_removed_table_is_disabled_and_nothing_is_deleted(ready):
@@ -201,7 +209,8 @@ def test_apply_says_a_changed_target_name_and_nothing_when_nothing_changes(ready
     r = apply(ready, {"erp.toml": ERP.replace('"dbo.Notes"     = {}', '"dbo.Notes" = { target_table = "memos" }')})
     assert r.returncode == 0, r.stderr
     lines = r.stdout.splitlines()
-    assert len(lines) == 2 and "raw_erp.notes" in lines[0] and "raw_erp.memos" in lines[0]
+    assert len(lines) == 2 and "erp: dbo.Notes" in lines[0]
+    assert "raw_erp.notes" in lines[0] and "raw_erp.memos" in lines[0]
     assert "stay where they are" in lines[0]
 
 

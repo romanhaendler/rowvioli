@@ -15,8 +15,8 @@ def erp(rv):
 
 
 def test_a_table_is_loaded_where_the_definition_says_and_the_schema_is_created(erp):
-    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], target_schema = "hr", target_table = "staff" }\n'
-                               '"public.notes" = { target_table = "memos" }\n'))
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], target_schema = "hr",'
+                               ' target_table = "staff" }\n"public.notes" = { target_table = "memos" }\n'))
     code, answer = run(erp)
     assert code == 0, answer
     assert set(answer["tables"]) == {"hr.staff", "raw_erp.memos"}

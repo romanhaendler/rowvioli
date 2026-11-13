@@ -55,6 +55,7 @@ Unchanged from the first round:
 - **A table with a key cannot have a column `_op`**, nor `_run`, `_loaded_at`, `_valid_from` or `_valid_to` with a change log. The diff, the change log and the history view use these names.
 - **Dropping a change log needs `CASCADE`**, or dropping the history view first.
 - **A clock set back between two runs of one table** by more than the time between them would put their rows in the wrong order in the history.
+- **A table that left the definition and the table that took over its name hold different locks** (a lock is the pair of source and table). A run of the first that is still loading while the second runs can meet it on one mirror: a primary-key failure, or a doubled row in the log, at worst.
 - **A change log left under a name the definition no longer has** keeps a history view that nobody updates.
 - **A history view left behind under a name a new change log takes** is replaced by the next run, or the run fails if its columns do not fit.
 - **Tables without a key** are replaced as a whole on every run, have no change log, and bloat until autovacuum has run.

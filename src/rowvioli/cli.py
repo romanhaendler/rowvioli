@@ -65,7 +65,8 @@ def command(a):
         sys.exit(1 if crashed or any(answer["status"] != "ok" for answer in answers.values()) else 0)
 
 
-STATUS = f"""SELECT source, source_table, extract(epoch FROM max_age)::bigint, extract(epoch FROM age)::bigint,
+STATUS = f"""SELECT source, source_table, target_table, extract(epoch FROM max_age)::bigint,
+       extract(epoch FROM age)::bigint,
        CASE WHEN due_at <= now() THEN NULL ELSE ceil(extract(epoch FROM due_at - now()))::bigint END,
        status, reason, rows_written, rows_last_run
   FROM _rowvioli.status
@@ -76,15 +77,17 @@ STATUS = f"""SELECT source, source_table, extract(epoch FROM max_age)::bigint, e
 def print_status(source, table):
     """The status view as an aligned table. It formats; status, due time and progress are the view's."""
     conn = target.connect(versioned=False)
-    lines = [["source", "table", "max_age", "age", "due", "status", "reason"]]
-    for src, name, max_age, age, wait, status, reason, written, last in target.sql(conn, STATUS, [source, table]):
+    lines = [["source", "table", "target", "max_age", "age", "due", "status", "reason"]]
+    for src, name, target_name, max_age, age, wait, status, reason, written, last in target.sql(
+            conn, STATUS, [source, table]):
         if status == "loading":  # progress in place of a reason, none yet: no reason
             reason = "" if written is None else f"{written:,} of about {last:,} rows" if last else f"{written:,} rows"
-        lines.append([src, name, definition.duration(max_age), "" if age is None else definition.duration(age),
+        lines.append([src, name, target_name, definition.duration(max_age),
+                      "" if age is None else definition.duration(age),
                       "now" if wait is None else "in " + definition.duration(wait), status, reason or ""])
-    widths = [max(len(line[i]) for line in lines) for i in range(6)]
+    widths = [max(len(line[i]) for line in lines) for i in range(7)]
     for line in lines:
-        print(("  ".join(c.ljust(w) for c, w in zip(line, widths)) + "  " + line[6]).rstrip())
+        print(("  ".join(c.ljust(w) for c, w in zip(line, widths)) + "  " + line[7]).rstrip())
 
 
 def print_tables(directory, name):

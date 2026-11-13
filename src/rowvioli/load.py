@@ -70,15 +70,15 @@ def load(conn, t):
     rows_read = stage(conn, t)
     staged = sql(conn, COLUMNS, ["pg_temp._stage"])
     mirror = sql(conn, COLUMNS, [t["mirror"]])  # empty before the first run
-    log = sql(conn, COLUMNS, [t["log_table"]])
-    check(conn, t, staged, mirror, log)
+    log_columns = sql(conn, COLUMNS, [t["log_table"]])
+    check(conn, t, staged, mirror, log_columns)
     counts = diff(conn, t, staged, mirror) if t["key"] else None
     if mirror:
         check_delete_share(conn, t, rows_read, counts)
-    return publish(conn, t, staged, mirror, log, rows_read, counts)
+    return publish(conn, t, staged, mirror, log_columns, rows_read, counts)
 
 
-def check(conn, t, staged, mirror, log):
+def check(conn, t, staged, mirror, log_columns):
     """Step 4 (README "Checks before publishing"). A new column passes, publish adds it (decision 17)."""
     types = dict(staged)
     for name, type in mirror:
@@ -87,17 +87,19 @@ def check(conn, t, staged, mirror, log):
         if types[name] != type:
             raise Exception(f"column {name} has changed its type from {type} to {types[name]}")
     key = t["key"] or []
+    drop = (f"drop it with its history view (DROP TABLE {t['log_table']} CASCADE), or rename both"
+            + (" with the mirror" if mirror else ""))
     if mirror:
         primary_key = [k for (k,) in sql(conn, PRIMARY_KEY, [t["mirror"]])]
         if primary_key != key:
-            raise Exception(f"the key {key} differs from the mirror's primary key {primary_key}")
+            raise Exception(f"the key {key} differs from the mirror's primary key {primary_key}"
+                            + (f"; the change log {t['name']}__log exists: {drop}" if log_columns else ""))
     # a change log that exists is complete: a run that would leave it behind its mirror, or lay a new mirror's
     # history over it, fails
     why = ("this run would not write to it (log = false or no key)" if not (key and t["log"])
            else "its mirror is missing" if not mirror else None)
-    if log and why:
-        raise Exception(f"the change log {t['name']}__log exists and {why}: drop it with its history view "
-                        f"(DROP TABLE {t['log_table']} CASCADE), or rename both with the mirror")
+    if log_columns and why:
+        raise Exception(f"the change log {t['name']}__log exists and {why}: {drop}")
     if key:
         # the diff, the change log and the history view carry them beside the table's columns
         for name in ["_op", "_run", "_loaded_at", "_valid_from", "_valid_to"] if t["log"] else ["_op"]:

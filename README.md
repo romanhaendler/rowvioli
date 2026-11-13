@@ -32,11 +32,11 @@ rowvioli status             # whenever you want to look
 
 ```
 $ rowvioli status
-source  table             max_age  age     due        status   reason
-crm     contacts          1d       3h      in 50s     failed   62 % of the rows would be deleted
-erp     public.customers  1h       1h 3m   now        loading  485,000 of about 1,000,000 rows
-erp     public.items      1h       40m     in 20m     ok
-erp     public.orders     5m       2m 14s  in 2m 46s  ok
+source  table             target             max_age  age     due        status   reason
+crm     contacts          raw_crm.contacts   1d       3h      in 50s     failed   62 % of the rows would be deleted
+erp     public.customers  raw_erp.customers  1h       1h 3m   now        loading  485,000 of about 1,000,000 rows
+erp     public.items      raw_erp.items      1h       40m     in 20m     ok
+erp     public.orders     raw_erp.orders     5m       2m 14s  in 2m 46s  ok
 ```
 
 That is the whole usage. `docker compose up` in [examples/quickstart](examples/quickstart) plays it with a source and a target. There is no schedule, no queue and no job. One table in the target is work list, state and monitoring at once.
@@ -301,7 +301,7 @@ A change log that exists is complete, so a run that could not keep it complete f
 
 ### What a person does by hand
 
-Every failure above and every changed name ends in one of two statements, here for `raw_erp.customers`.
+The failures about a change log and a changed name end in one of two kinds of statement, here for `raw_erp.customers`. A changed key needs a third, the drop of the mirror.
 
 **The target name changed** (`apply` said so), and mirror and history should come along. Rename the three before the next run, here to `clients`:
 
@@ -311,6 +311,8 @@ ALTER TABLE raw_erp.customers__log RENAME TO clients__log;
 ALTER VIEW raw_erp.customers__history RENAME TO clients__history;
 ```
 
+A changed `target_schema` moves them instead, here to `hr`, with `ALTER TABLE raw_erp.customers SET SCHEMA hr;`, the same for `customers__log`, and `ALTER VIEW raw_erp.customers__history SET SCHEMA hr;`. Both change: move, then rename.
+
 Left alone, the old three stay where they are, and the next run builds a mirror under the new name with every row as `I`.
 
 **`log = false` was set, the key was taken away, the mirror was dropped or the key changed.** The change log would no longer be complete. Drop it, and its view goes with it:
@@ -319,7 +321,7 @@ Left alone, the old three stay where they are, and the next run builds a mirror 
 DROP TABLE raw_erp.customers__log CASCADE;
 ```
 
-After a changed key the old mirror has to go as well (`DROP TABLE raw_erp.customers`). The next run builds anew and the history begins there. To keep the old history instead, rename mirror, change log and history view as above.
+After a changed key (or a key taken away) the old mirror has to go as well, the third statement: `DROP TABLE raw_erp.customers`. The next run builds anew and the history begins there. To keep the old history instead, rename mirror, change log and history view as above.
 
 ## Comparing in the target
 
@@ -649,7 +651,7 @@ A connector is code the operator trusts. It receives the decrypted connection an
 | `rowvioli list erp` | Prints the tables of a source with their keys, ready to paste into its `tables` block. Reads the definition from `sources/` (or `--definition <dir>`). | definition, environment, connector, source |
 | `rowvioli apply --check sources/` | Reads the definition and checks it. Writes nothing. Meant for a laptop and for the pipeline of a merge request. | definition |
 | `rowvioli apply sources/` | Writes the definition into the target: one row per source and table, connections encrypted. | definition, environment, `worker.pub` (or `--key <file>`), target |
-| `rowvioli status [erp [dbo.Customers]]` | Prints the enabled tables with age, due time, status and reason or progress, from the view `_rowvioli.status`. Names narrow it the way `run` takes them. Exits 0 whenever it could print the state. | target |
+| `rowvioli status [erp [dbo.Customers]]` | Prints the enabled tables with their target name, age, due time, status and reason or progress, from the view `_rowvioli.status`. Names narrow it the way `run` takes them. Exits 0 whenever it could print the state. | target |
 | `rowvioli work --slots 4` | Runs permanently and loads whatever is due, up to four tables at a time. | connectors, private key, target |
 | `rowvioli run` | Loads everything that is due, once, and ends. | connectors, private key, target |
 | `rowvioli run erp` | Requests all tables of `erp` and loads until nothing of `erp` is due. | connectors, private key, target |
@@ -669,7 +671,7 @@ Every command that needs the target finds it in `ROWVIOLI_TARGET_URL`. A worker 
 - **It says a changed name.** For every table that is already in the target and gets another target name, `apply` prints one line, after it has written the definition. A table that was disabled and comes back under another name gets it too:
 
   ```
-  erp dbo.customers: target name changes from raw_erp.customers to raw_erp.clients; the old tables (raw_erp.customers, its __log and __history) stay where they are
+  erp: dbo.customers: target name changes from raw_erp.customers to raw_erp.clients; the old tables (raw_erp.customers, its __log and __history) stay where they are
   ```
 
   Nothing in the target is renamed or dropped ([what a person does by hand](#what-a-person-does-by-hand)).
