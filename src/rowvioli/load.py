@@ -61,6 +61,7 @@ def claim(conn, worker, source, table):
     t["name"] = f"{t['schema']}.{t['table']}"
     t["mirror"] = f"{quote(t['schema'])}.{quote(t['table'])}"
     t["log_table"] = f"{quote(t['schema'])}.{quote(t['table'] + '__log')}"
+    t["history"] = f"{quote(t['schema'])}.{quote(t['table'] + '__history')}"
     return t
 
 
@@ -69,14 +70,15 @@ def load(conn, t):
     rows_read = stage(conn, t)
     staged = sql(conn, COLUMNS, ["pg_temp._stage"])
     mirror = sql(conn, COLUMNS, [t["mirror"]])  # empty before the first run
-    check(conn, t, staged, mirror)
+    log = sql(conn, COLUMNS, [t["log_table"]])
+    check(conn, t, staged, mirror, log)
     counts = diff(conn, t, staged, mirror) if t["key"] else None
     if mirror:
         check_delete_share(conn, t, rows_read, counts)
-    return publish(conn, t, staged, mirror, rows_read, counts)
+    return publish(conn, t, staged, mirror, log, rows_read, counts)
 
 
-def check(conn, t, staged, mirror):
+def check(conn, t, staged, mirror, log):
     """Step 4 (README "Checks before publishing"). A new column passes, publish adds it (decision 17)."""
     types = dict(staged)
     for name, type in mirror:
@@ -89,11 +91,19 @@ def check(conn, t, staged, mirror):
         primary_key = [k for (k,) in sql(conn, PRIMARY_KEY, [t["mirror"]])]
         if primary_key != key:
             raise Exception(f"the key {key} differs from the mirror's primary key {primary_key}")
+    # a change log that exists is complete: a run that would leave it behind its mirror, or lay a new mirror's
+    # history over it, fails
+    why = ("this run would not write to it (log = false or no key)" if not (key and t["log"])
+           else "its mirror is missing" if not mirror else None)
+    if log and why:
+        raise Exception(f"the change log {t['name']}__log exists and {why}: drop it with its history view "
+                        f"(DROP TABLE {t['log_table']} CASCADE), or rename both with the mirror")
     if key:
-        # the diff and the change log carry them beside the table's columns
-        for name in ["_op", "_run"] if t["log"] else ["_op"]:
+        # the diff, the change log and the history view carry them beside the table's columns
+        for name in ["_op", "_run", "_loaded_at", "_valid_from", "_valid_to"] if t["log"] else ["_op"]:
             if name in types:
-                raise Exception(f"column {name} is a name of the change log, so a table with a key cannot have it")
+                raise Exception(f"column {name} is a name of the change log or the history view, so a table with a "
+                                "key cannot have it")
         names = ", ".join(quote(k) for k in key)
         if sql(conn, f"SELECT 1 FROM _stage WHERE {' OR '.join(quote(k) + ' IS NULL' for k in key)} LIMIT 1"):
             raise Exception(f"a key column of ({names}) is null")
@@ -161,8 +171,9 @@ def diff(conn, t, staged, mirror):
     return {"inserted": counts.get("I", 0), "updated": counts.get("U", 0), "deleted": counts.get("D", 0)}
 
 
-def publish(conn, t, staged, mirror, rows_read, counts):
-    """Step 6, one transaction: new columns, change log, mirror, loaded_at, attempts and the run's row."""
+def publish(conn, t, staged, mirror, log, rows_read, counts):
+    """Step 6, one transaction: new columns, mirror, change log and its view, loaded_at, attempts and the run's
+    row."""
     names = ", ".join(quote(c) for c, _ in staged)
     new = not mirror
     if new:
@@ -178,17 +189,11 @@ def publish(conn, t, staged, mirror, rows_read, counts):
     else:
         widen(conn, t["mirror"], staged, mirror)
     if t["key"]:
-        if t["log"]:
-            log = sql(conn, COLUMNS, [t["log_table"]])
-            if log:
-                widen(conn, t["log_table"], staged, log)
-            else:
-                sql(conn, f"CREATE TABLE {t['log_table']} (_run bigint, _op text, LIKE {t['mirror']})")
-            sql(conn, f"INSERT INTO {t['log_table']} (_run, _op, {names}) SELECT $1, _op, {names} FROM _diff",
-                [t["run"]])
         on = " AND ".join(f"d.{quote(k)} = m.{quote(k)}" for k in t["key"])
         sql(conn, f"DELETE FROM {t['mirror']} m USING _diff d WHERE d._op IN ('D', 'U') AND {on}")
         sql(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _diff WHERE _op IN ('I', 'U')")
+        if t["log"]:
+            write_log(conn, t, staged, log, names)
     else:  # without a key: replaced as a whole, no change log
         deleted = rowcount(conn, f"DELETE FROM {t['mirror']}")
         counts = {"inserted": rowcount(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _stage"),
@@ -201,14 +206,44 @@ def publish(conn, t, staged, mirror, rows_read, counts):
     return {"status": "ok", **counts}
 
 
+def write_log(conn, t, staged, log, names):
+    """After the mirror is published, in the same transaction: a log that exists gets the diff, a new one begins
+    with the whole mirror, so that replaying a log from its first row always gives the mirror. The history view is
+    created when missing and replaced when the log got a column; otherwise it is not touched, so takes no lock."""
+    if log:
+        widened = widen(conn, t["log_table"], staged, log)
+        rows = f"SELECT _op, {names} FROM _diff"
+    else:
+        sql(conn, f"CREATE TABLE {t['log_table']} (_run bigint, _op text, _loaded_at timestamptz, LIKE {t['mirror']})")
+        rows = f"SELECT 'I', {names} FROM {t['mirror']}"
+    # now() is the transaction's moment, the one that goes into tables.loaded_at
+    sql(conn, f"INSERT INTO {t['log_table']} (_run, _loaded_at, _op, {names}) SELECT $1, now(), * FROM ({rows}) r",
+        [t["run"]])
+    if log and not widened and sql(conn, "SELECT to_regclass($1) IS NOT NULL", [t["history"]])[0][0]:
+        return
+    columns = ", ".join(quote(c) for c, _ in sql(conn, COLUMNS, [t["log_table"]])
+                        if c not in ("_run", "_op", "_loaded_at"))
+    key = ", ".join(quote(k) for k in t["key"])
+    # _valid_to is the next version's moment, computed before the D rows are left out; the table's columns come
+    # last so that a new one can be appended by replacing the view
+    sql(conn, f"""CREATE OR REPLACE VIEW {t['history']} AS
+        SELECT _valid_from, _valid_to, {columns} FROM (
+            SELECT _op, _loaded_at AS _valid_from,
+                   lead(_loaded_at) OVER (PARTITION BY {key} ORDER BY _loaded_at) AS _valid_to, {columns}
+              FROM {t['log_table']}) h
+         WHERE _op <> 'D'""")
+
+
 def widen(conn, table, staged, existing):
     """Decision 17: adds the source's columns the table lacks. The exclusive lock this takes waits behind a
-    long-reading consumer, so it gives up after lock_timeout and the run fails instead of hanging."""
+    long-reading consumer, so it gives up after lock_timeout and the run fails instead of hanging. Says whether
+    it added one."""
     have = dict(existing)
-    for name, type in staged:
-        if name not in have:
-            sql(conn, "SET LOCAL lock_timeout = '10s'")
-            sql(conn, f"ALTER TABLE {table} ADD COLUMN {quote(name)} {type}")
+    new = [(name, type) for name, type in staged if name not in have]
+    for name, type in new:
+        sql(conn, "SET LOCAL lock_timeout = '10s'")
+        sql(conn, f"ALTER TABLE {table} ADD COLUMN {quote(name)} {type}")
+    return bool(new)
 
 
 # the password of an ODBC connection string: `PWD=secret` or `PWD={se;cret}` with `}}` for a `}`

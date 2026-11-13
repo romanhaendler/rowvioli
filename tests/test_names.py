@@ -53,6 +53,8 @@ def test_a_table_renamed_in_the_source_keeps_its_mirror_under_its_old_target_tab
     code, answer = run(erp)
     assert code == 0, answer
     assert answer["tables"] == {"raw_erp.customers": {"status": "ok", "inserted": 0, "updated": 1, "deleted": 0}}
+    assert erp.target("select city, _valid_to is null from raw_erp.customers__history where customer_no = 1"
+                      " order by _valid_from") == [("Bonn", False), ("Köln", True)]
 
 
 def test_a_different_table_taking_over_a_name_fails_and_the_old_mirror_is_unchanged(erp):
