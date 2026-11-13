@@ -2,7 +2,7 @@
 
 **Blocked by:** 01, 02, 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -19,3 +19,7 @@ Spec stories 36 to 40 and the implementation decisions "Two new decisions" and "
 - [ ] The measure of the spec ("Further Notes"): "a schema belongs to exactly one source" is replaced by "the definition gives no target name twice"; history needs one paragraph, one invariant and one query.
 - [ ] Every failure reason of this spec has its statement in the one place that says what a person does by hand.
 - [ ] Decision 35 is marked as changed; no sentence in README, GLOSSARY or `docs/` still states the old rule, the 58-byte limit, or that the history view is unverified.
+
+## Comments
+
+Resolved on branch `target-names-and-history`, from tnh-04 (4d5266f). Review fixes: dc4cdb4.

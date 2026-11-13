@@ -2,7 +2,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Opus
 
@@ -24,3 +24,7 @@ Not in this ticket: an index, the measurement (03), documents (04).
 - [ ] Tests 10 to 20 of the spec's "What is tested" exist and pass, and the history-view half of test 6.
 - [ ] Tests read the view and the mirror with SQL, never the view's definition text; no simulated clock.
 - [ ] The whole suite passes.
+
+## Comments
+
+Resolved on branch `target-names-and-history`, from tnh-02 (2cc3f94). Review fixes: dc4cdb4.

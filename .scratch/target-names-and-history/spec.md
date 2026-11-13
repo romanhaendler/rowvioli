@@ -1,6 +1,6 @@
 # Target names and history: a table says where it lives, and its change log says when
 
-Status: ready-for-agent
+Status: resolved
 
 ## Problem Statement
 

@@ -2,7 +2,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -18,3 +18,7 @@ Only `bench/` and `docs/measurements.md` are touched. The section ends with a pl
 
 - [ ] Section 13 holds numbers that were really measured, with row counts and the set-up, in the form of the earlier sections.
 - [ ] The measurement's volume is removed afterwards.
+
+## Comments
+
+Resolved on branch `target-names-and-history`, from tnh-03 (ac5aa19). Review fixes: dc4cdb4.
