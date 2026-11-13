@@ -17,7 +17,7 @@ def test_init_twice_leaves_the_same_schema_and_meta(rv):
     second = rv.run("init")
     assert second.returncode == 0, second.stderr
     assert rv.target(SHAPE) == shape
-    assert rv.target("select schema_version, max_running from _rowvioli.meta") == [(2, 20)]
+    assert rv.target("select schema_version, max_running from _rowvioli.meta") == [(3, 20)]
 
 
 def test_init_keeps_what_is_there(rv):
@@ -39,7 +39,7 @@ def test_every_command_using_the_target_refuses_another_schema_version_naming_bo
     shape = rv.target(SHAPE)
     r = rv.run(*command, timeout=20)
     assert r.returncode != 0
-    assert re.search(r"\b99\b", r.stderr) and re.search(r"\b2\b", r.stderr), r.stderr
+    assert re.search(r"\b99\b", r.stderr) and re.search(r"\b3\b", r.stderr), r.stderr
     assert rv.target(SHAPE) == shape
     assert rv.target("select count(*) from _rowvioli.sources") == [(0,)]
 

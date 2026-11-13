@@ -9,11 +9,11 @@ import pytest
 def table(rv):
     """Creates source 'erp' and returns a function that adds a table with the given facts."""
     assert rv.run("init").returncode == 0
-    rv.target("insert into _rowvioli.sources (name, type, target_schema) values ('erp', 'postgres', 'raw_erp')")
+    rv.target("insert into _rowvioli.sources (name, type) values ('erp', 'postgres')")
 
     def add(name="t", max_age="1h", **facts):
-        cols = ", ".join(["source", "source_table", "target_table", "max_age", *facts])
-        vals = ", ".join(["'erp'", "%s", "%s", "%s", *(["%s"] * len(facts))])
+        cols = ", ".join(["source", "source_table", "target_schema", "target_table", "max_age", *facts])
+        vals = ", ".join(["'erp'", "%s", "'raw_erp'", "%s", "%s", *(["%s"] * len(facts))])
         return rv.target(f"insert into _rowvioli.tables ({cols}) values ({vals}) returning id",
                          [name, name, max_age, *facts.values()])[0][0]
     return add

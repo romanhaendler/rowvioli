@@ -4,7 +4,7 @@ from importlib.resources import files
 
 import adbc_driver_postgresql.dbapi as adbc
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # README "Failures": a dead client or network is noticed by Postgres within seconds to a minute. The URL's keepalive
 # is libpq's, so the worker notices a dead server; SESSION is the server's, so Postgres notices a dead worker and

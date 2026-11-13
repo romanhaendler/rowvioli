@@ -10,9 +10,9 @@ from zoneinfo import ZoneInfo
 UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days"}
 # a table may override these; its row carries them with the source's filled in
 TABLE_SETTINGS = {"max_age": str, "log": bool, "max_delete_share": (int, float), "max_seconds": int, "at": list,
-                  "timezone": str}
+                  "timezone": str, "target_schema": str}
 DEFAULTS = {"log": True, "max_delete_share": 0.5, "max_seconds": 3600}
-SOURCE_SETTINGS = {"type": str, "connection": dict, "tables": dict, "target_schema": str, "parallel": int,
+SOURCE_SETTINGS = {"type": str, "connection": dict, "tables": dict, "parallel": int,
                    **TABLE_SETTINGS}
 RANGES = {"parallel": (lambda v: v >= 1, "at least 1"), "max_delete_share": (lambda v: 0 <= v <= 1, "between 0 and 1"),
           "max_seconds": (lambda v: v > 0, "greater than 0")}
@@ -30,7 +30,7 @@ def read(directory, env=None, only=None):
     source's secrets. Returns (sources, tables, hash of the definition)."""
     if not Path(directory).is_dir():
         raise SystemExit(f"{directory} is not a directory")
-    whole, sources, tables, schemas = {}, [], [], {}
+    whole, sources, tables, names = {}, [], [], {}
     for path in sorted(Path(directory).glob("*.toml")):
         try:
             data = tomllib.loads(path.read_text())
@@ -44,47 +44,50 @@ def read(directory, env=None, only=None):
             settings(s, SOURCE_SETTINGS, where)
             if "key" in s:  # rowvioli's name, so not a connector option either (README "Defining a source")
                 raise SystemExit(f"{where}: key belongs to a table, not to the source")
+            if "target_table" in s:  # it names one table, so it cannot be a default for all
+                raise SystemExit(f"{where}: target_table belongs to a table, not to the source")
             for required in ("type", "max_age", "connection", "tables"):
                 if required not in s:
                     raise SystemExit(f"{where}: {required} is missing")
             interval(s["max_age"], where)
-            schema = s.get("target_schema", f"raw_{name}")
-            if len(schema.encode()) > 63:  # Postgres cuts longer names, so two could meet in one schema
-                raise SystemExit(f"{where}: target_schema {schema} is longer than 63 bytes")
-            if schema in schemas:
-                raise SystemExit(f"{where}: target_schema {schema} belongs to source {schemas[schema]} already")
-            schemas[schema] = name
-            sources.append({"name": name, "type": s["type"], "target_schema": schema, "parallel": s.get("parallel", 2),
+            sources.append({"name": name, "type": s["type"], "parallel": s.get("parallel", 2),
                             "options": {k: v for k, v in s.items() if k not in SOURCE_SETTINGS},
                             "connection": fill(s["connection"], f"{where}: connection",
                                               env if only in (None, name) else None)})
-            seen = {}
             for table, t in s["tables"].items():
                 spot = f"{where}: {table}"
-                settings(t, {**TABLE_SETTINGS, "key": list}, spot)
+                settings(t, {**TABLE_SETTINGS, "key": list, "target_table": str}, spot)
                 for k in (SOURCE_SETTINGS.keys() - TABLE_SETTINGS.keys()) & t.keys():
                     raise SystemExit(f"{spot}: {k} belongs to the source, not to a table")
                 key = t.get("key")
                 if key is not None and not (key and all(isinstance(c, str) and c for c in key)):
                     raise SystemExit(f"{spot}: key must be a list of column names")
                 # a file's extension is not a name part: `customers.csv` becomes `customers`
-                target = (Path(table).stem if s["type"] == "file" else table.rsplit(".", 1)[-1]).lower()
-                # Postgres cuts names at 63 bytes, and the change log is the name plus __log
-                if len(target.encode()) > 58:
-                    raise SystemExit(f"{spot}: target table {target} is longer than 58 bytes")
-                for name_ in (target, target + "__log"):
-                    if name_ in seen:
-                        raise SystemExit(f"{spot}: {seen[name_]} and {table} both become target table {name_}")
-                seen[target] = seen[target + "__log"] = table
+                target = t["target_table"] if "target_table" in t else (
+                    Path(table).stem if s["type"] == "file" else table.rsplit(".", 1)[-1]).lower()
+                schema = t.get("target_schema", s.get("target_schema", f"raw_{name}"))
+                # Postgres cuts names at 63 bytes; the change log and the history view add `__log`, `__history`
+                if len(schema.encode()) > 63:
+                    raise SystemExit(f"{spot}: target_schema {schema} is longer than 63 bytes")
+                if len(target.encode()) > 54:
+                    raise SystemExit(f"{spot}: target table {target} is longer than 54 bytes")
+                if not schema or not target or schema == "_rowvioli":
+                    raise SystemExit(f"{spot}: target_schema and target_table must not be empty, "
+                                     "and the schema must not be _rowvioli")
+                for suffix in ("", "__log", "__history"):
+                    if (schema, target + suffix) in names:
+                        raise SystemExit(f"{path.name}: {names[schema, target + suffix]} and {name}: {table} both become "
+                                         f"{schema}.{target + suffix}; set target_table at one of them")
+                    names[schema, target + suffix] = f"{name}: {table}"
                 # no default zone: 14:00 that silently means UTC is found in production (decision 36)
                 times = {k: t.get(k, s.get(k)) for k in ("at", "timezone")}
                 if times["at"] and not times["timezone"]:
                     raise SystemExit(f"{spot}: at needs a timezone, from the table or the source")
-                tables.append({"source": name, "source_table": table, "target_table": target, "key": key,
+                tables.append({"source": name, "source_table": table, "target_schema": schema, "target_table": target, "key": key,
                                "max_age": interval(t.get("max_age", s["max_age"]), spot),
                                **{k: t.get(k, s.get(k, DEFAULTS[k])) for k in DEFAULTS},
                                **times,
-                               "options": {k: v for k, v in t.items() if k not in TABLE_SETTINGS and k != "key"}})
+                               "options": {k: v for k, v in t.items() if k not in TABLE_SETTINGS and k not in ("key", "target_table")}})
     # of the text as written: placeholders stay unfilled, so the hash says nothing about a secret
     digest = hashlib.sha256(json.dumps(whole, sort_keys=True, default=str).encode()).hexdigest()
     return sources, tables, digest

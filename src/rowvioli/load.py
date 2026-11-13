@@ -18,7 +18,7 @@ import pyarrow as pa
 from . import contract, seal, target
 from .target import CLAIMABLE, quote, sql
 
-TABLE = """SELECT t.id, s.name AS source, s.type, s.connection, s.key_id, t.source_table, s.target_schema AS schema,
+TABLE = """SELECT t.id, s.name AS source, s.type, s.connection, s.key_id, t.source_table, t.target_schema AS schema,
                   t.target_table AS "table", t.key, t.log, t.max_seconds, (s.options || t.options)::text AS options,
                   t.max_delete_share::float8 AS max_delete_share
              FROM _rowvioli.tables t JOIN _rowvioli.sources s ON s.name = t.source WHERE t.id = $1"""

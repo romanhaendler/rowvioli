@@ -37,7 +37,7 @@ def apply(rv, files, env=ENV):
 
 
 def tables(rv):
-    return rv.target("""select t.id, t.source, source_table, target_table, key, max_age, log, max_delete_share,
+    return rv.target("""select t.id, t.source, source_table, target_schema, target_table, key, max_age, log, max_delete_share,
                                max_seconds, options, t.enabled, loaded_at, attempted_at, attempts, requested_at, reason
                           from _rowvioli.tables t order by source_table""")
 
@@ -45,8 +45,9 @@ def tables(rv):
 def test_apply_writes_sources_and_tables_and_new_tables_are_due_at_once(ready):
     r = apply(ready, {"erp.toml": ERP})
     assert r.returncode == 0, r.stderr
-    assert ready.target("select name, type, target_schema, parallel, enabled from _rowvioli.sources") == [
-        ("erp", "postgres", "raw_erp", 4, True)]
+    assert ready.target("select name, type, parallel, enabled from _rowvioli.sources") == [
+        ("erp", "postgres", 4, True)]
+    assert ready.target("select distinct target_schema from _rowvioli.tables") == [("raw_erp",)]
     assert ready.target("select s.source_table, s.target_table, t.key, s.max_age, s.status, s.due_at <= now() "
                         "from _rowvioli.status s join _rowvioli.tables t using (id) order by 1") == [
         ("dbo.Customers", "raw_erp.customers", ["customer_no"], timedelta(hours=1), "new", True),
@@ -58,7 +59,7 @@ def test_apply_twice_gives_the_same_rows_and_keeps_what_the_workers_experienced(
     assert apply(ready, {"erp.toml": ERP}).returncode == 0
     ready.target("""update _rowvioli.tables set loaded_at = '2026-01-01 00:00Z', attempted_at = '2026-01-01 00:05Z',
                            attempts = 2, requested_at = '2026-01-01 00:06Z', reason = 'zero rows'""")
-    sources = "select id, name, type, target_schema, parallel, options, key_id, enabled from _rowvioli.sources"
+    sources = "select id, name, type, parallel, options, key_id, enabled from _rowvioli.sources"
     before = tables(ready), ready.target(sources)
     r = apply(ready, {"erp.toml": ERP})
     assert r.returncode == 0, r.stderr
@@ -168,23 +169,49 @@ def test_apply_against_a_target_without_init_says_to_run_init_first(rv):
     assert rv.target("select count(*) from pg_namespace where nspname = '_rowvioli'") == [(0,)]
 
 
-def test_apply_fails_when_two_sources_share_a_target_schema(ready):
+def test_two_sources_may_share_a_target_schema_when_no_table_name_meets(ready):
     crm = CRM.replace('max_age = "1d"', 'max_age = "1d"\ntarget_schema = "raw_erp"')
     r = apply(ready, {"erp.toml": ERP, "crm.toml": crm})
-    assert r.returncode != 0 and "raw_erp" in r.stderr
+    assert r.returncode == 0, r.stderr
+    assert ready.target("select distinct target_schema from _rowvioli.tables") == [("raw_erp",)]
+
+
+def test_apply_fails_when_two_sources_get_the_same_target_name_and_names_both_and_the_way_out(ready):
+    crm = CRM.replace('max_age = "1d"', 'max_age = "1d"\ntarget_schema = "raw_erp"').replace(
+        "public.contacts", "dbo.Customers")
+    r = apply(ready, {"erp.toml": ERP, "crm.toml": crm})
+    assert r.returncode != 0 and "erp: dbo.Customers" in r.stderr and "crm: dbo.Customers" in r.stderr
+    assert "target_table" in r.stderr
     assert ready.target("select count(*) from _rowvioli.sources") == [(0,)]
 
 
-def test_apply_fails_when_a_target_schema_belongs_to_another_source_in_the_target_also_a_disabled_one(ready):
+def test_a_table_that_left_the_definition_holds_no_name(ready):
     assert apply(ready, {"erp.toml": ERP, "crm.toml": CRM}).returncode == 0
     (ready.dir / "sources" / "crm.toml").unlink()
-    assert apply(ready, {"erp.toml": ERP}).returncode == 0  # crm is disabled now, raw_crm is still its schema
-    before = everything(ready)
+    assert apply(ready, {"erp.toml": ERP}).returncode == 0  # crm is disabled now, raw_crm is free
     sales = CRM.replace("[crm", "[sales").replace('max_age = "1d"', 'max_age = "1d"\ntarget_schema = "raw_crm"')
-    r = apply(ready, {"sales.toml": sales})
-    assert r.returncode != 0 and "raw_crm" in r.stderr and "crm" in r.stderr
-    assert everything(ready) == before
-    assert check(ready, {"sales.toml": sales}).returncode == 0  # --check looks only at the definition
+    assert apply(ready, {"erp.toml": ERP, "sales.toml": sales}).returncode == 0
+    assert check(ready, {"erp.toml": ERP, "sales.toml": sales}).returncode == 0
+
+
+def test_apply_says_a_changed_target_name_and_nothing_when_nothing_changes(ready):
+    assert apply(ready, {"erp.toml": ERP}).stdout == "applied 1 sources with 3 tables\n"
+    again = apply(ready, {"erp.toml": ERP})
+    assert again.stdout == "applied 1 sources with 3 tables\n"
+    r = apply(ready, {"erp.toml": ERP.replace('"dbo.Notes"     = {}', '"dbo.Notes" = { target_table = "memos" }')})
+    assert r.returncode == 0, r.stderr
+    lines = r.stdout.splitlines()
+    assert len(lines) == 2 and "raw_erp.notes" in lines[0] and "raw_erp.memos" in lines[0]
+    assert "stay where they are" in lines[0]
+
+
+def test_target_table_and_target_schema_at_a_table_are_stored(ready):
+    tables_ = ERP.replace('"dbo.Notes"     = {}', '"dbo.Notes" = { target_table = "memos", target_schema = "raw_x" }')
+    assert apply(ready, {"erp.toml": tables_}).returncode == 0
+    assert ready.target("select target_schema, target_table from _rowvioli.tables where source_table = 'dbo.Notes'"
+                        ) == [("raw_x", "memos")]
+    assert ready.target("select target_table from _rowvioli.status where source_table = 'dbo.Notes'") == [
+        ("raw_x.memos",)]
 
 
 def test_meta_holds_the_hash_of_the_definition_and_a_changed_definition_changes_it(ready):
@@ -296,9 +323,17 @@ def test_check_passes_load_times_a_time_zone_without_them_and_a_source_whose_tab
     ('"dbo.Notes"     = {}', '"dbo.Notes" = { parallel = 1 }', "dbo.Notes: parallel belongs to the source"),
     ('"dbo.Notes"     = {}', '"dbo.Notes" = {}\n"sales.NOTES" = {}', "notes"),  # duplicate target table
     ('"dbo.Notes"     = {}', '"dbo.Notes" = {}\n"dbo.notes__log" = {}', "notes__log"),  # the change log of another
-    ('"dbo.Notes"     = {}', f'"dbo.{"n" * 59}" = {{}}', "longer than 58 bytes"),      # Postgres would cut it
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = {}\n"dbo.x" = { target_table = "notes__history" }', "notes__history"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = {}\n"sales.NOTES" = { target_table = "notes" }', "target_table"),
+    ('"dbo.Notes"     = {}', f'"dbo.{"n" * 55}" = {{}}', "longer than 54 bytes"),      # Postgres would cut it
+    ('"dbo.Notes"     = {}', f'"dbo.Notes" = {{ target_table = "{"n" * 55}" }}', "longer than 54 bytes"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { target_table = "" }', "empty"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { target_schema = "" }', "empty"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { target_schema = "_rowvioli" }', "_rowvioli"),
+    ("parallel = 4", 'parallel = 4\ntarget_schema = "_rowvioli"', "_rowvioli"),
+    ("parallel = 4", 'parallel = 4\ntarget_table = "x"', "erp: target_table belongs to a table"),
+    ('"dbo.Notes"     = {}', f'"dbo.Notes" = {{ target_schema = "{"s" * 64}" }}', "longer than 63 bytes"),
     ("parallel = 4", f'parallel = 4\ntarget_schema = "{"s" * 64}"', "longer than 63 bytes"),
-    ("parallel = 4", 'parallel = 4\ntarget_schema = "raw_crm"', "raw_crm"),     # shared target schema
     ("$ERP_PASSWORD", "$erp_password", "$"),                                    # malformed placeholder
     ("$ERP_PASSWORD", "pa$", "$"),
     ('1/erp"', '1/erp"\nssl = { cert = ["pa$"] }', "connection.ssl"),           # also nested in the connection

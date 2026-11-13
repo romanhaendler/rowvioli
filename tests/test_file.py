@@ -129,4 +129,4 @@ path = "{files.dir / 'files'}"
 """})
     r = files.run("apply", "sources")
     assert r.returncode == 1
-    assert "both become target table customers" in r.stderr
+    assert "both become raw_files.customers" in r.stderr

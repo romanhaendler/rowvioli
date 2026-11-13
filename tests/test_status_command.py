@@ -10,14 +10,13 @@ def add(rv):
     """Creates sources 'erp' and 'crm'; returns a function that adds a table with the given facts."""
     assert rv.run("init").returncode == 0
     for s in ("erp", "crm"):
-        rv.target("insert into _rowvioli.sources (name, type, target_schema) values (%s, 'postgres', %s)",
-                  [s, "raw_" + s])
+        rv.target("insert into _rowvioli.sources (name, type) values (%s, 'postgres')", [s])
 
     def add(source, name, max_age="1h", **facts):
-        cols = ", ".join(["source", "source_table", "target_table", "max_age", *facts])
-        vals = ", ".join(["%s"] * (4 + len(facts)))
+        cols = ", ".join(["source", "source_table", "target_schema", "target_table", "max_age", *facts])
+        vals = ", ".join(["%s"] * (5 + len(facts)))
         rv.target(f"insert into _rowvioli.tables ({cols}) values ({vals})",
-                  [source, name, name, max_age, *facts.values()])
+                  [source, name, "raw_" + source, name, max_age, *facts.values()])
     return add
 
 
