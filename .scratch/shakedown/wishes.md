@@ -1,6 +1,6 @@
 # Shakedown 2026-11-15: wishes
 
-Status: needs-triage
+Status: needs-triage (taken up in `spec.md`)
 
 | Wish | Task / Workaround / Elsewhere | Status | From |
 |---|---|---|---|

@@ -1,6 +1,6 @@
 # Shakedown 2026-11-15: security
 
-Status: needs-triage
+Status: needs-triage (taken up in `spec.md`)
 
 From P18. Set-up: wheel 0.2.0, Postgres 16. Not covered: ODBC, TLS servers, a CVE scan, key rotation.
 
