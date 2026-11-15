@@ -12,6 +12,10 @@ The five default labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready
 
 Single-context: `GLOSSARY.md` at the root, decisions in `docs/decisions.md`. See `docs/agents/domain.md`.
 
+### Shakedown
+
+Before a release: the built wheel in hostile set-ups and in the hands of personas. See `docs/agents/shakedown/README.md`.
+
 ## Choosing the model
 
 Before implementing anything, decide which model the work needs, and take the smallest that fits.
