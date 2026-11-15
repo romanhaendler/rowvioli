@@ -139,8 +139,8 @@ def stage(conn, t):
         raise Exception("the source delivered zero rows")
     # json has no equality, so the comparison could not run; the driver writes Arrow's json only as json
     jsonb = {"json": "jsonb", "json[]": "jsonb[]"}
-    to_jsonb = [f"ALTER {quote(n)} TYPE {jsonb[t]} USING {quote(n)}::{jsonb[t]}"
-                for n, t in sql(conn, COLUMNS, ["pg_temp._stage"]) if t in jsonb]
+    to_jsonb = [f"ALTER {quote(n)} TYPE {jsonb[type]} USING {quote(n)}::{jsonb[type]}"
+                for n, type in sql(conn, COLUMNS, ["pg_temp._stage"]) if type in jsonb]
     if to_jsonb:
         sql(conn, "ALTER TABLE _stage " + ", ".join(to_jsonb))
     return rows_read
