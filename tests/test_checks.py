@@ -199,3 +199,11 @@ def test_a_password_with_at_and_percent_written_plainly_loads_and_leaks_nowhere_
     assert "password authentication failed" in reason
     for part in (plain, "Sesam", "Torweg", "zz-0815", "Sesam%40Torweg%25zz-0815"):
         assert leaks(secret, part, *out) == [], part
+
+
+def test_a_new_empty_source_table_is_mirrored_as_an_empty_table(erp):
+    erp.source("create table fresh (id int primary key, note text)")
+    apply(erp, definition(erp, '"public.fresh" = { key = ["id"] }\n'))
+    code, answer = run(erp)
+    assert code == 0, answer
+    assert erp.target("select count(*) from raw_erp.fresh") == [(0,)]

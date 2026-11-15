@@ -25,7 +25,7 @@ def read(connection, table, options):
     if not file.is_file():
         raise Exception(f"{table}: no such file in {connection['path']}")
     options = dict(options)
-    columns = options.pop("columns", {})
+    columns = dict(options.pop("columns", {}))  # pairs, as definition.ordered stores them
     if reader != "read_parquet":
         options["all_varchar"] = True
     for name in options:

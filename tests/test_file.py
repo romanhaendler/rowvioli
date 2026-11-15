@@ -142,3 +142,10 @@ def test_a_table_outside_the_connections_path_fails_naming_the_table(files, name
     reason = answer["raw_files.x"]["reason"]
     assert name.rsplit("/", 1)[-1] in reason and str(files.dir) not in reason  # a reason holds no absolute path
     assert files.target("select count(*) from information_schema.tables where table_name = 'x'") == [(0,)]
+
+
+def test_a_csv_with_only_a_header_is_mirrored_as_an_empty_table(files):
+    (files.dir / "files" / "empty.csv").write_text("id;name\n")
+    code, answer = load(files, '"empty.csv" = { key = ["id"], sep = ";" }\n')
+    assert code == 0, answer
+    assert files.target("select count(*) from raw_files.empty") == [(0,)]

@@ -55,7 +55,7 @@ def read(directory, env=None, only=None):
                     raise SystemExit(f"{where}: {required} is missing")
             interval(s["max_age"], where)
             sources.append({"name": name, "type": s["type"], "parallel": s.get("parallel", 2),
-                            "options": {k: v for k, v in s.items() if k not in SOURCE_SETTINGS},
+                            "options": ordered({k: v for k, v in s.items() if k not in SOURCE_SETTINGS}),
                             "connection": fill(s["connection"], f"{where}: connection",
                                               env if only in (None, name) else None)})
             for table, t in s["tables"].items():
@@ -98,11 +98,16 @@ def read(directory, env=None, only=None):
                                "max_age": interval(t.get("max_age", s["max_age"]), spot),
                                **{k: t.get(k, s.get(k, DEFAULTS[k])) for k in DEFAULTS},
                                **times,
-                               "options": {k: v for k, v in t.items()
-                                           if k not in TABLE_SETTINGS and k not in TABLE_ONLY}})
+                               "options": ordered({k: v for k, v in t.items()
+                                                   if k not in TABLE_SETTINGS and k not in TABLE_ONLY})})
     # of the text as written: placeholders stay unfilled, so the hash says nothing about a secret
     digest = hashlib.sha256(json.dumps(whole, sort_keys=True, default=str).encode()).hexdigest()
     return sources, tables, digest
+
+
+def ordered(options):
+    """jsonb forgets the order of a table's keys, so `columns` is stored as pairs (the REST mirror follows its order)."""
+    return {k: list(v.items()) if k == "columns" and isinstance(v, dict) else v for k, v in options.items()}
 
 
 def settings(block, known, where):
