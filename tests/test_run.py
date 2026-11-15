@@ -1,6 +1,7 @@
 """`rowvioli run`: one table from the source to its mirror (spec tests 4 rest, 5, 6, 7, 8, 21)."""
 import json
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
 
@@ -119,6 +120,88 @@ def test_a_numeric_column_arrives_as_numeric_with_equal_values(erp):
     # a second run with unchanged numbers finds no difference
     assert run(erp, "erp")[1]["tables"]["raw_erp.prices"] == {"status": "ok", "inserted": 0, "updated": 0,
                                                               "deleted": 0}
+
+
+def column_types(rv, table):
+    return rv.target("""select attname, format_type(atttypid, atttypmod) from pg_attribute
+                         where attrelid = %s::regclass and attnum > 0 order by attnum""", [table])
+
+
+FAITHFUL = {"b": "bytea", "u": "uuid", "ts": "timestamp without time zone", "tz": "timestamp with time zone",
+            "d": "date", "t": "time without time zone", "i": "interval", "f": "double precision",
+            "ints": "integer[]", "texts": "text[]", "uuids": "uuid[]", "tzs": "timestamp with time zone[]"}
+
+
+def test_types_the_driver_carries_arrive_unchanged(erp):
+    erp.source("create table plain (id int primary key, "
+               + ", ".join(f"{c} {t}" for c, t in FAITHFUL.items()) + ")")
+    erp.source(r"""insert into plain values (1, '\x00ff', gen_random_uuid(), '0001-01-01 12:00',
+                   '2020-01-01 12:00+14', '2020-02-29', '23:59:59.999999', '1 mon 2 days 03:04:05', '-Infinity',
+                   '{1,null}', '{a,"b c"}', array[gen_random_uuid()], '{2020-01-01 00:00+00}'),
+                   (2, null, null, null, null, null, null, null, null, null, null, null, null)""")
+    apply(erp, definition(erp, '"public.plain" = { key = ["id"] }\n'))
+    ok(erp)
+    assert column_types(erp, "raw_erp.plain") == [("id", "integer"), *FAITHFUL.items()]
+    assert rows(erp.target, "select * from raw_erp.plain") == rows(erp.source, "select * from plain")
+    assert run(erp, "erp")[1]["tables"]["raw_erp.plain"] == {"status": "ok", "inserted": 0, "updated": 0,
+                                                             "deleted": 0}
+
+
+def test_json_and_jsonb_arrive_as_jsonb_and_load_on_every_run(erp):
+    erp.source("create table docs (id int primary key, j json, b jsonb, bs jsonb[])")
+    erp.source("""insert into docs values (1, '{"a": 1}', '{"b": [1, 2]}', array['{}'::jsonb]), (2, null, null, null)""")
+    apply(erp, definition(erp, '"public.docs" = { key = ["id"] }\n'))
+    ok(erp)
+    assert column_types(erp, "raw_erp.docs") == [("id", "integer"), ("j", "jsonb"), ("b", "jsonb"),
+                                                ("bs", "jsonb[]")]
+    erp.source("""update docs set b = '{"b": 3}' where id = 1""")
+    assert run(erp, "erp")[1]["tables"]["raw_erp.docs"] == {"status": "ok", "inserted": 0, "updated": 1,
+                                                            "deleted": 0}
+    assert rows(erp.target, "select id, j::text, b::text, bs::text from raw_erp.docs") == rows(
+        erp.source, "select id, j::jsonb::text, b::text, bs::text from docs")
+
+
+TEXT_TYPES = {"ip": "inet", "x": "xml", "t": "timetz", "r": "int4range", "bits": "bit(3)", "p": "point",
+              "v": "tsvector", "ips": "inet[]"}
+
+
+def test_types_the_driver_would_deliver_as_bytes_arrive_as_text_and_load_on_every_run(erp):
+    erp.source("create table odd (id int primary key, "
+               + ", ".join(f"{c} {t}" for c, t in TEXT_TYPES.items()) + ")")
+    erp.source("""insert into odd values (1, '10.0.0.1/8', '<a>b</a>', '12:00+02', '[1,5)', B'101', '(1,2)',
+                  'a fat cat', '{10.0.0.1,::1}'), (2, null, null, null, null, null, null, null, null)""")
+    apply(erp, definition(erp, '"public.odd" = { key = ["id"] }\n'))
+    ok(erp)
+    assert column_types(erp, "raw_erp.odd") == [("id", "integer")] + [
+        (c, "text") for c in TEXT_TYPES]
+    erp.source("update odd set ip = '10.0.0.2' where id = 1")
+    assert run(erp, "erp")[1]["tables"]["raw_erp.odd"] == {"status": "ok", "inserted": 0, "updated": 1,
+                                                           "deleted": 0}
+    cols = ", ".join(f"{c}::text" for c in TEXT_TYPES)
+    assert rows(erp.target, f"select id, {cols} from raw_erp.odd") == rows(erp.source, f"select id, {cols} from odd")
+
+
+def test_money_arrives_as_numeric_with_its_amount_and_loads_on_every_run(erp):
+    erp.source("create table fees (id int primary key, m money, ms money[])")
+    erp.source("insert into fees values (1, '12.50', '{1.05,-3}'), (2, null, null)")
+    apply(erp, definition(erp, '"public.fees" = { key = ["id"] }\n'))
+    ok(erp)
+    assert column_types(erp, "raw_erp.fees") == [("id", "integer"), ("m", "numeric"), ("ms", "text[]")]
+    assert rows(erp.target, "select id, m, ms::numeric[] from raw_erp.fees") == [
+        (1, Decimal("12.50"), [Decimal("1.05"), Decimal("-3.00")]), (2, None, None)]
+    assert run(erp, "erp")[1]["tables"]["raw_erp.fees"] == {"status": "ok", "inserted": 0, "updated": 0,
+                                                            "deleted": 0}
+
+
+def test_a_mirror_with_a_json_column_from_before_fails_naming_the_column_and_stays(erp):
+    erp.source("""create table docs (id int primary key, j json); insert into docs values (1, '{"a": 1}')""")
+    apply(erp, definition(erp, '"public.docs" = { key = ["id"] }\n'))
+    ok(erp)
+    erp.target("alter table raw_erp.docs alter j type json")  # as the wheel 0.2.0 left it
+    assert run(erp, "erp")[0] == 1
+    assert erp.target("select reason from _rowvioli.status") == [
+        ("column j has changed its type from json to jsonb",)]
+    assert erp.target("select j::text from raw_erp.docs") == [('{"a": 1}',)]
 
 
 def test_run_exits_1_when_a_table_fails_and_names_every_table_it_touched(erp):

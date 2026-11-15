@@ -139,6 +139,12 @@ def stage(conn, t):
     if rows_read == 0 and sql(conn, "SELECT to_regclass($1)", [t["mirror"]])[0][0] and \
             sql(conn, f"SELECT 1 FROM {t['mirror']} LIMIT 1"):
         raise Exception("the source delivered zero rows")
+    # json has no equality, so the comparison could not run; the driver writes Arrow's json only as json
+    jsonb = {"json": "jsonb", "json[]": "jsonb[]"}
+    to_jsonb = [f"ALTER {quote(n)} TYPE {jsonb[type]} USING {quote(n)}::{jsonb[type]}"
+                for n, type in sql(conn, COLUMNS, ["pg_temp._stage"]) if type in jsonb]
+    if to_jsonb:
+        sql(conn, "ALTER TABLE _stage " + ", ".join(to_jsonb))
     return rows_read
 
 
