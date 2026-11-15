@@ -104,8 +104,9 @@ def check(conn, t, staged, mirror, log_columns):
         # the diff, the change log and the history view carry them beside the table's columns
         for name in ["_op", "_run", "_loaded_at", "_valid_from", "_valid_to"] if t["log"] else ["_op"]:
             if name in types:
+                way = "; log = false frees it" if name != "_op" else "; _op cannot be freed"
                 raise Exception(f"column {name} is a name of the change log or the history view, so a table with a "
-                                "key cannot have it")
+                                f"key cannot have it{way}")
         names = ", ".join(quote(k) for k in key)
         if sql(conn, f"SELECT 1 FROM _stage WHERE {' OR '.join(quote(k) + ' IS NULL' for k in key)} LIMIT 1"):
             raise Exception(f"a key column of ({names}) is null")
