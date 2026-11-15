@@ -2,7 +2,7 @@
 
 **Blocked by:** 01, 02, 03, 04, 05
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -24,3 +24,5 @@ Spec stories 10, 40–49 and "Documents and decisions". Documents only. Every ex
 - [ ] `test_guide.py` and the package test stay green.
 
 ## Comments
+
+Resolved on branch `shakedown-fixes`, from sd-06 (6c2df41). Review fixes: e97674d.

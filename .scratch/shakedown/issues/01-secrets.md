@@ -2,7 +2,7 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -26,3 +26,5 @@ Spec stories 1–9 and the implementation decisions under "Secrets" (TLS in the 
 - [ ] A target error shows user and host, not the password.
 
 ## Comments
+
+Resolved on branch `shakedown-fixes`, from sd-01 (4ff8649). Review fixes: e97674d.

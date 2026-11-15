@@ -2,7 +2,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -25,3 +25,5 @@ Spec stories 15–19, 39 and the decisions under "What arrives" for REST and zer
 - [ ] A REST answer slower than the old timeout but within `max_seconds` loads.
 
 ## Comments
+
+Resolved on branch `shakedown-fixes`, from sd-03 (c75d3ab, 1a72fc4). Review fixes: e97674d.

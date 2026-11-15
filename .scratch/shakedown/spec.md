@@ -1,6 +1,6 @@
 # After the shakedown: a run is right or fails, and says why where the mistake was made
 
-Status: ready-for-agent
+Status: resolved
 
 Findings: `.scratch/shakedown/` (run of 2026-11-15, wheel 0.2.0). Every finding there is taken up below, as a
 change or under "Out of Scope" with its reason.

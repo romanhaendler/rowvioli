@@ -2,7 +2,7 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Opus
 
@@ -23,3 +23,5 @@ Spec stories 11–14 and the decision "The postgres connector chooses per column
 - [ ] `docs/open-points.md`: "Column types without equality" loses `json`; known limit for multi-dimensional arrays.
 
 ## Comments
+
+Resolved on branch `shakedown-fixes`, from sd-02 (66c8de2). Review fixes: e97674d.

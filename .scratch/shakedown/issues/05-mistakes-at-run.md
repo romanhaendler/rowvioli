@@ -2,7 +2,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -26,3 +26,5 @@ Spec stories 27–32, 35–38 and the decisions under "Mistakes named" that conc
 - [ ] Each bullet has a test asserting what a person sees (exit code, stderr line, status reason).
 
 ## Comments
+
+Resolved on branch `shakedown-fixes`, from sd-05 (cb66297). Review fixes: e97674d.

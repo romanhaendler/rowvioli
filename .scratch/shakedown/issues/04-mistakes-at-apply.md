@@ -2,7 +2,7 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -25,3 +25,5 @@ Spec stories 20–26, 33, 34 and the decisions on settings typos, the empty dire
 - [ ] `apply sources/` from the parent finds `worker.pub` there.
 
 ## Comments
+
+Resolved on branch `shakedown-fixes`, from sd-04 (a2d55fd). Review fixes: e97674d.
