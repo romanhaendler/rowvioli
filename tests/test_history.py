@@ -135,7 +135,9 @@ def test_a_mirror_dropped_without_its_log_fails_the_next_run_until_the_log_is_dr
 @pytest.mark.parametrize("name", ["_loaded_at", "_valid_from", "_valid_to"])
 def test_a_source_column_with_a_name_of_the_log_or_the_view_fails_the_run(erp, name):
     erp.source(f"alter table customers add column {name} text")
-    assert f"column {name} is a name of the change log or the history view" in failed(erp)
+    reason = failed(erp)
+    assert f"column {name} is a name of the change log or the history view" in reason
+    assert "log = false frees it" in reason
 
 
 def test_a_key_taken_away_fails_naming_the_log_until_log_view_and_mirror_are_dropped(erp):
@@ -147,3 +149,8 @@ def test_a_key_taken_away_fails_naming_the_log_until_log_view_and_mirror_are_dro
     erp.target("drop table raw_erp.customers__log cascade")
     erp.target("drop table raw_erp.customers")
     again(erp)
+
+
+def test_the_name_op_is_said_not_to_be_free_to_take(erp):
+    erp.source("alter table customers add column _op text")
+    assert "_op cannot be freed" in failed(erp)

@@ -33,7 +33,10 @@ def read(directory, env=None, only=None):
     if not Path(directory).is_dir():
         raise SystemExit(f"{directory} is not a directory")
     whole, sources, tables, names = {}, [], [], {}
-    for path in sorted(Path(directory).glob("*.toml")):
+    files = sorted(Path(directory).glob("*.toml"))
+    if not files:
+        raise SystemExit(f"{directory} holds no source files (*.toml); applying it would disable every table")
+    for path in files:
         try:
             data = tomllib.loads(path.read_text())
         except tomllib.TOMLDecodeError as e:
@@ -44,6 +47,7 @@ def read(directory, env=None, only=None):
                 raise SystemExit(f"{where}: source {name} is defined twice")
             whole[name] = s
             settings(s, SOURCE_SETTINGS, where)
+            typos(s, where)
             for k in TABLE_ONLY.keys() & s.keys():  # one table's, so no default for all, no connector option either
                 raise SystemExit(f"{where}: {k} belongs to a table, not to the source")
             for required in ("type", "max_age", "connection", "tables"):
@@ -57,6 +61,7 @@ def read(directory, env=None, only=None):
             for table, t in s["tables"].items():
                 spot = f"{where}: {table}"
                 settings(t, {**TABLE_SETTINGS, **TABLE_ONLY}, spot)
+                typos(t, spot)
                 for k in (SOURCE_SETTINGS.keys() - TABLE_SETTINGS.keys()) & t.keys():
                     raise SystemExit(f"{spot}: {k} belongs to the source, not to a table")
                 key = t.get("key")
@@ -116,6 +121,27 @@ def settings(block, known, where):
             ZoneInfo(block["timezone"])
         except (KeyError, ValueError, OSError):  # not found, not a zone's name, a directory
             raise SystemExit(f"{where}: timezone {block['timezone']!r} is not a time zone")
+
+
+def edits(a, b):
+    """Edit distance of two words (insert, delete, replace)."""
+    row = list(range(len(b) + 1))
+    for i, x in enumerate(a, 1):
+        prev, row[0] = row[0], i
+        for j, y in enumerate(b, 1):
+            prev, row[j] = row[j], min(row[j] + 1, row[j - 1] + 1, prev + (x != y))
+    return row[-1]
+
+
+def typos(block, where):
+    """A key that is no setting but a typo of one would silently go to the connector as an option. Short words
+    are left alone (`sep` is one edit from nothing but two from `key`): shortcut: one edit under 6 letters."""
+    known = SOURCE_SETTINGS.keys() | TABLE_ONLY.keys()
+    for k in block.keys() - known:
+        for setting in known:
+            if len(k) >= 4 and edits(k, setting) <= (2 if len(setting) >= 6 else 1):
+                raise SystemExit(f"{where}: {k} is not a setting; did you mean {setting}? "
+                                 "(other keys go to the connector as options)")
 
 
 def interval(value, where):
