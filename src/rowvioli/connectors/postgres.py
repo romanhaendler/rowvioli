@@ -8,7 +8,10 @@ from ..target import quote
 def read(connection, table, options):
     conn = adbc.connect(connection["url"])
     cur = conn.cursor()
-    cur.execute("SELECT * FROM " + ".".join(quote(p) for p in table.split(".")))
+    name = ".".join(quote(p) for p in table.split("."))
+    # the schema without running the query; each column is read as the type that arrives faithfully
+    columns = ", ".join(_read_as(f) for f in cur.adbc_execute_schema("SELECT * FROM " + name))
+    cur.execute(f"SELECT {columns} FROM {name}")
     reader = cur.fetch_record_batch()
     schema = pa.schema([pa.field(f.name, _decimal(f)) if _is_numeric(f) else f for f in reader.schema])
 
@@ -36,6 +39,19 @@ def tables(connection):
                AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\_%'
              ORDER BY 1""")
         return dict(cur.fetchall())
+
+
+def _read_as(field):
+    """The column in the select list. `money` arrives as cents in an integer, so it is read as `numeric`. A type
+    the driver cannot name arrives as its wire bytes (Arrow's opaque over binary), so it is read as text, an
+    array of it too. Every other type is read as it is (measured in tests/test_run.py)."""
+    column, type = quote(field.name), (field.metadata or {}).get(b"POSTGRESQL:type")
+    if type in (b"money", b"_money"):
+        return f"{column}::numeric{'[]' if type == b'_money' else ''} AS {column}"
+    item = field.type.value_type if pa.types.is_list(field.type) else field.type
+    if isinstance(item, pa.OpaqueType) and pa.types.is_binary(item.storage_type):
+        return f"{column}::text AS {column}"
+    return column
 
 
 def _is_numeric(field):
