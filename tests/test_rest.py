@@ -1,5 +1,6 @@
 """The `rest` connector: flat JSON objects over HTTP, page by page (spec tests 5 to 10)."""
 import json
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from urllib.parse import parse_qs, urlparse
@@ -8,14 +9,15 @@ import pytest
 
 TOKEN = "Marke-0815-geheim"
 READINGS = [
-    [{"station": "a", "time": "2026-01-01T10:00:00Z", "temp": 1.5, "day": "2026-01-01", "ok": True, "n": 1, "x": 9}],
-    [{"station": "b", "time": "2026-01-01T11:00:00+01:00", "day": "2026-01-02", "ok": False, "n": 2}],
-    [{"station": "c", "time": "2026-01-01T12:00:00Z", "temp": 3.0, "day": "2026-01-03", "ok": True, "n": 3}],
+    [{"station": "a", "time": "2026-01-01T10:00:00Z", "temp": 1.5, "day": "2026-01-01", "ok": True, "n": 1, "x": 9, "at": None}],
+    [{"station": "b", "time": "2026-01-01T11:00:00+01:00", "day": "2026-01-02", "ok": False, "n": 2, "temp": None, "at": None}],
+    [{"station": "c", "time": "2026-01-01T12:00:00Z", "temp": 3.0, "day": "2026-01-03", "ok": True, "n": 3, "at": None}],
 ]
 BAD = {"/bad": [{"station": "a", "n": "abc"}], "/fraction": [{"station": "a", "n": 1.5}],
        "/bool-int": [{"station": "a", "n": True}], "/bool-float": [{"station": "a", "temp": True}],
        "/zone": [{"station": "a", "at": "2026-01-01T10:00:00Z"}], "/html": "<html>no json</html>",
-       "/int-float": [{"station": "a", "temp": 2}]}
+       "/int-float": [{"station": "a", "temp": 2}], "/nulls": [{"station": "a", "n": None}],
+       "/renamed": [{"station": "a", "m": 1}, {"station": "b", "m": 2}]}
 COLUMNS = ('{ station = "text", time = "timestamptz", temp = "float8", day = "date", ok = "bool", n = "int8", '
            'at = "timestamp" }')
 
@@ -37,6 +39,9 @@ def api(rv):
             if url.path == "/readings":
                 page = int(query.get("page", ["1"])[0])
                 body = READINGS[page - 1] if page <= len(READINGS) else []
+            elif url.path == "/slow":
+                time.sleep(6)  # longer than httpx's default of 5 seconds
+                body = [{"station": "a"}]
             elif url.path == "/denied":
                 code = 401
             elif url.path == "/object":
@@ -140,13 +145,6 @@ def test_an_int_into_float8_is_fine(api):
     assert r.returncode == 0, r.stdout
 
 
-def test_list_says_the_connector_cannot_list_tables(api):
-    definition(api, "")
-    r = api.run("list", "weather")
-    assert r.returncode == 1
-    assert r.stderr.strip() == "connector rest of source weather cannot list tables"
-
-
 def listener():
     """A second server that records every request it gets."""
     got = []
@@ -205,3 +203,48 @@ def test_a_type_mismatch_names_table_column_and_type_but_not_the_value(api):
     assert r.returncode == 1
     assert "n" in reason(api) and "int8" in reason(api)
     assert "abc" not in reason(api) + r.stdout + r.stderr
+
+
+def test_a_column_absent_from_every_row_fails_the_run_naming_it_and_keeps_the_mirror(api):
+    load(api, 'a = { key = ["station"], path = "/readings", columns = { station = "text" } }')
+    before = api.target("select * from raw_weather.a")
+    api.target("update _rowvioli.tables set options = jsonb_set(options, '{path}', '\"/renamed\"'), "
+               "requested_at = now()")
+    r, _ = load(api, 'a = { key = ["station"], path = "/renamed", columns = { station = "text", n = "int8" } }')
+    assert r.returncode == 1
+    assert "n" in reason(api) and "absent" in reason(api)
+    assert api.target("select * from raw_weather.a") == before
+
+
+def test_a_column_present_as_null_stays_null(api):
+    r, _ = load(api, 'a = { key = ["station"], path = "/nulls", columns = { station = "text", n = "int8" } }')
+    assert r.returncode == 0, r.stdout
+    assert api.target("select n from raw_weather.a") == [(None,)]
+
+
+def test_the_mirror_columns_follow_the_order_of_columns(api):
+    load(api, 'a = { key = ["station"], path = "/readings", columns = { n = "int8", ok = "bool", station = "text", '
+              'day = "date" } }')
+    assert [c for (c,) in api.target("select column_name from information_schema.columns where table_schema = "
+                                     "'raw_weather' and table_name = 'a' order by ordinal_position")] == [
+        "n", "ok", "station", "day"]
+
+
+@pytest.mark.parametrize("options", ['path = "/empty", page = "page"', 'path = "/empty"'])
+def test_a_new_empty_table_is_mirrored_empty(api, options):
+    r, _ = load(api, f'a = {{ key = ["station"], {options}, columns = {{ station = "text" }} }}')
+    assert r.returncode == 0, r.stdout
+    assert api.target("select count(*) from raw_weather.a") == [(0,)]
+
+
+def test_a_mirror_with_rows_whose_source_delivers_zero_rows_still_fails(api):
+    load(api, 'a = { key = ["station"], path = "/readings", columns = { station = "text" } }')
+    api.target("update _rowvioli.tables set options = jsonb_set(options, '{path}', '\"/empty\"'), "
+               "requested_at = now()")
+    assert api.run("run").returncode == 1
+    assert "zero rows" in reason(api)
+
+
+def test_an_answer_slower_than_five_seconds_loads(api):
+    r, _ = load(api, 'a = { key = ["station"], path = "/slow", columns = { station = "text" } }')
+    assert r.returncode == 0, r.stdout

@@ -135,7 +135,9 @@ def stage(conn, t):
     batches = stream(connector.read(connection, t["source_table"], t["options"]))
     with conn.cursor() as c:
         rows_read = c.adbc_ingest("_stage", batches, mode="create", temporary=True) if batches else 0
-    if rows_read == 0:
+    # zero rows protect a mirror that has rows; a first load or an empty mirror publishes them
+    if rows_read == 0 and sql(conn, "SELECT to_regclass($1)", [t["mirror"]])[0][0] and \
+            sql(conn, f"SELECT 1 FROM {t['mirror']} LIMIT 1"):
         raise Exception("the source delivered zero rows")
     return rows_read
 

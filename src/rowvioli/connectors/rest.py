@@ -31,7 +31,7 @@ def read(connection, table, options):
     for option in ("path", "columns"):
         if option not in options:
             raise Exception(f"{table}: the option {option} is missing")
-    columns = options["columns"]
+    columns = dict(options["columns"])  # pairs, as definition.ordered stores them
     for name, type in columns.items():
         if type not in TYPES:
             raise Exception(f"{table}: column {name}: {type} is not a type, use {', '.join(TYPES)}")
@@ -45,7 +45,7 @@ def read(connection, table, options):
         raise Exception(f"{table}: the option path must start with / and stay on the connection's host")
     while True:
         response = httpx.get(address, params={options["page"]: page} if paged else None,
-                             headers=headers)
+                             headers=headers, timeout=None)  # max_seconds bounds the run
         if not response.is_success:
             raise Exception(f"{table}: {path} answered {response.status_code}")
         try:
@@ -55,10 +55,15 @@ def read(connection, table, options):
         if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
             raise Exception(f"{table}: {path} must answer a JSON array of flat objects")
         if paged and not rows:
+            if page == 1:  # an empty table still needs its columns
+                yield pa.RecordBatch.from_pylist([], schema=schema)
             return
         if rows == previous:  # an API that ignores the page would otherwise be asked until max_seconds
             raise Exception(f"{table}: {path} answered page {page} like page {page - 1}, so it does not page")
         previous = rows
+        for name in columns:
+            if rows and not any(name in r for r in rows):
+                raise Exception(f"{table}: column {name} is absent from every row of the answer")
         arrays = []
         for name, type in columns.items():
             try:
