@@ -87,7 +87,7 @@ def read(directory, env=None, only=None):
                         raise SystemExit(f"{both} both become {schema}.{target + suffix}; "
                                          "set target_table at one of them")
                     names[schema, target + suffix] = path.name, f"{name}: {table}"
-                if s["type"] == "rest" and not str(t.get("path", "/")).startswith("/"):
+                if s["type"] == "rest" and not str(t.get("path", s.get("path", "/"))).startswith("/"):
                     raise SystemExit(f"{spot}: path must start with /")
                 # no default zone: 14:00 that silently means UTC is found in production (decision 36)
                 times = {k: t.get(k, s.get(k)) for k in ("at", "timezone")}
@@ -146,7 +146,7 @@ def typos(block, where):
     known = SOURCE_SETTINGS.keys() | TABLE_ONLY.keys()
     for k in block.keys() - known:
         for setting in known:
-            if len(k) >= 4 and edits(k, setting) <= (2 if len(setting) >= 6 else 1):
+            if len(k) >= 4 and k.rstrip("s") != setting.rstrip("s") and edits(k, setting) <= (2 if len(setting) >= 6 else 1):
                 raise SystemExit(f"{where}: {k} is not a setting; did you mean {setting}? "
                                  "(other keys go to the connector as options)")
 

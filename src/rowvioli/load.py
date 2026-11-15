@@ -136,12 +136,15 @@ def stage(conn, t):
     except Exception as e:
         raise Exception(f"the connection of source {t['source']} cannot be decrypted on worker {t['worker']}: {e}")
     t["values"] = connection_values(connection)
-    batches = stream(connector.read(connection, t["source_table"], t["options"]))
-    if batches and (gone := [k for k in t["key"] or [] if k not in batches.schema.names]):
+    options = {k: dict(v) if k == "columns" else v for k, v in t["options"].items()}  # stored as pairs, read as a dict
+    batches = stream(connector.read(connection, t["source_table"], options))
+    if batches is None:
+        raise Exception("the connector delivered nothing, not even the columns")
+    if (gone := [k for k in t["key"] or [] if k not in batches.schema.names]):
         raise Exception(f"table {t['source_table']} has no column {', '.join(gone)}; it has: "
                         + ", ".join(batches.schema.names))
     with conn.cursor() as c:
-        rows_read = c.adbc_ingest("_stage", batches, mode="create", temporary=True) if batches else 0
+        rows_read = c.adbc_ingest("_stage", batches, mode="create", temporary=True)
     # zero rows protect a mirror that has rows; a first load or an empty mirror publishes them
     if rows_read == 0 and sql(conn, "SELECT to_regclass($1)", [t["mirror"]])[0][0] and \
             sql(conn, f"SELECT 1 FROM {t['mirror']} LIMIT 1"):
@@ -293,14 +296,15 @@ def target_secrets():
 # what ADBC and nanoarrow put before the server's message
 WRAPPER = re.compile(r"^(?:[A-Z_]+: )?(?:\[libpq\] )?(?:nanoarrow call failed: )?(?:Failed to (?:prepare|execute) query"
                      r"(?: '[^']*')?: )?(?:ERROR:\s+)?")
-PATH = re.compile(r"(?<![\w.])(?:/[\w.\-]+)+/([\w.\-]+)")  # an absolute path, cut to its file name
 
 
-def reason_line(values, text, step):
+def reason_line(values, e, step):
     """The reason as it is stored, shown and logged: scrubbed, the first line of the driver's message without its
-    wrapper or absolute paths; a line saying so when the driver gave none."""
-    line = PATH.sub(r"\1", WRAPPER.sub("", scrub(values, text).strip().split("\n")[0])).strip()
-    return line or f"the driver gave no message while {step}"
+    wrapper, or the exception's own line (the last) when the message holds a traceback; a line saying so, with the
+    exception's type, when there is none."""
+    lines = scrub(values, str(e)).strip().split("\n")
+    line = WRAPPER.sub("", lines[-1] if "Traceback (most recent call last)" in str(e) else lines[0]).strip()
+    return line or f"the driver gave no message while {step} ({type(e).__name__})"
 
 
 def scrub(values, text):
@@ -356,7 +360,7 @@ def main(worker, source, table):
     try:
         answer = load(conn, t)
     except BaseException as e:  # everything, so no unscrubbed traceback reaches stderr (open point F4)
-        answer = {"reason": reason_line(t.get("values", []), str(e), t.get("step", "claiming"))}
+        answer = {"reason": reason_line(t.get("values", []), e, t.get("step", "claiming"))}
     if "reason" in answer:  # outside the except, so a failing fail() cannot print the unscrubbed error with it
         try:
             answer = fail(conn, t, answer["reason"])

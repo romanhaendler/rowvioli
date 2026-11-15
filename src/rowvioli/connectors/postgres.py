@@ -43,8 +43,8 @@ def tables(connection):
 
 def _read_as(field):
     """The column in the select list. `money` arrives as cents in an integer, so it is read as `numeric`. A type
-    the driver cannot name arrives as its wire bytes (Arrow's opaque over binary), so it is read as text, an
-    array of it too. Every other type is read as it is (measured in tests/test_run.py)."""
+    the driver cannot name arrives as its wire bytes (Arrow's opaque over binary), so it is read as text; an
+    array of such a type arrives as one text value, not as an array. Every other type is read as it is (measured in tests/test_run.py)."""
     column, type = quote(field.name), (field.metadata or {}).get(b"POSTGRESQL:type")
     if type in (b"money", b"_money"):
         return f"{column}::numeric{'[]' if type == b'_money' else ''} AS {column}"

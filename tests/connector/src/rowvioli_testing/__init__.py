@@ -15,6 +15,10 @@ def read(connection, table, options):
         print("\r 98% ▕████▏", end="", flush=True)
     if options.get("fail") == "at_once":
         leak(connection)
+    if options.get("fail") == "empty":  # an exception whose message is empty
+        raise KeyError
+    if options.get("nothing"):  # not even a batch with the columns
+        return iter(())
     return batches(connection, options)
 
 

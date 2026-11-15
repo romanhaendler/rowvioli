@@ -41,8 +41,9 @@ def main():
 
 
 def command(a):
-    needs = {"init": 1, "status": 1, "run": 2, "work": 2}.get(a.command, 0)  # variables, target URL first
-    missing = [v for v in ("ROWVIOLI_TARGET_URL", "ROWVIOLI_KEY_FILE")[:needs] if not os.environ.get(v)]
+    needs = {"init": ["ROWVIOLI_TARGET_URL"], "status": ["ROWVIOLI_TARGET_URL"],
+             "run": ["ROWVIOLI_TARGET_URL", "ROWVIOLI_KEY_FILE"], "work": ["ROWVIOLI_TARGET_URL", "ROWVIOLI_KEY_FILE"]}
+    missing = [v for v in needs.get(a.command, []) if not os.environ.get(v)]
     if missing:
         raise SystemExit(f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} not set")
     if a.command == "init":

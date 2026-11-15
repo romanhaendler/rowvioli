@@ -31,7 +31,7 @@ def read(connection, table, options):
     for option in ("path", "columns"):
         if option not in options:
             raise Exception(f"{table}: the option {option} is missing")
-    columns = dict(options["columns"])  # pairs, as definition.ordered stores them
+    columns = options["columns"]
     for name, type in columns.items():
         if type not in TYPES:
             raise Exception(f"{table}: column {name}: {type} is not a type, use {', '.join(TYPES)}")

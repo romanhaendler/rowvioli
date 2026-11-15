@@ -8,6 +8,7 @@ import socket
 import subprocess
 import sys
 import time
+from datetime import datetime
 
 import adbc_driver_postgresql.dbapi as adbc
 
@@ -155,5 +156,7 @@ def say_waiting():
     [(n, due)] = sql(conn, "SELECT count(*), min(due_at) FROM _rowvioli.status WHERE status = 'failed' AND due_at > now()")
     conn.close()
     if n:
-        say(f"{n} table{'s' if n > 1 else ''} wait out their pause after a failure, the first until "
-            f"{due.astimezone().strftime('%H:%M:%S')}; `rowvioli run <source>` loads them now")
+        due = due.astimezone()
+        when = due.strftime("%H:%M:%S" if due.date() == datetime.now().date() else "%Y-%m-%d %H:%M:%S")
+        say(f"{n} table{'s wait out their pause' if n > 1 else ' waits out its pause'} after a failure, the first "
+            f"until {when}; `rowvioli run <source>` loads them now")

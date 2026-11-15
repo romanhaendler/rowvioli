@@ -692,7 +692,7 @@ Naming something means "this, now". `run` without a name means "whatever is due"
 When `run` without a name loads nothing because tables wait out the pause after a failure, it says so on stderr, so that `{"tables": {}}` does not look broken. The answer on stdout and the exit code stay as they are:
 
 ```
-2026-11-15 14:44:49 1 table wait out their pause after a failure, the first until 14:31:02; `rowvioli run <source>` loads them now
+2026-11-15 14:44:49 1 table waits out its pause after a failure, the first until 14:45:49; `rowvioli run <source>` loads them now
 ```
 
 Every command that needs the target finds it in `ROWVIOLI_TARGET_URL`. A worker finds its private key through `ROWVIOLI_KEY_FILE`. `run`, `work` and `status` check what they need at start and name every one that is missing, for example `ROWVIOLI_TARGET_URL and ROWVIOLI_KEY_FILE are not set`.
@@ -977,7 +977,7 @@ The column types in the target follow from the Arrow schema the connector delive
 - **Arrow only.** A connector names its schema. Types are never guessed from the first rows, so they cannot flip between two runs.
 - **Files.** The `file` connector delivers every CSV and Excel column as text, except those the option `columns` names with a DuckDB type, for example `columns = { amount = "decimal(10,2)" }`. Parquet keeps its own types. Giving a column a type after the first load is a change of type ([What a person does by hand](#what-a-person-does-by-hand)).
 - **Decimals from Postgres.** The ADBC driver reads `numeric` as text and cannot write text into a `numeric` column. The `postgres` connector therefore has to convert to `decimal128`. This was investigated in `data-extractor` (ADR-0014 there). An unconstrained `numeric` with more than 38 digits on either side of the point fails the run.
-- **What the driver cannot carry from Postgres arrives as text.** The `postgres` connector reads `money` as `numeric` (the driver would deliver cents), and every type the driver would deliver as raw bytes (`inet`, `xml`, `timetz`, ranges, `bit`, `point`, `tsvector` and the like, and arrays of them) as text. `inet` keeps its netmask: `10.0.0.2` arrives as `10.0.0.2/32`. `bytea`, `uuid`, numbers, dates, timestamps, intervals, enums and arrays of these arrive with their own type.
+- **What the driver cannot carry from Postgres arrives as text.** The `postgres` connector reads `money` as `numeric` (the driver would deliver cents), and every type the driver would deliver as raw bytes (`inet`, `xml`, `timetz`, ranges, `bit`, `point`, `tsvector` and the like) as text, and an array of such a type as one text value, not as an array. `inet` keeps its netmask: `10.0.0.2` arrives as `10.0.0.2/32`. `bytea`, `uuid`, numbers, dates, timestamps, intervals, enums and arrays of these arrive with their own type.
 - **`json` arrives as `jsonb`**, from every connector. The staging step turns it into `jsonb`, because the driver cannot write `jsonb` and `json` has no equality, so a table with it could not be compared on its second run. A mirror that has a `json` column from before fails the schema check once; drop it as described under [What a person does by hand](#what-a-person-does-by-hand).
 - **The driver decides the types in the target.** ADBC creates the staging table and the mirror takes its types. Some are lost on the way: `varchar(n)` arrives as `text`, `numeric(p,s)` as `numeric`. The schema check sees types only as the driver shows them, so a change from `text` to `varchar(20)` passes unseen. This is the price of one driver (decision 28).
 

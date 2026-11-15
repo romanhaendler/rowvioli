@@ -44,6 +44,8 @@ def api(rv):
                 body = [{"station": "a"}]
             elif url.path == "/denied":
                 code = 401
+            elif url.path == "/v1/items":
+                code = 404
             elif url.path == "/object":
                 body = {"data": []}
             elif url.path in BAD:

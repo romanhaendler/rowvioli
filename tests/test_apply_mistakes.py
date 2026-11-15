@@ -17,6 +17,26 @@ def test_a_setting_one_or_two_edits_off_fails_apply_check_and_names_the_setting(
     assert f"did you mean {setting}" in r.stderr
 
 
+def test_a_plural_or_singular_of_a_setting_is_no_typo(rv):
+    r = check(rv, {"erp.toml": ERP.replace('"dbo.Notes"     = {}', '"dbo.Notes"     = { types = ["a"], table = "x", keys = 1 }')})
+    assert r.returncode == 0, r.stderr
+
+
+def test_a_rest_path_without_a_slash_at_the_source_fails_apply(rv):
+    text = """
+[w]
+type = "rest"
+max_age = "1h"
+path = "items"
+[w.connection]
+url = "http://127.0.0.1:1"
+[w.tables]
+a = { columns = { x = "text" } }
+"""
+    r = check(rv, {"w.toml": text})
+    assert r.returncode != 0 and "path must start with /" in r.stderr
+
+
 def test_a_far_off_option_still_reaches_the_connector(rv):
     r = check(rv, {"erp.toml": ERP.replace('"dbo.Notes"     = {}', '"dbo.Notes"     = { fetch_size = 5 }')})
     assert r.returncode == 0, r.stderr

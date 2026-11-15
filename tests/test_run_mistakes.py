@@ -1,6 +1,32 @@
 """Mistakes named at run: key columns, types, pause, names, variables, reasons, pooler, schema (shakedown ticket 05)."""
 from test_checks import failed
+from test_rest import api, load, reason  # noqa: F401 (api is a fixture)
+from test_secrets import lab
 from test_run import apply, definition, erp, ok, run  # noqa: F401 (erp is a fixture)
+
+
+def test_a_numeric_the_target_cannot_hold_fails_with_the_exception_line_and_no_path(erp):
+    erp.source("create table nn (id int primary key, v numeric)")
+    erp.source("insert into nn values (1, 'NaN')")
+    apply(erp, definition(erp, '"public.nn" = { key = ["id"] }\n'))
+    why = failed(erp)
+    assert "\n" not in why and "Traceback" not in why and ".py" not in why, why
+
+
+def test_a_failed_rest_path_stays_in_the_reason(api):
+    load(api, 'a = { key = ["station"], path = "/v1/items", columns = { station = "text" } }')
+    assert "/v1/items answered 404" in reason(api)
+
+
+def test_a_first_load_of_a_connector_that_delivers_no_batch_names_that(erp):
+    lab(erp, "nothing = true")
+    why = failed(erp, "lab")
+    assert why == "the connector delivered nothing, not even the columns"
+
+
+def test_an_exception_without_a_message_names_its_type(erp):
+    lab(erp, 'fail = "empty"')
+    assert failed(erp, "lab") == "the driver gave no message while reading the source (KeyError)"
 
 
 def test_a_key_column_the_source_does_not_have_fails_naming_it_and_the_columns_there_are(erp):
@@ -22,7 +48,7 @@ def test_run_says_on_stderr_that_tables_wait_out_their_pause_and_stdout_is_uncha
     r = erp.run("run")
     assert r.returncode == 0 and r.stdout.strip().endswith('"tables": {}}')
     [line] = [x for x in r.stderr.splitlines() if "wait" in x]
-    assert "1 table " in line and "rowvioli run <source>" in line
+    assert "1 table waits out its pause" in line and "rowvioli run <source>" in line
 
 
 def test_an_unknown_table_name_suggests_the_one_table_that_ends_in_it(erp):

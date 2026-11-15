@@ -221,6 +221,8 @@ This is not a scheduler. Nothing in the program knows about time.
 
 ## 18. Safety limits before publishing
 
+> **Changed by decision 42.** The limit on zero rows applies only when the mirror exists and holds rows.
+
 **Decision.** A run aborts if the source delivers zero rows or more than `max_delete_share` (default one half) of the rows would disappear.
 
 **Why.** "Consistent" is not enough. A broken source would empty the mirror in a perfectly consistent transaction. `dataly` has the same rule.
@@ -619,7 +621,7 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 
 **Decision.** A run is bounded by `max_seconds` and by nothing else. No connector sets a timeout of its own; the REST connector sent every request with five seconds before.
 
-**Why.** A hidden limit in one connector is the one bound a person does not find in the definition. A slow API failed at five seconds although the table allowed an hour, and the same table loaded from a file or a database never met such a limit. One bound that is visible, per source or table, is enough,, and the worker ends the run's process when it is over.
+**Why.** A hidden limit in one connector is the one bound a person does not find in the definition. A slow API failed at five seconds although the table allowed an hour, and the same table loaded from a file or a database never met such a limit. One bound that is visible, per source or table, is enough, and the worker ends the run's process when it is over.
 
 **Price.** A source that never answers holds its run until `max_seconds`, and that table's slot with it.
 
