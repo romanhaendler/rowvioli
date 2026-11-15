@@ -167,9 +167,9 @@ What follows from it:
 | `key` | table | none | Columns that identify a row. Without a key the table is replaced as a whole. |
 | `log` | source or table | on | Keep a change log. `log = false` switches it off. Tables without a key never have one. |
 | `max_delete_share` | source or table | 0.5 | The run aborts if a larger share of the rows would disappear. Without a key: if the table would shrink by more. |
-| `max_seconds` | source or table | 3600 | A hanging run is ended after this time. |
+| `max_seconds` | source or table | 3600 | A hanging run is ended after this time. It is the one bound of a run: no connector sets a timeout of its own. |
 
-Any other key, at source or table level, is passed to the connector unchanged as an option, for example `path` for a REST connector. A table's option overrides the source's of the same name. The names in the table above belong to rowvioli, so a connector cannot have an option called `at` or `timezone`, and a name at the wrong level, such as `key` at a source, fails `apply`.
+Any other key, at source or table level, is passed to the connector unchanged as an option, for example `path` for a REST connector. A table's option overrides the source's of the same name. The names in the table above belong to rowvioli, so a connector cannot have an option called `at` or `timezone`, and a name at the wrong level, such as `key` at a source, fails `apply`. So does a name that is one or two letters from a setting of rowvioli, such as `max_agee`: it is almost certainly a typo, and the table would run with the default.
 
 Nobody has to type 200 table names and keys. `rowvioli list erp` asks the source and prints them in this format, ready to paste. It is a helper for people. Nothing in the running system calls it.
 
@@ -290,10 +290,10 @@ Data passes through the program only in the lines `read` and `copy_into_staging`
 |---|---|
 | Schema | a column is missing or has changed its type, as far as the driver tells types apart (see [Types](#types)). A new column is added to the target. |
 | Key | a key combination occurs twice in the staging table, a key column is null, or the key in the definition differs from the primary key of the mirror. |
-| Safety limits | the source delivers zero rows, or more than `max_delete_share` of the rows would disappear. |
+| Safety limits | the source delivers zero rows while the mirror has rows, or more than `max_delete_share` of the rows would disappear. |
 | Change log | a change log exists and this run would not write to it (`log = false`, or the key was taken away), or it exists and its mirror does not. |
 
-The share of deletions is known only from the diff, so it is checked after step 5. The safety limits keep a broken source from emptying the mirror in a perfectly consistent way.
+The share of deletions is known only from the diff, so it is checked after step 5. The safety limits keep a broken source from emptying the mirror in a perfectly consistent way. Zero rows protects a mirror that has rows. A table on its first load, or a mirror that is empty, publishes zero rows: a new empty table in the source is mirrored as an empty table.
 
 A table with a key cannot have a column `_op`, and with a change log neither `_run`, `_loaded_at`, `_valid_from` nor `_valid_to`: the diff, the change log and the history view use these names.
 
@@ -301,7 +301,7 @@ A change log that exists is complete, so a run that could not keep it complete f
 
 ### What a person does by hand
 
-The failures about a change log and a changed name end in one of two kinds of statement, here for `raw_erp.customers`. A changed key needs a third, the drop of the mirror.
+The failures about a change log, a changed name and a changed type end in a few statements, here for `raw_erp.customers`. A changed key needs one more, the drop of the mirror.
 
 **The target name changed** (`apply` said so), and mirror and history should come along. Rename the three before the next run, here to `clients`:
 
@@ -322,6 +322,21 @@ DROP TABLE raw_erp.customers__log CASCADE;
 ```
 
 After a changed key (or a key taken away) the old mirror has to go as well, the third statement: `DROP TABLE raw_erp.customers`. The next run builds anew and the history begins there. To keep the old history instead, rename mirror, change log and history view as above.
+
+**A column's type was tightened after the first load**, for example `columns = { amount = "decimal(10,2)" }` for a CSV column that arrived as text. The run fails and names the column, and the mirror stays as it is, since the program never converts a column:
+
+```
+raw_shop.items failed after 0.1s: column amount has changed its type from text to numeric
+```
+
+The same happens to a mirror with a `json` column from before json arrived as `jsonb`. The mirror and its change log have the old type, so drop both. The next run builds anew with the new type, and the history begins there:
+
+```sql
+DROP TABLE raw_shop.items__log CASCADE;
+DROP TABLE raw_shop.items;
+```
+
+A table without a change log needs only the second statement. To keep the old rows, rename the old tables as above before the next run.
 
 ## Comparing in the target
 
@@ -396,7 +411,7 @@ meta      schema_version, max_running, definition (hash of the definition last a
 - `sources` and the first line of `tables` are the definition. Only `apply` writes them. A table row carries the settings a table may override, with the source's filled in.
 - The second line of `tables` is what the workers experienced, plus `requested_at`.
 - `runs` is a log: one row per run. Nothing reads it to decide anything.
-- `status` is what people look at. It shows a table as `new`, `loading`, `ok` or `failed`, with the `reason` of a failure in a column of its own. A table whose run died shows as `failed` with the reason `worker lost`.
+- `status` is what people look at. It shows a table as `new`, `loading`, `ok` or `failed`, with the `reason` of a failure in a column of its own. A reason is one line: the driver's own message without its wrapper (`IO:`, `NOT_FOUND:`), traceback or file paths. When the driver gave none, it says so and names the step. A table whose run died shows as `failed` with the reason `worker lost`.
 - Progress is computed there too, for example `loading, 485,000 of about 1,000,000 rows`: while a table is loading, `rows_written` shows its rows so far and `rows_last_run` the rows read by its last successful run. The holder of the table lock is in `pg_locks`, its rows so far are in Postgres' own `pg_stat_progress_copy`. A worker writes nothing for it. `rows_written` is empty for a role that is neither the workers' role nor a member of `pg_read_all_stats`.
 
 Today's state is read from the mirror. What changed when is in the change log, and every row of it says when: `_loaded_at` is the moment its run published, the same `now()` that goes into `loaded_at`. Next to the log stands the view `<target table>__history`, which reads nothing but the log and gives every version of a row with the time it was valid.
@@ -427,21 +442,21 @@ history  raw_erp.customers__history
  2026-11-13 07:58:57.722619+00 | 2026-11-13 07:59:06.861926+00 |           9 | Essen
 ```
 
-A version is valid from `_valid_from` up to but not including `_valid_to`. The current version has an empty `_valid_to`, and a deleted row ends its last version and appears no further. The table as it was at a moment is one condition on the view:
+A version is valid from `_valid_from` up to but not including `_valid_to`. The current version has an empty `_valid_to`, and a deleted row ends its last version and appears no further. The table as it was at a moment is one condition on the view. Write the moment with its offset: the columns are `timestamptz`, and a time without an offset is read in the time zone of your session.
 
 ```sql
 SELECT * FROM raw_erp.customers__history
- WHERE _valid_from <= '2026-11-13 07:59:00' AND (_valid_to > '2026-11-13 07:59:00' OR _valid_to IS NULL);
+ WHERE _valid_from <= '2026-11-13 07:59:00+00' AND (_valid_to > '2026-11-13 07:59:00+00' OR _valid_to IS NULL);
 ```
 
-This returns customers 7 (Bonn) and 9 (Essen). The view exists whenever the change log does, and a column the source adds later appears in it, empty for the versions before. Both exist only for a table with a key and without `log = false`.
+This returns customers 7 (Bonn) and 9 (Essen). A moment before the first load returns nothing: there was no mirror yet. The view exists whenever the change log does, and a column the source adds later appears in it, empty for the versions before. Both exist only for a table with a key and without `log = false`.
 
 On a long history the view is fast for one key and slow for one moment, measured on a log of 499 000 rows ([section 13](docs/measurements.md#13-the-history-view-on-a-long-change-log)). A person who asks for the versions of one key may create an index, which the program never does: `CREATE INDEX ON raw_erp.customers__log (customer_no, _loaded_at)` took such a query from 8.9 to 0.1 ms. For one moment the view takes the time of the whole view (305 ms there) and no index helps; the same moment asked of the log directly took 117 ms, 2.6 times less:
 
 ```sql
 SELECT customer_no, city
   FROM (SELECT DISTINCT ON (customer_no) * FROM raw_erp.customers__log
-         WHERE _loaded_at <= '2026-11-13 07:59:00' ORDER BY customer_no, _loaded_at DESC) l
+         WHERE _loaded_at <= '2026-11-13 07:59:00+00' ORDER BY customer_no, _loaded_at DESC) l
  WHERE _op <> 'D';
 ```
 
@@ -552,7 +567,7 @@ The program sets on its own connections:
 - `client_connection_check_interval = 2s`, so that Postgres looks for the client during a long statement too
 - `lock_timeout = 10s` for adding a column, so that a long-reading consumer cannot block the run forever. The run then fails with `lock timeout` and loads after its pause; meanwhile new readers of that table wait behind it for up to 10 s.
 
-The control connection must go to Postgres directly, not through a connection pooler in transaction mode.
+The control connection must go to Postgres directly, or through a pooler in session mode, not through one in transaction mode. A command that opens the target reads `pg_backend_pid()` in two transactions, and when the two differ it fails with `a connection pooler in transaction mode is in front of the target; use session mode`. The check is a net with holes: a pooler with no other client keeps handing out the same server connection and passes it, and one that is busy is caught most of the time (84 of 100 checks with eight busy neighbours, [measurements](docs/measurements.md#14-the-pooler-check-behind-pgbouncer-in-transaction-mode)). Whoever runs a pooler configures session mode and does not rely on the check.
 
 ## Connections
 
@@ -586,6 +601,21 @@ The address of a source is visible in the definition and in its review, and stil
 
 For test and production with different addresses, the address becomes a placeholder too, for example `url = "$WEATHER_URL"`.
 
+### TLS
+
+rowvioli sets no TLS option of its own. The URL decides, and without a setting libpq tries TLS and falls back to plain text unnoticed. To require it, and to check the server's certificate and name, add `sslmode=verify-full` (and `sslrootcert=<file>` if the certificate authority is not in the system's store) to the target's address and to the `url` of every `postgres` source:
+
+```sh
+export ROWVIOLI_TARGET_URL='postgresql://etl@pg01/dwh?sslmode=verify-full'
+```
+
+```toml
+[erp.connection]
+url = "postgresql://reader:$ERP_PASSWORD@erp-db01/erp?sslmode=verify-full"
+```
+
+A server without TLS then fails the command with `server does not support SSL, but SSL was required`. A `rest` source is encrypted when its `url` starts with `https`; with `http` the token travels in clear text. For `odbc` the driver's own settings decide.
+
 ### How it is encrypted
 
 - **A standard construction, not a home-made one.** Connections are encrypted as libsodium sealed boxes through PyNaCl: an X25519 key exchange with a one-time key, then authenticated encryption with XSalsa20-Poly1305. GitHub uses the same construction for repository secrets set through its API.
@@ -605,14 +635,14 @@ There is one key pair for all workers of a target.
 | Private key | a file on each worker, named by `ROWVIOLI_KEY_FILE`, mode 600 | the service user of the worker |
 
 - The private key is never in the database, never in Git, and never passed as the value of an environment variable.
-- The public key is taken from the file next to the definition, not from the database. Someone with write access to the database therefore cannot slip in a key of their own.
+- The public key is taken from the file next to the definition (`worker.pub` in the parent of the directory `apply` gets), not from the database. Someone with write access to the database therefore cannot slip in a key of their own.
 - A worker can hold several private keys, which is what makes rotation possible.
 
 ### What happens to the decrypted connection
 
 - It exists only in the memory of the run's process and of the connector.
 - It is never written to `_rowvioli.runs`, to the answer on stdout or to a log.
-- Database drivers like to quote the connection string in error messages, and parts of a value they cannot parse. The program removes the values of the connection from every error text before it stores or prints it. A password in a URL is the case where a driver quotes a part: `apply` percent-encodes a value that lands in the user info (`scheme://user:$PASSWORD@host`), so the driver never misparses it.
+- Database drivers like to quote the connection string in error messages, and parts of a value they cannot parse. The program removes the values of the connection from every error text before it stores or prints it: each value as written, stripped of surrounding whitespace (a token read from a file ends in a newline) and as a driver quotes it inside quotes, and the password inside a URL or an ODBC string as written and decoded. For the target it removes the password of `ROWVIOLI_TARGET_URL` only, so user and host stay readable in its errors. This is best effort ([open points](docs/open-points.md)). A password in a URL is the case where a driver quotes a part: `apply` percent-encodes a value that lands in the user info (`scheme://user:$PASSWORD@host`), so the driver never misparses it.
 
 ### Rotation and loss
 
@@ -633,7 +663,7 @@ If the private key is lost, a new pair and one `apply` restore everything, becau
 |---|---|
 | Someone reads the database, a backup or a replica | yes, they see ciphertext only |
 | Someone with write access changes or swaps a ciphertext | yes, decryption fails |
-| Someone with write access changes a definition to redirect a connection | yes for the shipped connectors, the address is inside the ciphertext |
+| Someone with write access changes a definition to redirect a connection | yes for the shipped connectors, the address is inside the ciphertext. A REST `path` that would leave the connection's host fails the run, and so does a `file` table outside the connection's `path`. |
 | A worker is compromised | **no**. It holds the private key and a database connection and can read every connection. |
 | The place where `apply` runs is compromised | **no**. It holds every secret in its environment. |
 | Someone with write access puts back an older ciphertext of the same source | **no** |
@@ -646,20 +676,26 @@ A connector is code the operator trusts. It receives the decrypted connection an
 
 | Command | Does | Needs |
 |---|---|---|
-| `rowvioli init` | Creates the schema `_rowvioli` in the target. | target |
-| `rowvioli key new` | Creates a key pair in the current directory: `worker.key` for the workers and `worker.pub` for the definition. Overwrites neither. | nothing |
+| `rowvioli init` | Creates the schema `_rowvioli` in the target and says so: `the schema _rowvioli is ready in the target`. | target |
+| `rowvioli key new` | Creates a key pair in the current directory: `worker.key` for the workers and `worker.pub` for the definition, and says so. Overwrites neither. | nothing |
 | `rowvioli list erp` | Prints the tables of a source with their keys, ready to paste into its `tables` block. Reads the definition from `sources/` (or `--definition <dir>`). | definition, environment, connector, source |
 | `rowvioli apply --check sources/` | Reads the definition and checks it. Writes nothing. Meant for a laptop and for the pipeline of a merge request. | definition |
-| `rowvioli apply sources/` | Writes the definition into the target: one row per source and table, connections encrypted. | definition, environment, `worker.pub` (or `--key <file>`), target |
+| `rowvioli apply sources/` | Writes the definition into the target: one row per source and table, connections encrypted. | definition, environment, `worker.pub` next to the directory (or `--key <file>`), target |
 | `rowvioli status [erp [dbo.Customers]]` | Prints the enabled tables with their target name, age, due time, status and reason or progress, from the view `_rowvioli.status`. Names narrow it the way `run` takes them. Exits 0 whenever it could print the state. | target |
 | `rowvioli work --slots 4` | Runs permanently and loads whatever is due, up to four tables at a time. | connectors, private key, target |
 | `rowvioli run` | Loads everything that is due, once, and ends. | connectors, private key, target |
 | `rowvioli run erp` | Requests all tables of `erp` and loads until nothing of `erp` is due. | connectors, private key, target |
-| `rowvioli run erp dbo.Customers` | The same for a single table, named as in the source. An unknown or disabled name fails. | connectors, private key, target |
+| `rowvioli run erp dbo.Customers` | The same for a single table, named as in the source. An unknown or disabled name fails and, when exactly one enabled table ends in the name, suggests it: `erp customers: no enabled table has this name; did you mean public.customers`. | connectors, private key, target |
 
 Naming something means "this, now". `run` without a name means "whatever is due". `run` takes `--slots` too.
 
-Every command that needs the target finds it in `ROWVIOLI_TARGET_URL`. A worker finds its private key through `ROWVIOLI_KEY_FILE`. `run` and `work` check both at start and name the one that is missing.
+When `run` without a name loads nothing because tables wait out the pause after a failure, it says so on stderr, so that `{"tables": {}}` does not look broken. The answer on stdout and the exit code stay as they are:
+
+```
+2026-11-15 14:44:49 1 table wait out their pause after a failure, the first until 14:31:02; `rowvioli run <source>` loads them now
+```
+
+Every command that needs the target finds it in `ROWVIOLI_TARGET_URL`. A worker finds its private key through `ROWVIOLI_KEY_FILE`. `run`, `work` and `status` check what they need at start and name every one that is missing, for example `ROWVIOLI_TARGET_URL and ROWVIOLI_KEY_FILE are not set`.
 
 `apply` in detail:
 
@@ -667,7 +703,12 @@ Every command that needs the target finds it in `ROWVIOLI_TARGET_URL`. A worker 
 - **It never touches what the workers experienced.** `loaded_at`, `attempted_at`, `attempts` and `requested_at` stay as they are. A deployment by itself triggers no load and loses no request. A changed `max_age` or `at` takes effect with the next query: a table that is due by the new values is loaded. A table that is new in the definition has never been attempted and is therefore due at once.
 - **The definition is always the whole.** `apply` gets a directory. What is no longer in it is disabled, never deleted, and its target tables stay, but it holds no name any more: the definition alone says who owns a name. Whoever takes the name over meets the checks before publishing on the first run. Applying the wrong directory by mistake is undone by applying the right one.
 - **Disabling is the only way to stop a table.** Until then it is loaded and retried. A run that is loading the table when it is disabled finishes.
-- **It fails rather than guess.** On a missing variable, a target name given twice (`list` fails the same way, see [Defining a source](#defining-a-source)), or a target without the schema `_rowvioli` (then it says: run `rowvioli init` first).
+- **It fails rather than guess.** On a missing variable (all of them named at once), a setting that is one or two letters from one of rowvioli's own, a directory with no source file, a missing public key (the message names the path it tried), a target name given twice (`list` fails the same way, see [Defining a source](#defining-a-source)), or a target without the schema `_rowvioli` (then it says: run `rowvioli init` first). A misspelt setting does not reach the connector as an option, and an empty directory would disable everything:
+
+  ```
+  erp.toml: erp: max_agee is not a setting; did you mean max_age? (other keys go to the connector as options)
+  empty/ holds no source files (*.toml); applying it would disable every table
+  ```
 - **It says a changed name.** For every table that is already in the target and gets another target name, `apply` prints one line, after it has written the definition. A table that was disabled and comes back under another name gets it too:
 
   ```
@@ -773,8 +814,38 @@ Rights in the target:
 |---|---|
 | The pipeline that runs `apply` | to write the definition |
 | The workers | to read the definition, to write what they experienced, to create and write the mirrors |
-| Whoever may request a load, for example a web UI | to read the status view, to write `requested_at` and nothing else; to see progress, membership in `pg_read_all_stats` |
+| Whoever may request a load, for example an application of your own | to read the status view, to write `requested_at` and nothing else; to see progress, membership in `pg_read_all_stats` |
 | Consumers | to read the mirrors and, for history, the views `<target table>__history`. A view is a plain view and runs with its owner's rights, so the right to read it is enough; the change log needs none. Default privileges on tables cover views. |
+
+The same as SQL, for the roles `pipeline`, `worker`, `requester` and `consumer` and a target database `dwh`. It was tried out with exactly these statements:
+
+```sql
+-- the pipeline that runs apply
+GRANT USAGE ON SCHEMA _rowvioli TO pipeline;
+GRANT SELECT, INSERT, UPDATE ON _rowvioli.sources, _rowvioli.tables, _rowvioli.meta TO pipeline;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA _rowvioli TO pipeline;
+
+-- the workers
+GRANT USAGE ON SCHEMA _rowvioli TO worker;
+GRANT SELECT ON _rowvioli.sources, _rowvioli.tables, _rowvioli.meta, _rowvioli.status TO worker;
+GRANT UPDATE ON _rowvioli.tables TO worker;
+GRANT SELECT, INSERT, UPDATE ON _rowvioli.runs TO worker;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA _rowvioli TO worker;
+GRANT CREATE ON DATABASE dwh TO worker;
+
+-- whoever may request a load (add pg_read_all_stats for progress)
+GRANT USAGE ON SCHEMA _rowvioli TO requester;
+GRANT SELECT ON _rowvioli.status, _rowvioli.tables TO requester;
+GRANT UPDATE (requested_at) ON _rowvioli.tables TO requester;
+
+-- consumers: what the workers create from now on, and what exists
+ALTER DEFAULT PRIVILEGES FOR ROLE worker GRANT USAGE ON SCHEMAS TO consumer;
+ALTER DEFAULT PRIVILEGES FOR ROLE worker GRANT SELECT ON TABLES TO consumer;
+GRANT USAGE ON SCHEMA raw_erp TO consumer;                  -- for a schema that exists already
+GRANT SELECT ON ALL TABLES IN SCHEMA raw_erp TO consumer;   -- and its tables
+```
+
+A worker needs `CREATE` on the database only to create the schemas of the target tables. With the schemas created beforehand, `GRANT ALL ON SCHEMA raw_erp TO worker` replaces it. Default privileges apply to objects the role named in `FOR ROLE` creates, so name the worker's role there.
 
 The program creates no roles. Whoever can write the definition decides what is loaded, so that right belongs to the pipeline alone. A small set-up can use one user for everything.
 
@@ -820,7 +891,16 @@ Version 0.2 ships `postgres`, `file` (without JSON), `odbc` and `rest`. JSON fil
 
 **`odbc`** reads the whole table with `SELECT * FROM <table>`. The connection has one field, `string`, an ODBC connection string. The table name is dotted parts of letters, digits and underscores and is not quoted. The column types follow the driver's description of the columns. `rowvioli list` reads the tables and their primary keys from `INFORMATION_SCHEMA`, so a source without it needs its tables block written by hand. It is tested against PostgreSQL through the open psqlODBC driver; SQL Server and Informix are not tested, so check the types of decimals, dates, timestamps and unbounded text on them first. A text value longer than the size the driver reports for its column (psqlODBC: 8190 bytes for `text`, raised with `MaxLongVarcharSize=<bytes>` in the connection string) fails the run instead of being cut; for columns the driver reports as unbounded, such as `varchar(max)`, rowvioli allows 1 MiB per value (untested). The tests need a driver manager and the driver `PostgreSQL Unicode`; where there is none, they skip and name `tests/odbc/run.sh`, which runs them in a container.
 
-**`rest`** reads a JSON array of flat objects from `url` + `path`. The connection has `url` and optionally `token`, sent as a Bearer header. A table needs `path` and `columns`, which names every column with a type: `text`, `int8`, `float8`, `bool`, `date`, `timestamp` or `timestamptz`. A field not named is left out, a missing field is null. With `page = "page"` that query parameter counts from 1 and the connector asks until a page comes back empty, and fails the run if a page repeats the one before; without `page` there is one request. A `timestamptz` without a zone is read as UTC. For other paging, wrapped responses or headers, write a [custom connector](#a-custom-connector-complete).
+**`file`** reads one file per table from the directory `path` of the connection, by extension: `.csv`, `.xlsx`, `.parquet`. A table is the file name as written in the definition. A name that leaves `path` (`../x.csv`, an absolute path) fails the run and names the table. A relative `path` is resolved against the worker's working directory, so under systemd or cron write it absolute or set `WorkingDirectory`. Every option of the table except `columns` goes to DuckDB's reader as it is (`read_csv`, `read_xlsx`, `read_parquet`), so a European CSV is one option away:
+
+```toml
+"items.csv" = { key = ["item_no"], sep = ";", decimal_separator = ",", nullstr = "n/a",
+                columns = { amount = "decimal(10,2)" } }
+```
+
+An option the reader does not know fails the run. The options are those of DuckDB's `read_csv`, `read_xlsx` and `read_parquet`.
+
+**`rest`** reads a JSON array of flat objects from `url` + `path`. The connection has `url` and optionally `token`, sent as a Bearer header. `path` is a path on the connection's host: it starts with `/`, and one that would lead the token elsewhere (`.evil.com/x`) fails the run and `apply`. A table needs `path` and `columns`, which names every column with a type: `text`, `int8`, `float8`, `bool`, `date`, `timestamp` or `timestamptz`. The mirror has the columns in the order `columns` names them. A field not named is left out, a missing field in some objects is null, but a named column that is absent from every object of an answer fails the run and names the column, so a renamed field does not empty the mirror. A field that is present with `null` stays a null. The connector sets no timeout; `max_seconds` bounds the run. With `page = "page"` that query parameter counts from 1 and the connector asks until a page comes back empty, and fails the run if a page repeats the one before; without `page` there is one request. An empty first page publishes an empty table. A `timestamptz` without a zone is read as UTC. For other paging, wrapped responses or headers, write a [custom connector](#a-custom-connector-complete).
 
 ### Licences
 
@@ -895,48 +975,19 @@ A connector that needs licensed software, worked through from an empty directory
 The column types in the target follow from the Arrow schema the connector delivers.
 
 - **Arrow only.** A connector names its schema. Types are never guessed from the first rows, so they cannot flip between two runs.
-- **Files.** The `file` connector delivers every CSV and Excel column as text, except those the option `columns` names with a DuckDB type, for example `columns = { amount = "decimal(10,2)" }`. Parquet keeps its own types.
+- **Files.** The `file` connector delivers every CSV and Excel column as text, except those the option `columns` names with a DuckDB type, for example `columns = { amount = "decimal(10,2)" }`. Parquet keeps its own types. Giving a column a type after the first load is a change of type ([What a person does by hand](#what-a-person-does-by-hand)).
 - **Decimals from Postgres.** The ADBC driver reads `numeric` as text and cannot write text into a `numeric` column. The `postgres` connector therefore has to convert to `decimal128`. This was investigated in `data-extractor` (ADR-0014 there). An unconstrained `numeric` with more than 38 digits on either side of the point fails the run.
-- **What the driver cannot carry from Postgres arrives as text.** The `postgres` connector reads `money` as `numeric` (the driver would deliver cents), and every type the driver would deliver as raw bytes (`inet`, `xml`, `timetz`, ranges, `bit`, `point`, `tsvector` and the like, and arrays of them) as text. `bytea`, `uuid`, numbers, dates, timestamps, intervals, enums and arrays of these arrive with their own type.
-- **`json` arrives as `jsonb`**, from every connector: `json` has no equality, so a table with it could not be compared on its second run.
+- **What the driver cannot carry from Postgres arrives as text.** The `postgres` connector reads `money` as `numeric` (the driver would deliver cents), and every type the driver would deliver as raw bytes (`inet`, `xml`, `timetz`, ranges, `bit`, `point`, `tsvector` and the like, and arrays of them) as text. `inet` keeps its netmask: `10.0.0.2` arrives as `10.0.0.2/32`. `bytea`, `uuid`, numbers, dates, timestamps, intervals, enums and arrays of these arrive with their own type.
+- **`json` arrives as `jsonb`**, from every connector. The staging step turns it into `jsonb`, because the driver cannot write `jsonb` and `json` has no equality, so a table with it could not be compared on its second run. A mirror that has a `json` column from before fails the schema check once; drop it as described under [What a person does by hand](#what-a-person-does-by-hand).
 - **The driver decides the types in the target.** ADBC creates the staging table and the mirror takes its types. Some are lost on the way: `varchar(n)` arrives as `text`, `numeric(p,s)` as `numeric`. The schema check sees types only as the driver shows them, so a change from `text` to `varchar(20)` passes unseen. This is the price of one driver (decision 28).
 
 ## Web UI
 
-Everything a UI needs is in the target. It is a small application of its own with database access to `_rowvioli` and not part of the program.
-
-| The UI should | From where | Possible |
-|---|---|---|
-| Show all tables with age, status and failure reason | `_rowvioli.status` | yes |
-| Show when a table is due next | `_rowvioli.status` | yes |
-| Tell loading, failed and dead apart | `_rowvioli.status` | yes. A dead run shows as `failed` with the reason `worker lost`. |
-| Show past runs with duration and counts | `_rowvioli.runs` | yes |
-| Show which rows a run changed | change log of the table | yes, unless `log = false` |
-| Show which definition a run used | `runs.definition` | yes, as a hash |
-| Load a table now | `requested_at` in `_rowvioli.tables` | yes |
-| Load a table at a fixed time | | no. That is `at` in the definition, and it changes through `apply`. |
-| Show the progress of a running run | `_rowvioli.status`, columns `rows_written` and `rows_last_run` | yes, while the staging table is filled, for the workers' role and members of `pg_read_all_stats` |
-| Cancel a run | Postgres terminates the run's control connection | only for the moment: the retry starts it again after a minute |
-| Stop a table for good | | no. It is removed from the definition, and `apply` disables it. |
-| Change a source or its password | | no. That is the definition, and it changes through `apply`. |
-| Show complete log lines | the worker's log system | not from the target. A worker writes one line per event to stderr (see "A worker"), and journald or Docker keep them. |
+There is none; everything a UI needs is in `_rowvioli`: the view `status`, the log `runs` and the column `requested_at` for a load now.
 
 ## Measurements
 
-Short version. Set-up, all numbers and limitations are in [docs/measurements.md](docs/measurements.md). `uv run bench/bench.py` measures the same cases at 10⁶ rows through the program.
-
-| Case | 10⁶ rows | 10⁷ rows |
-|---|---|---|
-| Comparison when nothing changed | 0.5 s | 13 s |
-| Computing the diff at 1 % changes | not measured | 39 s |
-| Publishing at 1 % changes | not measured | 17 s |
-| Compare and publish in one transaction (earlier variant) | 1.9 s | 59 s |
-| Without a key: replace everything | 2.9 s | 40 s |
-| Filling the staging table from a client through ADBC | 0.5 s | not measured |
-
-A table with 900 columns and 100,000 rows takes 5.7 s to compare. In the prototype a run process cost about 0.2 s before its claim, and the claim itself 4 ms at 1000 tables.
-
-In the intended working range of up to 10⁶ rows a table costs a few seconds. At 10⁷ this path is slower than `hpdl` (25 to 42 s there for the whole run including reading) and in exchange does without hashes, key ranges and partitions.
+Set-up, numbers and limitations are in [docs/measurements.md](docs/measurements.md). `uv run bench/bench.py` measures the main cases at 10⁶ rows through the program.
 
 ## Further documents
 
@@ -945,7 +996,7 @@ In the intended working range of up to 10⁶ rows a table costs a few seconds. A
 | [GLOSSARY.md](GLOSSARY.md) | Terms |
 | [docs/decisions.md](docs/decisions.md) | Every decision with its reason, its price and the rejected alternative |
 | [docs/measurements.md](docs/measurements.md) | All measurements with set-up and limitations |
-| [docs/package.md](docs/package.md) | The package, the first version and the repo layout |
+| [docs/package.md](docs/package.md) | The package and the first version |
 | [docs/open-points.md](docs/open-points.md) | What is undecided, unverified or unbuilt |
 | [experiments/](experiments/README.md) | The scripts behind the measurements |
 

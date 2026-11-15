@@ -1,6 +1,6 @@
 # Open points
 
-What is undecided, unverified or unbuilt as of 2026-11-13, after versions 0.1 and 0.2, load times, visibility, target names and history.
+What is undecided, unverified or unbuilt as of 2026-11-15, after versions 0.1 and 0.2, load times, visibility, target names, history and the first shakedown.
 
 ## Decisions for the owner
 
@@ -43,14 +43,14 @@ Unchanged from the first round:
 - **A table that stays broken** reads the source about ten times on the first day and once per `max_age` after that, and at each load time.
 - **All workers on one target have to be equipped alike** (decision 27).
 - **New tables of a source have to be added by hand.**
-- **Column types without equality.** `xml` cannot be compared row by row and has to arrive as text. `json` arrives as `jsonb` from every connector.
+- **Column types without equality.** `xml` cannot be compared row by row and has to arrive as text. `json` is not on the list: the staging step turns it into `jsonb` for every connector.
 - **A multi-dimensional array arrives flattened** from a Postgres source: `{{1,2},{3,4}}` becomes `{1,2,3,4}`. The driver reads it so; a view in the source that casts it to text keeps its shape.
 - **Comparison happens in the target type.** If a connector delivers the same value once as `1.0` and once as `1.00` into a text column, the row counts as updated.
 - **A compromised worker can read every connection.** It holds the private key and a database connection.
 - **The place where `apply` runs holds every secret** in its environment.
 - **An older ciphertext can be put back** by someone with write access to the target.
 - **A wrongly built connection shows only when a table is loaded.** `apply` does not know the connector.
-- **Removing secrets from error texts is best effort.** A driver can reformat a connection string or quote part of a value in ways the program does not recognise.
+- **Removing secrets from error texts is best effort.** The program removes every value of a connection as written, stripped of surrounding whitespace and as Python quotes it, and a password in a URL or ODBC string as written and decoded; from the target's errors only the password of its address. A driver can still reformat a connection string or quote part of a value in another way. A secret of one or two characters may also be removed from inside other words of a reason, which makes it unreadable and hides nothing else; a rule for it is not worth its cost.
 - **The private key file has to reach every worker** once, by whatever the organisation uses for that.
 - **No common point in time in the source.** Two tables are not read at the same moment.
 - **A table with a key cannot have a column `_op`**, nor `_run`, `_loaded_at`, `_valid_from` or `_valid_to` with a change log. The diff, the change log and the history view use these names.
@@ -59,6 +59,9 @@ Unchanged from the first round:
 - **A table that left the definition and the table that took over its name hold different locks** (a lock is the pair of source and table). A run of the first that is still loading while the second runs can meet it on one mirror: a primary-key failure, or a doubled row in the log, at worst.
 - **A change log left under a name the definition no longer has** keeps a history view that nobody updates.
 - **A history view left behind under a name a new change log takes** is replaced by the next run, or the run fails if its columns do not fit.
+- **An empty page in the middle of REST paging ends the load.** An empty page is how paging ends, so an API that answers one in the middle delivers a table that stops there. The limit on deletions catches a large cut, a small one passes.
+- **`run` before `key new`.** The start checks name an unset `ROWVIOLI_KEY_FILE`, not a file that does not exist yet. Every due table then fails with `the connection of source erp cannot be decrypted on worker ...: [Errno 2] No such file or directory: 'worker.key'`, which does not say that `rowvioli key new` creates the file.
+- **The pooler check has holes.** A control connection behind a pooler in transaction mode is caught by comparing `pg_backend_pid()` in two transactions. An idle pooler hands out the same server connection and passes it; a busy one was caught in 84 of 100 checks (PgBouncer 1.26.1, eight busy neighbours; [measurements](measurements.md#14-the-pooler-check-behind-pgbouncer-in-transaction-mode)). Session mode is the requirement, the check a net.
 - **Tables without a key** are replaced as a whole on every run, have no change log, and bloat until autovacuum has run.
 - **Advisory locks share one number space per database.** Another application using two-key advisory locks in the same database could collide.
 - **An idle worker keeps one connection to the target open**, with which it asks whether something is claimable.
@@ -82,4 +85,4 @@ The prototype's code is on branch `prototype-impl`.
 - Whether Sling or ingestr already cover most of this.
 - DuckDB as the engine of the whole program instead of only the `file` connector.
 - Whether another small tool for mirroring into Postgres already works with a maximum age per table.
-- A formal trademark search for the name `rowvioli` (see `docs/package.md`).
+- A formal trademark search for the name `rowvioli`: DPMAregister, EUIPO TMview and USPTO, by the owner, before publishing. Checked on 2026-11-11 and free: the PyPI project, the domains `rowvioli.com`, `.de`, `.io`, `.dev`, GitHub repositories and the account, a web search. None is reserved yet; registering them is the owner's step.

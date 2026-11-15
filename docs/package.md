@@ -48,38 +48,7 @@ Two points:
 
 All are compatible with an MIT project. The core does everything on the control connection through ADBC: advisory lock, TEMP tables, COPY and the publishing transaction. Experiment 8 played a complete run through it, so no second Postgres driver is needed (decision 28).
 
-## Repo layout
-
-```
-rowvioli/
-  src/rowvioli/
-    cli.py              commands, JSON answer, exit code
-    definition.py       read and check the source files, fill in placeholders
-    apply.py            write the definition into the target
-    seal.py             encrypt and decrypt connections
-    target.py           control connection: keepalive, schema version, SQL
-    load.py             one run: staging, checks, diff, publishing
-    work.py             the loop: look for claimable tables, start a process per run
-    contract.py         connector contract
-    connectors/
-      postgres.py
-      file.py
-      odbc.py
-      rest.py
-    sql/                schema with the status view, what is claimable, apply
-  tests/                against a real Postgres
-  bench/                reproduces the measurements
-  examples/
-    quickstart/         docker compose: source, target, one source file
-    definition/         template for the repo that holds the definition
-    Dockerfile
-  docs/
-  README.md
-  GLOSSARY.md
-  LICENSE               MIT
-  pyproject.toml
-  .github/workflows/    tests, publishing to PyPI
-```
+## In short
 
 `run` and `work` are the same loop in `work.py`. `run` ends when nothing is due any more.
 
@@ -100,18 +69,4 @@ The first screen of the README shows the whole usage: one source file, the targe
 
 ## Name
 
-The project is called `rowvioli`: ravioli made of rows. It loads in small parcels.
-
-Checked on 2026-11-11, all free:
-
-| Where | Result |
-|---|---|
-| PyPI project `rowvioli` | free |
-| Domains `rowvioli.com`, `.de`, `.io`, `.dev` | not registered (`.com` and `.de` confirmed by whois) |
-| GitHub repositories with the name | none |
-| GitHub account `rowvioli` | free |
-| Web search for a product of that name | no hits (US results only) |
-
-**Not checked: trademarks.** None of the above says anything about them. Before publishing, the name needs a search in the trademark registers (DPMAregister, EUIPO TMview, USPTO) by the owner.
-
-None of these names is reserved yet. Registering the PyPI project, the GitHub account and a domain is the owner's step.
+The project is called `rowvioli`: ravioli made of rows. It loads in small parcels. The search in the trademark registers is an open point (`docs/open-points.md`).

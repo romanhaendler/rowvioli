@@ -2,7 +2,7 @@
 
 Every decision of the concept with its reason, its price and what was rejected. The order follows the discussion of 2026-11-11, so the document also shows how the design got to where it is.
 
-There were two rounds on that day. Decisions 1 to 19 are the first round. The second round (decisions 20 to 30) replaced the model of orders, a jobs repo and an external scheduler with a maximum age per table, definitions in the target and stateless workers. Decisions of the first round that no longer hold are marked and kept, with their text unchanged. A third round (decisions 32 to 35) followed on 2026-11-12, after a throwaway prototype had tried out the model of the second round. A fourth round (decision 36) added load times, a fifth (decision 37) the lines of a worker, a sixth (decision 38) the rule for licences, a seventh (decisions 39 and 40) target names and history.
+There were two rounds on that day. Decisions 1 to 19 are the first round. The second round (decisions 20 to 30) replaced the model of orders, a jobs repo and an external scheduler with a maximum age per table, definitions in the target and stateless workers. Decisions of the first round that no longer hold are marked and kept, with their text unchanged. A third round (decisions 32 to 35) followed on 2026-11-12, after a throwaway prototype had tried out the model of the second round. A fourth round (decision 36) added load times, a fifth (decision 37) the lines of a worker, a sixth (decision 38) the rule for licences, a seventh (decisions 39 and 40) target names and history. An eighth (decisions 41 to 43) followed on 2026-11-15, after the shakedown of the built wheel.
 
 Evidence refers to `docs/measurements.md` and to the earlier projects `hpdl`, `data-extractor` and `dataly` in the same workspace.
 
@@ -587,6 +587,45 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 - *`infinity` for an open period.*
 - *A log that may have gaps,* with a note that it does.
 - *An index built by the run.* It costs every insert, and no index helps the query for a moment.
+
+## Eighth round: after the shakedown
+
+## 41. Options narrow a connection and never move it
+
+**Decision.** The connection says where a source is. An option of a table, which sits in plain text in the target, may only say where to read inside that source. A REST `path` is a path on the connection's host: it starts with `/`, and the joined address keeps scheme, host and port. A `file` table is a file inside the connection's `path`; `..` and an absolute name fail. The connector checks it at every run, `apply` repeats the `/` rule for `rest` so that the author learns it first.
+
+**Why.** Decision 26 encrypts the connection as a whole, the address too, so that whoever can write to the target cannot point a password at another server. An option that is joined to the address undid it: `path = ".evil.com/x"` sent the token to a host of someone else's choosing, and a `file` table `../outside.csv` read any file the worker can read. The check belongs in the connector because a writer of the target does not pass `apply`.
+
+**Price.** A REST API whose pages live on another host needs a connector of its own. A `file` source cannot read through a symbolic link that leaves its directory.
+
+**Rejected.**
+- *Checking only in `apply`.* A writer of the target bypasses it.
+- *Putting `path` into the encrypted connection.* Then one connection per endpoint, and the tables of a source could not differ.
+- *Hiding the URL in the reason.* The reason names the option, so that no address lands in a log.
+
+## 42. Zero rows protects a mirror
+
+**Decision.** The limit of decision 18 on zero rows applies only when the mirror exists and holds rows. A first load, or a mirror that is empty, publishes zero rows. `max_delete_share` is untouched.
+
+**Why.** The limit is there so that a broken source cannot empty a mirror in a consistent transaction. A mirror with nothing in it has nothing to protect, and a new source table that is still empty would otherwise wait, failed, for its first row, with a table that does not exist for the consumers who build on it.
+
+**Price.** A source that is broken from its first run and delivers nothing looks like an empty table. Nothing was there to lose.
+
+**Rejected.**
+- *A switch per table for allowing empty loads.* A concept for a case that has a plain answer.
+- *Keeping the limit for first loads.* It forbids mirroring an empty table and its columns.
+
+## 43. `max_seconds` is the one bound of a run
+
+**Decision.** A run is bounded by `max_seconds` and by nothing else. No connector sets a timeout of its own; the REST connector sent every request with five seconds before.
+
+**Why.** A hidden limit in one connector is the one bound a person does not find in the definition. A slow API failed at five seconds although the table allowed an hour, and the same table loaded from a file or a database never met such a limit. One bound that is visible, per source or table, is enough,, and the worker ends the run's process when it is over.
+
+**Price.** A source that never answers holds its run until `max_seconds`, and that table's slot with it.
+
+**Rejected.**
+- *A timeout option for `rest`.* A second bound beside the first.
+- *A longer fixed timeout.* It moves the problem.
 
 ## Corrections after the prototype
 

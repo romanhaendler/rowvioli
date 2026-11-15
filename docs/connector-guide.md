@@ -2,11 +2,7 @@
 
 For a source whose driver or SDK comes under a vendor licence or the GPL: SQL Server, Informix, Oracle, SAP and the like.
 
-One sentence carries it (decision 38):
-
-> rowvioli ships only code written for it and dependencies under a permissive licence; everything under another licence is installed by the operator or lives in a separate package.
-
-For you this means: the licensed software never travels with rowvioli or with your connector. You install it on the machines that run it, and you accept its terms yourself. Everything below follows from that.
+The rule is [decision 38](decisions.md#38-rowvioli-ships-only-code-written-for-it-and-permissive-dependencies). For you it means: the licensed software never travels with rowvioli or with your connector. You install it on the machines that run it, and you accept its terms yourself. Everything below follows from that.
 
 This is the project's rule and what the texts say, not legal advice.
 
@@ -115,7 +111,9 @@ ROWVIOLI_KEY_FILE=worker.key rowvioli run
 rowvioli status
 ```
 
-Until rowvioli is on PyPI, put the path of a checkout in place of `rowvioli` in the first line. The status shows `demo numbers ok`, and `select * from raw_demo.numbers` in the target returns 1, 2, 3.
+Until rowvioli is on PyPI, put the path of a checkout in place of `rowvioli` in the first line.
+
+**Beside a wheel that is installed already**, install the wheel again with the connector, by the same command: `uv tool install --reinstall ./rowvioli-0.2.0-py3-none-any.whl --with ./rowvioli-testing`. `uv tool install` replaces what a tool had, so name every `--with` the worker needs. With `pip`, `pip install ./rowvioli-testing` into the environment of the wheel does the same. Either way the connector is found by its entry point at the next start, and `rowvioli run` lists the installed types when one is missing. The status shows `demo numbers ok`, and `select * from raw_demo.numbers` in the target returns 1, 2, 3.
 
 Now make it yours:
 
@@ -140,7 +138,7 @@ What was read on 2026-11-12:
 
 ## Secrets
 
-rowvioli removes every value of the connection from a failure reason before it stores or prints it: each text in the block, and the password inside a URL or an ODBC string, as written and decoded. The status view and the output of `run` and `work` stay clean even when your SDK quotes the connection in its errors.
+rowvioli removes every value of the connection from a failure reason before it stores or prints it: each text in the block as written, stripped of surrounding whitespace and as a driver quotes it inside quotes, and the password inside a URL or an ODBC string, as written and decoded. The status view and the output of `run` and `work` stay clean even when your SDK quotes the connection in its errors.
 
 What rowvioli cannot clean is what your connector writes itself:
 
