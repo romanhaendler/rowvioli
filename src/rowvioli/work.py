@@ -139,7 +139,21 @@ def run(source, table, slots):
         requested = sql(conn, f"""UPDATE _rowvioli.tables SET requested_at = now()
                                    WHERE id IN (SELECT id FROM _rowvioli.status WHERE {SCOPE}) RETURNING id""",
                         [source, table])
+        like = [] if requested or not table else sql(
+            conn, "SELECT source_table FROM _rowvioli.status WHERE source = $1 AND right(source_table, $3::int) = $2::text",
+            [source, "." + table, len(table) + 1])
         conn.close()
         if not requested:
-            raise SystemExit(f"{source} {table}".strip() + ": no enabled table has this name")
+            raise SystemExit(f"{source} {table}".strip() + ": no enabled table has this name"
+                             + (f"; did you mean {like[0][0]}" if len(like) == 1 else ""))
     return loop(slots, source, table, once=True)
+
+
+def say_waiting():
+    """`run` without names loaded nothing: if tables wait out the pause after a failure, say so on stderr."""
+    conn = target.connect(versioned=False)
+    [(n, due)] = sql(conn, "SELECT count(*), min(due_at) FROM _rowvioli.status WHERE status = 'failed' AND due_at > now()")
+    conn.close()
+    if n:
+        say(f"{n} table{'s' if n > 1 else ''} wait out their pause after a failure, the first until "
+            f"{due.astimezone().strftime('%H:%M:%S')}; `rowvioli run <source>` loads them now")

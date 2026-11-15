@@ -41,6 +41,10 @@ def main():
 
 
 def command(a):
+    needs = {"init": 1, "status": 1, "run": 2, "work": 2}.get(a.command, 0)  # variables, target URL first
+    missing = [v for v in ("ROWVIOLI_TARGET_URL", "ROWVIOLI_KEY_FILE")[:needs] if not os.environ.get(v)]
+    if missing:
+        raise SystemExit(f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} not set")
     if a.command == "init":
         target.connect(init=True)
         print("the schema _rowvioli is ready in the target")
@@ -57,13 +61,13 @@ def command(a):
     elif a.command == "status":
         print_status(a.source or "", a.table or "")
     elif a.command in ("run", "work"):
-        if not os.environ.get("ROWVIOLI_KEY_FILE"):  # ROWVIOLI_TARGET_URL is checked when connecting
-            raise SystemExit("ROWVIOLI_KEY_FILE is not set")
         if a.command == "work":
             work.loop(a.slots)
             return
         started = time.monotonic()
         answers, crashed = work.run(a.source or "", a.table or "", a.slots)
+        if not answers and not a.source:
+            work.say_waiting()
         print(json.dumps({"seconds": round(time.monotonic() - started, 1), "tables": answers}))
         sys.exit(1 if crashed or any(answer["status"] != "ok" for answer in answers.values()) else 0)
 

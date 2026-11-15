@@ -8,7 +8,8 @@ def connector(type, where=""):
     """The connector module registered under `type`. Refuses if none is installed; `where` names the worker."""
     found = entry_points(group="rowvioli.connectors", name=type)
     if not found:
-        raise SystemExit(f'connector "{type}" is not installed{where}')
+        installed = ", ".join(sorted({e.name for e in entry_points(group="rowvioli.connectors")}))
+        raise SystemExit(f'connector "{type}" is not installed{where}; installed: {installed}')
     try:
         return next(iter(found)).load()
     except (ImportError, OSError) as e:  # a shipped connector without its extra, or without the library it loads

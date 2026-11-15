@@ -257,6 +257,16 @@ Limitations: one series, one key shape (a single `bigint` column), versions spre
 
 Recommendation: the README names an index, and says it is for one key and a person's choice (a run never builds it): `CREATE INDEX ON <schema>.<table>__log (<key columns>, _loaded_at)`. It also names the direct query above for one moment, with `:moment` replaced and the key columns in `DISTINCT ON` and `ORDER BY`, as the faster way to ask for a moment; the view stays the answer for the versions of one key and for all of history. It names no index for a moment, because none helps.
 
+## 14. The pooler check behind pgbouncer in transaction mode
+
+2026-11-15, PgBouncer 1.26.1 (`edoburu/pgbouncer`, `POOL_MODE=transaction`, pool of 5) in front of `postgres:16-alpine`, by hand, once. The control connection asks `pg_backend_pid()` in two transactions (autocommit) and fails when the two differ.
+
+- **An idle pooler is not detected.** One client alone gets the same server connection every time (ten transactions, one pid), so the check passes and `rowvioli init` works.
+- **A pooler shared with other clients is detected.** With 8 other clients running `pg_sleep(0.05)` through the pooler, 84 of 100 checks saw two different pids; 16 saw the same one.
+- **The pooler fails by itself under load.** With busy neighbours the driver's prepared statements also broke (`unnamed prepared statement does not exist`, `SQLSTATE 26000`) in 2 of 12 `init` runs, before and apart from the check.
+
+Limitations: one pooler version, one pool size, a synthetic load. A pass is no proof that no pooler is in front; the check catches the case it is built for, a pooler whose server connections are shared between clients, with a chance that grows with their number. Session mode was found to work in the shakedown (`install-target.md`).
+
 ## Reference: hpdl
 
 From `hpdl/docs/performance.md`, same table shape, source and target with 2 CPUs and 4 GB each, worker with 3 CPUs:
@@ -289,3 +299,4 @@ The bottleneck in `hpdl` was never the Python worker: source CPU on unchanged ru
 | Connections cannot be read without the private key, and tampering is detected | experiment 7. The prototype sealed whole blocks and rejected a copied ciphertext and a wrong private key. |
 | A killed process cannot publish | prototype: killed while filling, at the diff and while publishing, the mirror stayed unchanged |
 | A process per run costs 0.1 to 0.2 s | prototype |
+| A transaction-mode pooler shared with other clients is caught by two `pg_backend_pid()` reads; an idle one is not | experiment 14 |

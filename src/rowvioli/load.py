@@ -67,14 +67,18 @@ def claim(conn, worker, source, table):
 
 def load(conn, t):
     """Steps 2 to 6. Raises with the reason when the run fails."""
+    t["step"] = "reading the source"
     rows_read = stage(conn, t)
+    t["step"] = "checking the data"
     staged = sql(conn, COLUMNS, ["pg_temp._stage"])
     mirror = sql(conn, COLUMNS, [t["mirror"]])  # empty before the first run
     log_columns = sql(conn, COLUMNS, [t["log_table"]])
     check(conn, t, staged, mirror, log_columns)
+    t["step"] = "comparing with the mirror"
     counts = diff(conn, t, staged, mirror) if t["key"] else None
     if mirror:
         check_delete_share(conn, t, rows_read, counts)
+    t["step"] = "publishing"
     return publish(conn, t, staged, mirror, log_columns, rows_read, counts)
 
 
@@ -133,6 +137,9 @@ def stage(conn, t):
         raise Exception(f"the connection of source {t['source']} cannot be decrypted on worker {t['worker']}: {e}")
     t["values"] = connection_values(connection)
     batches = stream(connector.read(connection, t["source_table"], t["options"]))
+    if batches and (gone := [k for k in t["key"] or [] if k not in batches.schema.names]):
+        raise Exception(f"table {t['source_table']} has no column {', '.join(gone)}; it has: "
+                        + ", ".join(batches.schema.names))
     with conn.cursor() as c:
         rows_read = c.adbc_ingest("_stage", batches, mode="create", temporary=True) if batches else 0
     if rows_read == 0:
@@ -183,7 +190,8 @@ def publish(conn, t, staged, mirror, log, rows_read, counts):
         # in a transaction of its own under a lock on its name, because two first runs of a source race on
         # IF NOT EXISTS; the one-number lock never counts as a table lock
         sql(conn, "SELECT pg_advisory_lock(hashtext($1))", [t["schema"]])
-        sql(conn, f"CREATE SCHEMA IF NOT EXISTS {quote(t['schema'])}")
+        if not sql(conn, "SELECT 1 FROM pg_namespace WHERE nspname = $1", [t["schema"]]):  # else no CREATE right needed
+            sql(conn, f"CREATE SCHEMA IF NOT EXISTS {quote(t['schema'])}")
         sql(conn, "SELECT pg_advisory_unlock(hashtext($1))", [t["schema"]])
     sql(conn, "BEGIN")
     if new:  # created inside publishing, so a mirror never exists empty
@@ -274,6 +282,19 @@ def target_secrets():
     return [password, unquote(password)] if password else []
 
 
+# what ADBC and nanoarrow put before the server's message
+WRAPPER = re.compile(r"^(?:[A-Z_]+: )?(?:\[libpq\] )?(?:nanoarrow call failed: )?(?:Failed to (?:prepare|execute) query"
+                     r"(?: '[^']*')?: )?(?:ERROR:\s+)?")
+PATH = re.compile(r"(?<![\w.])(?:/[\w.\-]+)+/([\w.\-]+)")  # an absolute path, cut to its file name
+
+
+def reason_line(values, text, step):
+    """The reason as it is stored, shown and logged: scrubbed, the first line of the driver's message without its
+    wrapper or absolute paths; a line saying so when the driver gave none."""
+    line = PATH.sub(r"\1", WRAPPER.sub("", scrub(values, text).strip().split("\n")[0])).strip()
+    return line or f"the driver gave no message while {step}"
+
+
 def scrub(values, text):
     """`text` with each of `values` replaced by `***`: as written, stripped, and as repr writes it in quotes."""
     values = [w for v in values if v for w in (v, v.strip(), repr(v)[1:-1], repr(v.strip())[1:-1])]
@@ -327,7 +348,7 @@ def main(worker, source, table):
     try:
         answer = load(conn, t)
     except BaseException as e:  # everything, so no unscrubbed traceback reaches stderr (open point F4)
-        answer = {"reason": scrub(t.get("values", []), str(e) or type(e).__name__)}
+        answer = {"reason": reason_line(t.get("values", []), str(e), t.get("step", "claiming"))}
     if "reason" in answer:  # outside the except, so a failing fail() cannot print the unscrubbed error with it
         try:
             answer = fail(conn, t, answer["reason"])

@@ -30,6 +30,8 @@ def connect(init=False, versioned=True):
     conn = adbc.connect(url + ("&" if "?" in url else "?") + KEEPALIVE, autocommit=True)
     for name, value in SESSION.items():
         sql(conn, f"SET {name} = '{value}'")
+    if sql(conn, "SELECT pg_backend_pid()") != sql(conn, "SELECT pg_backend_pid()"):  # one per transaction (autocommit)
+        raise SystemExit("a connection pooler in transaction mode is in front of the target; use session mode")
     if not versioned:
         if not sql(conn, "SELECT to_regclass('_rowvioli.status') IS NOT NULL")[0][0]:
             raise SystemExit(NO_SCHEMA)

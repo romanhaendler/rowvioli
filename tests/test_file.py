@@ -139,6 +139,6 @@ def test_a_table_outside_the_connections_path_fails_naming_the_table(files, name
     name = name.format(abs=outside)
     code, answer = load(files, f'"{name}" = {{ key = ["a"], target_table = "x" }}\n')
     assert code == 1
-    reason = answer["raw_files.x"]["reason"]
+    assert name.rsplit("/", 1)[-1] in reason and str(files.dir) not in reason  # a reason holds no absolute path
     assert name in reason
     assert files.target("select count(*) from information_schema.tables where table_name = 'x'") == [(0,)]
