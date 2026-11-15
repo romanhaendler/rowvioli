@@ -82,6 +82,8 @@ def read(directory, env=None, only=None):
                         raise SystemExit(f"{both} both become {schema}.{target + suffix}; "
                                          "set target_table at one of them")
                     names[schema, target + suffix] = path.name, f"{name}: {table}"
+                if s["type"] == "rest" and not str(t.get("path", "/")).startswith("/"):
+                    raise SystemExit(f"{spot}: path must start with /")
                 # no default zone: 14:00 that silently means UTC is found in production (decision 36)
                 times = {k: t.get(k, s.get(k)) for k in ("at", "timezone")}
                 if times["at"] and not times["timezone"]:

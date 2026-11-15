@@ -3,6 +3,7 @@ option `path` is appended to `url`, `columns` names every column with a type (te
 timestamptz) and `page` names a query parameter that counts from 1 until a page comes back empty; a page equal to the one
 before fails the run. Each response is a JSON array of flat objects and becomes one batch."""
 from datetime import date, datetime, timezone
+from urllib.parse import urlsplit
 
 import httpx
 import pyarrow as pa
@@ -37,8 +38,13 @@ def read(connection, table, options):
     schema = pa.schema([(name, TYPES[type]) for name, type in columns.items()])
     headers = {"Authorization": f"Bearer {connection['token']}"} if connection.get("token") else {}
     path, paged, page, previous = options["path"], "page" in options, 1, None
+    address = connection["url"] + path
+    here, there = urlsplit(connection["url"]), urlsplit(address)
+    # the token goes to the connection's host only: `.evil.com/x` or `@host/x` would move it
+    if not path.startswith("/") or (here.scheme, here.hostname, here.port) != (there.scheme, there.hostname, there.port):
+        raise Exception(f"{table}: the option path must start with / and stay on the connection's host")
     while True:
-        response = httpx.get(connection["url"] + path, params={options["page"]: page} if paged else None,
+        response = httpx.get(address, params={options["page"]: page} if paged else None,
                              headers=headers)
         if not response.is_success:
             raise Exception(f"{table}: {path} answered {response.status_code}")
@@ -60,12 +66,12 @@ def read(connection, table, options):
                 for v in values:  # pyarrow would truncate 1.5 and take True for a number
                     if (type == "int8" and v is not None and v.__class__ is not int) or (
                             type == "float8" and v.__class__ is bool):
-                        raise ValueError(f"{v!r} does not fit")
+                        raise ValueError
                 parse = PARSE.get(type)
                 arrays.append(pa.array([None if v is None else parse(v) for v in values] if parse else values,
                                        TYPES[type]))
-            except Exception as e:
-                raise Exception(f"{table}: column {name} is not {type}: {e}") from None
+            except Exception:  # the value stays out of the reason: it would end up in the status view and the log
+                raise Exception(f"{table}: column {name} is not {type}") from None
         yield pa.RecordBatch.from_arrays(arrays, schema=schema)
         if not paged:
             return

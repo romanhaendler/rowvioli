@@ -145,3 +145,63 @@ def test_list_says_the_connector_cannot_list_tables(api):
     r = api.run("list", "weather")
     assert r.returncode == 1
     assert r.stderr.strip() == "connector rest of source weather cannot list tables"
+
+
+def listener():
+    """A second server that records every request it gets."""
+    got = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            got.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'[{"station": "evil"}]')
+
+        def log_message(self, *args):
+            pass
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    Thread(target=server.serve_forever, daemon=True).start()
+    return server, got
+
+
+@pytest.mark.parametrize("path", [".evil.com/x", "@127.0.0.1:{port}/x"])
+def test_a_path_that_leaves_the_connections_host_fails_the_run_and_the_other_host_sees_nothing(api, path):
+    server, got = listener()
+    definition(api, 'a = { key = ["station"], path = "/open", columns = { station = "text" } }')
+    assert api.run("apply", "sources").returncode == 0
+    # a writer of the target bypasses apply
+    api.target("update _rowvioli.tables set options = jsonb_set(options, '{path}', to_jsonb(%s::text))",
+               [path.format(port=server.server_port)])
+    r = api.run("run")
+    server.shutdown()
+    assert r.returncode == 1
+    assert "path" in reason(api)
+    assert got == []
+    assert TOKEN not in r.stdout + r.stderr + reason(api)
+
+
+def test_apply_rejects_a_rest_path_without_a_leading_slash(api):
+    definition(api, 'a = { key = ["station"], path = "readings", columns = { station = "text" } }')
+    r = api.run("apply", "sources")
+    assert r.returncode == 1
+    assert "path" in r.stderr
+
+
+def test_a_token_with_a_trailing_newline_shows_nowhere(api):
+    definition(api, 'a = { key = ["station"], path = "/open", columns = { station = "text" } }', token=False)
+    toml = api.dir / "sources/weather.toml"
+    toml.write_text(toml.read_text().replace("[weather.tables]", 'token = "$TOK"\n[weather.tables]', 1))
+    env = {"TOK": "Geheim-0815-xyz\n"}
+    out = [api.run("apply", "sources", env=env), api.run("run", env=env), api.run("status", env=env)]
+    assert out[1].returncode == 1
+    seen = "".join(r.stdout + r.stderr for r in out) + str(api.target(
+        "select reason from _rowvioli.tables union all select reason from _rowvioli.runs"))
+    assert "Geheim-0815-xyz" not in seen
+
+
+def test_a_type_mismatch_names_table_column_and_type_but_not_the_value(api):
+    r, _ = load(api, 'a = { key = ["station"], path = "/bad", columns = { station = "text", n = "int8" } }')
+    assert r.returncode == 1
+    assert "n" in reason(api) and "int8" in reason(api)
+    assert "abc" not in reason(api) + r.stdout + r.stderr

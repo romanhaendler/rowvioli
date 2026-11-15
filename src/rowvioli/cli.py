@@ -36,7 +36,7 @@ def main():
     try:
         command(a)
     except adbc.Error as e:  # the target refused or is unreachable: its message, not a traceback
-        raise SystemExit(load.scrub(load.connection_values(os.environ.get("ROWVIOLI_TARGET_URL")), str(e)))
+        raise SystemExit(load.scrub(load.target_secrets(), str(e)))
 
 
 def command(a):

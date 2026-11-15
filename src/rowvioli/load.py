@@ -267,8 +267,15 @@ def connection_values(value):
             + odbc + [p[1:-1].replace("}}", "}") for p in odbc if p.startswith("{")])
 
 
+def target_secrets():
+    """The password of the target's URL, written and decoded: its user and host stay readable in an error."""
+    password = urlsplit(os.environ.get("ROWVIOLI_TARGET_URL") or "").password
+    return [password, unquote(password)] if password else []
+
+
 def scrub(values, text):
-    """`text` with each of `values` replaced by `***`."""
+    """`text` with each of `values` replaced by `***`: as written, stripped, and as repr writes it in quotes."""
+    values = [w for v in values if v for w in (v, v.strip(), repr(v)[1:-1], repr(v.strip())[1:-1])]
     for value in sorted(filter(None, values), key=len, reverse=True):  # a whole URL before its parts
         text = text.replace(value, "***")
     return text

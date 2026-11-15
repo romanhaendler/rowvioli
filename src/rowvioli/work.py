@@ -63,7 +63,7 @@ def loop(slots, source="", table="", once=False):
                 raise
             if conn:
                 say("the target is unreachable, connecting again every two seconds: "
-                + load.scrub(load.connection_values(os.environ.get("ROWVIOLI_TARGET_URL")), str(e)))
+                + load.scrub(load.target_secrets(), str(e)))
             conn, claimable = None, 0
         if stopping and not stopped:
             stopped = True

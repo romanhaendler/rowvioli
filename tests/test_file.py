@@ -130,3 +130,15 @@ path = "{files.dir / 'files'}"
     r = files.run("apply", "sources")
     assert r.returncode == 1
     assert "both become raw_files.customers" in r.stderr
+
+
+@pytest.mark.parametrize("name", ["../outside.csv", "{abs}"])
+def test_a_table_outside_the_connections_path_fails_naming_the_table(files, name):
+    outside = files.dir / "outside.csv"
+    outside.write_text("a\n1\n")
+    name = name.format(abs=outside)
+    code, answer = load(files, f'"{name}" = {{ key = ["a"], target_table = "x" }}\n')
+    assert code == 1
+    reason = answer["raw_files.x"]["reason"]
+    assert name in reason
+    assert files.target("select count(*) from information_schema.tables where table_name = 'x'") == [(0,)]

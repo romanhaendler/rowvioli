@@ -16,7 +16,9 @@ TYPE = re.compile(r"[A-Za-z][A-Za-z0-9_ ]*(\(\d+(,\s*\d+)?\))?")
 
 
 def read(connection, table, options):
-    file = Path(connection["path"]) / table
+    file = (Path(connection["path"]) / table).resolve()
+    if not file.is_relative_to(Path(connection["path"]).resolve()):
+        raise Exception(f"{table}: a table must be a file inside {connection['path']}")
     reader = READERS.get(file.suffix.lower())
     if reader is None:
         raise Exception(f"{table}: the file connector reads {', '.join(READERS)} files")

@@ -83,3 +83,11 @@ def test_the_lines_of_work_leak_no_connection_value(erp):
     assert "cannot connect" in err
     for value in (PASSWORD, TOKEN, "Kenn%40wort%2542-geheim", "Kenn", "wort%"):
         assert leaks(erp, value, SimpleNamespace(stdout=out, stderr=err)) == [], value
+
+
+@pytest.mark.parametrize("command", ["status", "run"])
+def test_an_error_of_the_target_shows_user_and_host_and_hides_only_the_password(rv, command):
+    url = rv.target_url.replace("postgres:x@", "postgres:zzzz@")
+    r = rv.run(command, env={"ROWVIOLI_TARGET_URL": url}, timeout=20)
+    assert r.returncode == 1
+    assert 'user "postgres"' in r.stderr, r.stderr
