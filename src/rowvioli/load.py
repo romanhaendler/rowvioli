@@ -136,6 +136,12 @@ def stage(conn, t):
         rows_read = c.adbc_ingest("_stage", batches, mode="create", temporary=True) if batches else 0
     if rows_read == 0:
         raise Exception("the source delivered zero rows")
+    # json has no equality, so the comparison could not run; the driver writes Arrow's json only as json
+    jsonb = {"json": "jsonb", "json[]": "jsonb[]"}
+    to_jsonb = [f"ALTER {quote(n)} TYPE {jsonb[t]} USING {quote(n)}::{jsonb[t]}"
+                for n, t in sql(conn, COLUMNS, ["pg_temp._stage"]) if t in jsonb]
+    if to_jsonb:
+        sql(conn, "ALTER TABLE _stage " + ", ".join(to_jsonb))
     return rows_read
 
 

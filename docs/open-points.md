@@ -43,7 +43,8 @@ Unchanged from the first round:
 - **A table that stays broken** reads the source about ten times on the first day and once per `max_age` after that, and at each load time.
 - **All workers on one target have to be equipped alike** (decision 27).
 - **New tables of a source have to be added by hand.**
-- **Column types without equality.** `json` and `xml` cannot be compared row by row and have to arrive as `jsonb` or text.
+- **Column types without equality.** `xml` cannot be compared row by row and has to arrive as text. `json` arrives as `jsonb` from every connector.
+- **A multi-dimensional array arrives flattened** from a Postgres source: `{{1,2},{3,4}}` becomes `{1,2,3,4}`. The driver reads it so; a view in the source that casts it to text keeps its shape.
 - **Comparison happens in the target type.** If a connector delivers the same value once as `1.0` and once as `1.00` into a text column, the row counts as updated.
 - **A compromised worker can read every connection.** It holds the private key and a database connection.
 - **The place where `apply` runs holds every secret** in its environment.

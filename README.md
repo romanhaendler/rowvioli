@@ -897,6 +897,8 @@ The column types in the target follow from the Arrow schema the connector delive
 - **Arrow only.** A connector names its schema. Types are never guessed from the first rows, so they cannot flip between two runs.
 - **Files.** The `file` connector delivers every CSV and Excel column as text, except those the option `columns` names with a DuckDB type, for example `columns = { amount = "decimal(10,2)" }`. Parquet keeps its own types.
 - **Decimals from Postgres.** The ADBC driver reads `numeric` as text and cannot write text into a `numeric` column. The `postgres` connector therefore has to convert to `decimal128`. This was investigated in `data-extractor` (ADR-0014 there). An unconstrained `numeric` with more than 38 digits on either side of the point fails the run.
+- **What the driver cannot carry from Postgres arrives as text.** The `postgres` connector reads `money` as `numeric` (the driver would deliver cents), and every type the driver would deliver as raw bytes (`inet`, `xml`, `timetz`, ranges, `bit`, `point`, `tsvector` and the like, and arrays of them) as text. `bytea`, `uuid`, numbers, dates, timestamps, intervals, enums and arrays of these arrive with their own type.
+- **`json` arrives as `jsonb`**, from every connector: `json` has no equality, so a table with it could not be compared on its second run.
 - **The driver decides the types in the target.** ADBC creates the staging table and the mirror takes its types. Some are lost on the way: `varchar(n)` arrives as `text`, `numeric(p,s)` as `numeric`. The schema check sees types only as the driver shows them, so a change from `text` to `varchar(20)` passes unseen. This is the price of one driver (decision 28).
 
 ## Web UI
