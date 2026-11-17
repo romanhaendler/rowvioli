@@ -3,7 +3,7 @@
 Each entry is one subagent's task, handed over together with `brief.md`. **Hosts** test a set-up;
 **personas** are people who use rowvioli and judge it; **reviewers** judge the code. "Run" names the run
 that used the entry last; an entry without one has not run yet. Add an entry when a run finds a blind spot;
-drop one that stops finding anything. Ids follow umriss where the entry descends from one there.
+drop one that stops finding anything.
 
 ## Hosts
 
@@ -50,7 +50,7 @@ a REST API with paging, write a connector for a source rowvioli does not have (S
 of every order as of last Monday. For each, where the docs were wrong, missing or misleading. Run: 2026-11-15.
 
 ### P16 Migrating team
-Moves a working mirror from cron and hand-written scripts (or `~/cc/hpdl`) to rowvioli: builds the
+Moves a working mirror from cron and hand-written scripts to rowvioli: builds the
 "before" for real first, then the effort per table, what has no counterpart, which habits break.
 
 ### P18 Security reviewer

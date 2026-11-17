@@ -215,4 +215,3 @@ Disk space: the harness's rule stands. Free disk and Docker usage are checked be
   - A clock set back between two runs of one table by more than the time between them would put their rows in the wrong order.
   - A mirror and a change log that are renamed away leave nothing behind, but a log left under a name the definition no longer has keeps a history view that nobody updates.
 - The owner's rule for this repo applies: one carrying idea, no pile of rules. The measure is that the README replaces the sentence "a schema belongs to exactly one source" by "the definition gives no target name twice", and needs one paragraph, one invariant and one query for history.
-- The demo set-up next to the checkout (`../rowvioli-demo`, not part of this repo) is rebuilt with the new schema version.
