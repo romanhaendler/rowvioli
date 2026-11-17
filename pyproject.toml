@@ -36,7 +36,7 @@ rest = ["httpx>=0.28"]
 rowvioli = "rowvioli.cli:main"
 
 [dependency-groups]
-dev = ["pytest", "psycopg[binary]", "rowvioli[file,odbc,rest]", "rowvioli-testing"]
+dev = ["pytest", "pytest-xdist", "psycopg[binary]", "rowvioli[file,odbc,rest]", "rowvioli-testing"]
 
 [tool.uv.sources]
 rowvioli-testing = { path = "tests/connector", editable = true }
@@ -47,6 +47,8 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# four processes: measured fastest-safe on 8 shared cores; -n 0 runs serially
+addopts = "-n 4"
 
 [project.entry-points."rowvioli.connectors"]
 postgres = "rowvioli.connectors.postgres"
