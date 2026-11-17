@@ -7,7 +7,7 @@ on:
 
 jobs:
   tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -16,8 +16,8 @@ jobs:
       # overrides .python-version
       UV_PYTHON: ${{ matrix.python }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: uv sync --locked
       # the odbc tests reach the Postgres source through psqlODBC; neither is a dependency of rowvioli
       - run: sudo apt-get update && sudo apt-get install -y unixodbc odbc-postgresql
@@ -27,12 +27,12 @@ jobs:
       - run: uv run pytest
 
   quickstart:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: examples/quickstart
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # fails if the load fails; status starts only after a successful load
       - run: docker compose up -d
       # fails if status cannot show the mirror; not `docker compose wait`: it finds no container once status has exited

@@ -79,7 +79,7 @@ Unchanged from the first round:
 - The web UI.
 - The command `request`, reading only rows from a timestamp on, patterns for table names, and workers that serve only some sources.
 - Migrating the schema from one version to the next.
-- Publishing 0.1.0: the tag `v0.1.0` and trusted publishing on PyPI are the owner's steps.
+- Publishing 0.1.0: it happens with the first push to `main` (trusted publishing on PyPI must be registered by then). Until then nothing is released or tagged.
 
 The prototype's code is on branch `prototype-impl`.
 

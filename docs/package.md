@@ -67,6 +67,10 @@ The first screen of the README shows the whole usage: one source file, the targe
   - `apply` twice gives the same state and never changes what the workers experienced.
 - The benchmark script reproduces the numbers in `docs/measurements.md`.
 
+## Releasing
+
+A version is released by raising `version` in `pyproject.toml` and adding its entry to `CHANGELOG.md`. The push to `main` that carries it runs the tests, builds, publishes to PyPI through trusted publishing in the environment `pypi` and sets the tag `v<version>`. A push that does not raise the version publishes nothing. A version on PyPI can never be replaced. A mistake is fixed by the next version.
+
 ## Name
 
 The project is called `rowvioli`: ravioli made of rows. It loads in small parcels. The owner searched the trademark registers (DPMAregister, EUIPO TMview, USPTO) on 2026-11-17 and found no conflict.
