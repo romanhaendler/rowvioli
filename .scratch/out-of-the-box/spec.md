@@ -22,7 +22,7 @@ way names the next command.** No new concept, no change to the schema `_rowvioli
 - **A missing key file stops `run` and `work` at the start**, names the path and says that `rowvioli key new`
   creates it. No table is attempted.
 - **A `type` that is a near miss of a built-in connector fails `apply`** (`postgress`: did you mean
-  `postgres`). Any other type passes as today: `apply` does not know the connectors (decision 14).
+  `postgres`). Any other type passes as today: `apply` does not know the connectors (decision 22).
 - **A REST answer may wrap its rows**: the option `rows` names the field that holds the array.
 - **The `file` connector reads JSON and a pattern** (`orders_*.csv`), still only inside the connection's `path`.
 - **`apply --init` does not create a key pair.** The owner refused it: a private key must not appear as a

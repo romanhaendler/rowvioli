@@ -48,7 +48,7 @@ def read(directory, env=None, only=None):
             whole[name] = s
             settings(s, SOURCE_SETTINGS, where)
             typos(s, where)
-            # apply does not know the connectors (decision 14), but a near miss of a built-in one is a slip
+            # apply does not know the connectors (decision 22), but a near miss of a built-in one is a slip
             for built_in in ("postgres", "file", "odbc", "rest"):
                 if isinstance(s.get("type"), str) and s["type"] != built_in and edits(s["type"], built_in) <= (
                         2 if len(built_in) >= 6 else 1):

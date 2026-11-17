@@ -15,7 +15,7 @@ Spec: `.scratch/out-of-the-box/spec.md`. Source: the `## Comments` of tickets 01
   (`rows`, JSON, a pattern). Say each thing once.
 - `examples/quickstart/compose.yaml`: the same short start.
 - `docs/decisions.md`: decision 44 (names that are always the same are defaults; `apply --init` creates no key,
-  with the owner's reason) and 45 (a near miss of a built-in type fails `apply`, refining decision 14).
+  with the owner's reason) and 45 (a near miss of a built-in type fails `apply`, refining decision 22).
 - `docs/open-points.md`: remove what is built or fixed, add the new known limits from the comments.
 - `CHANGELOG.md`: a section `Unreleased`. `GLOSSARY.md` only if a term is new.
 - No version change.
