@@ -2,7 +2,7 @@
 
 **Blocked by:** 01, 02, 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -26,3 +26,15 @@ Spec: `.scratch/out-of-the-box/spec.md`. Source: the `## Comments` of tickets 01
 - [ ] `tests/test_guide.py` and the quickstart (`docker compose up` in `examples/quickstart`, then `down -v --rmi local`) pass.
 
 ## Comments
+
+2026-11-17, Sonnet. Every command and message quoted was run against Postgres 16 with the code of this branch.
+
+Changed:
+- `README.md`: the start at the top (`key new`, `apply --init`, `work`, `status`); "Defining a source" (near-miss type); "Where the keys live"; "Commands" (table, `--init` paragraph, key file and missing-variable paragraph, "`apply` in detail": the exception for `attempted_at`, default directory, failures); connectors table, `odbc`, `file`, `rest`; "Types" (Files).
+- `docs/decisions.md`: decisions 44, 45, 46; decision 41, price (also not as a match of a pattern).
+- `docs/open-points.md`: removed `run` before `key new` and JSON files; added the limits of tickets 02 and 03.
+- `CHANGELOG.md`: `Unreleased` with Added, Changed (the two CSV changes, not confirmed by the owner), Fixed.
+- `examples/quickstart/compose.yaml`: `rowvioli key new && rowvioli apply --init && rowvioli run`; run once, both tables ok, status and rows shown, then `down -v --rmi local`.
+
+Not as the tickets said: decision 14 is the Git checkout, not "apply does not know the connectors"; that rule is in decision 22 (and open points), so decision 45 cites 22. Ticket 01 says the first-mirror steps were changed in the README; there is no such section, the start at the top and "Commands" carry it. `type = "test"` fails with `did you mean rest?` (as the ticket expects, one letter from `rest`). Not tried: `.xlsx`, Windows, odbc without libodbc (taken from ticket 01), `result.items` nesting (taken from ticket 02; `rows = "data"` and a missing field were run).
+

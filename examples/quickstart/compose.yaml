@@ -30,7 +30,7 @@ services:
     command:
       - sh
       - -c
-      - rowvioli init && rowvioli key new && rowvioli apply sources/ && ROWVIOLI_KEY_FILE=worker.key rowvioli run
+      - rowvioli key new && rowvioli apply --init && rowvioli run
     depends_on:
       source: {condition: service_healthy}
       target: {condition: service_healthy}
