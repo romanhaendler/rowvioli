@@ -1,6 +1,7 @@
 """One run, in a process of its own (README "A run"): claim, stage, diff, publish, or fail.
 
-Started by the worker loop as `python -m rowvioli.load <worker> <source> <table>`. It tells the worker on stdout,
+Started by the worker loop as `python -m rowvioli.load <worker> <source> <table>`, with a pipe on stdin that
+ends with the worker. It tells the worker on stdout,
 one JSON object per line: {"claimed": <target table>, "run", "max_seconds"} right after the claim, before reading,
 and {"table": <target table>, "status", ...counts or "reason"} at the end. It prints nothing if it claimed nothing.
 """
@@ -8,9 +9,9 @@ import itertools
 import json
 import os
 import re
+import signal
 import sys
 import threading
-import time
 from urllib.parse import unquote, urlsplit
 
 import pyarrow as pa
@@ -338,20 +339,23 @@ def say(**line):
 CHANNEL = sys.stdout  # the line to the worker; main takes it away from fd 1
 
 
-def orphaned(parent):
-    """Decision 33: a worker killed hard takes its runs with it. An orphan gets a new parent, so the run process
-    ends once its parent changes; its connection and lock go with it."""
-    while os.getppid() == parent:
-        time.sleep(1)
+def orphaned():
+    """Decision 33: a worker killed hard takes its runs with it. Stdin is a pipe from the worker that it never
+    writes to; it ends with the worker on every platform (a parent id does not change on Windows), and the run
+    process ends with it; its connection and lock go too."""
+    while os.read(0, 4096):  # not sys.stdin.buffer.read(): its lock aborts the interpreter if it exits meanwhile
+        pass
     os._exit(1)
 
 
 def main(worker, source, table):
     global CHANNEL
+    if hasattr(signal, "SIGBREAK"):  # Ctrl+Break reaches the run processes too, and they are to finish (decision 33)
+        signal.signal(signal.SIGBREAK, signal.SIG_IGN)
     # a library may write to stdout, DuckDB its progress bar: only say() reaches the worker, the rest is dropped
     CHANNEL = os.fdopen(os.dup(1), "w")
     os.dup2(os.open(os.devnull, os.O_WRONLY), 1)
-    threading.Thread(target=orphaned, args=[os.getppid()], daemon=True).start()
+    threading.Thread(target=orphaned, daemon=True).start()
     conn = target.connect()
     t = claim(conn, worker, source, table)
     if t is None:

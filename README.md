@@ -859,6 +859,8 @@ The program creates no roles. Whoever can write the definition decides what is l
 | New connector | keep running untouched | when it is installed on every worker. Install first, then apply the source that uses it. |
 | New program version | run to completion, each within `max_seconds` | the restart of the worker. On SIGTERM it starts nothing new, waits for its runs and exits. |
 
+On Windows the stop signal is Ctrl+Break instead of SIGTERM.
+
 A worker that is killed hard takes its runs with it. They show as `worker lost` and are retried after the pause.
 
 ## Connectors

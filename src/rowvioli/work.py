@@ -2,11 +2,12 @@
 import json
 import math
 import os
-import select
+import queue
 import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 
@@ -38,14 +39,17 @@ def loop(slots, source="", table="", once=False):
     """Every two seconds, or as soon as a run process ends, asks what in scope is claimable and starts a run
     process for each, up to `slots` at a time. With `once` it returns ({target table: answer}, crashed) when
     nothing in scope is due or loading. `crashed`: a run process died before it claimed anything; `once` then
-    starts no more, so it cannot start processes forever. Without `once`, SIGTERM makes it start nothing new
-    and return once its runs have ended (decision 33)."""
+    starts no more, so it cannot start processes forever. Without `once`, SIGTERM (Ctrl+Break on Windows) makes it
+    start nothing new and return once its runs have ended (decision 33)."""
     worker = f"{socket.gethostname()}:{os.getpid()}"
     answers, runs, crashed = {}, {}, False  # runs: process -> what it said after its claim, None until then
     ended = []  # runs killed after max_seconds whose reason is not yet recorded
     stopping = []
+    lines = queue.Queue()  # what the run processes say, from one reader thread each
     if not once:
-        signal.signal(signal.SIGTERM, lambda *_: stopping.append(True))
+        for name in ("SIGTERM", "SIGBREAK"):  # Windows never delivers SIGTERM; Ctrl+Break is its stop signal
+            if hasattr(signal, name):
+                signal.signal(getattr(signal, name), lambda *_: stopping.append(True))
     conn = target.connect()
     stopped = False
     if not once:
@@ -74,17 +78,29 @@ def loop(slots, source="", table="", once=False):
                 conn.close()
             return answers, crashed
         for _ in range(0 if stopping or (once and crashed) else min(claimable, slots - len(runs))):
-            runs[subprocess.Popen([sys.executable, "-m", "rowvioli.load", worker, source, table],
-                                  # nothing unscrubbed on stderr: a driver may print a connection value there
-                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)] = None
-        crashed |= listen(runs, answers, ended, 2)
+            p = subprocess.Popen([sys.executable, "-m", "rowvioli.load", worker, source, table],
+                                 # nothing unscrubbed on stderr: a driver may print a connection value there
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                                 stdin=subprocess.PIPE)  # ends with the worker: the run's sign of its death
+            runs[p] = None
+            threading.Thread(target=pump, args=(p, lines), daemon=True).start()
+        crashed |= listen(runs, answers, ended, 2, lines)
+
+
+def pump(p, lines):
+    """Hands every line a run process says to `lines`, then "" at its end. select() cannot wait on pipes on Windows."""
+    try:
+        for line in p.stdout:
+            lines.put((p, line))
+    finally:
+        lines.put((p, ""))  # without the end marker the run would hold its slot for good
 
 
 def say_end(claim, outcome, text):
     say(f"{claim['claimed']} {outcome} after {time.monotonic() - claim['started']:.1f}s: {text}")
 
 
-def listen(runs, answers, ended, seconds):
+def listen(runs, answers, ended, seconds, lines):
     """Reads what the run processes say, for `seconds` or until one ends, and kills a run that exceeds its
     `max_seconds`; its claim goes to `ended`. Returns True if one died before it claimed anything."""
     end = time.monotonic() + seconds
@@ -97,30 +113,32 @@ def listen(runs, answers, ended, seconds):
                 answers[claim["claimed"]] = claim["answer"] = {"status": "failed", "reason": claim["reason"]}
                 ended.append(claim)
         wake = min([end] + [c["deadline"] for c in runs.values() if c])
-        readable, _, _ = select.select([p.stdout for p in runs], [], [], wake - now)
-        for p in [p for p in runs if p.stdout in readable]:
-            if line := p.stdout.readline():
-                said = json.loads(line)
-                if "claimed" in said:  # the clock for max_seconds starts here
-                    runs[p] = said | {"deadline": time.monotonic() + said["max_seconds"], "started": time.monotonic()}
-                    say(f"{said['claimed']} started, run {said['run']}")
-                elif "answer" not in runs[p]:  # a run killed after max_seconds may still have answered
-                    answers[said.pop("table")] = runs[p]["answer"] = said
-                    if said["status"] == "ok":
-                        say_end(runs[p], "ok", f"{said['inserted']} inserted, {said['updated']} updated, "
-                                               f"{said['deleted']} deleted")
-                    else:
-                        say_end(runs[p], "failed", said["reason"])
-                    runs[p]["deadline"] = math.inf
-                continue
-            p.wait()  # end of its output: the process has ended
-            claim = runs.pop(p)
-            if claim and "answer" not in claim:  # it died after its claim, e.g. kill -9
-                answers[claim["claimed"]] = {"status": "failed", "reason": "worker lost"}
-                say_end(claim, "failed", "worker lost")
-            if claim is None and p.returncode != 0:
-                say(f"a run process ended with exit code {p.returncode} before it claimed anything")
-            return claim is None and p.returncode != 0
+        try:
+            p, line = lines.get(timeout=max(0, wake - now))
+        except queue.Empty:
+            continue
+        if line:
+            said = json.loads(line)
+            if "claimed" in said:  # the clock for max_seconds starts here
+                runs[p] = said | {"deadline": time.monotonic() + said["max_seconds"], "started": time.monotonic()}
+                say(f"{said['claimed']} started, run {said['run']}")
+            elif "answer" not in runs[p]:  # a run killed after max_seconds may still have answered
+                answers[said.pop("table")] = runs[p]["answer"] = said
+                if said["status"] == "ok":
+                    say_end(runs[p], "ok", f"{said['inserted']} inserted, {said['updated']} updated, "
+                                           f"{said['deleted']} deleted")
+                else:
+                    say_end(runs[p], "failed", said["reason"])
+                runs[p]["deadline"] = math.inf
+            continue
+        p.wait()  # end of its output: the process has ended
+        claim = runs.pop(p)
+        if claim and "answer" not in claim:  # it died after its claim, e.g. kill -9
+            answers[claim["claimed"]] = {"status": "failed", "reason": "worker lost"}
+            say_end(claim, "failed", "worker lost")
+        if claim is None and p.returncode != 0:
+            say(f"a run process ended with exit code {p.returncode} before it claimed anything")
+        return claim is None and p.returncode != 0
     return False
 
 

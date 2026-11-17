@@ -468,7 +468,7 @@ On 2026-11-12 a throwaway prototype tried out the model of the second round as a
 
 ## 33. `work` stops by letting its runs finish
 
-**Decision.** On SIGTERM `work` starts nothing new, waits for its running runs, each still bounded by `max_seconds`, and exits. Killing it hard kills its runs too. They count as `worker lost` and are retried after the pause.
+**Decision.** On SIGTERM (on Windows Ctrl+Break, SIGBREAK, since SIGTERM is never delivered there) `work` starts nothing new, waits for its running runs, each still bounded by `max_seconds`, and exits. Killing it hard kills its runs too. They count as `worker lost` and are retried after the pause.
 
 **Why.** In the prototype, killing `work` left its run processes behind as orphans that nobody ended after `max_seconds`. The README promised that a new program version lets running loads finish. Waiting is the smallest way to keep that promise, and a hard kill falls back on the path that already handles every crash.
 
