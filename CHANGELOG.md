@@ -9,7 +9,7 @@ Added:
 - Slips named: `apply` without a `sources` directory names where it looked; `run <name>` where the name is no source says so and suggests the source; a target address with a second `@` fails before connecting; `rows` that is no field name fails the run.
 - A `type` one letter from `postgres`, `file`, `odbc` or `rest`, and `postgresql`, fails `apply` with a hint (`did you mean file?`) unless a connector of that name is installed where `apply` runs. A setting of three letters or fewer one letter from `key`, `log` or `at` (`kye`) fails like the longer ones, and two neighbouring letters swapped count as one edit (`fiel`, `max_aeg`).
 - The `rest` connector reads rows from a field of a wrapped answer: `rows = "data"` or `rows = "result.items"`.
-- The `file` connector reads JSON files (`.json`, `.jsonl`, `.ndjson`, every column as `jsonb`) and patterns such as `orders_*.csv`, which read every matching file as one table; a file that lands later arrives on the next run.
+- The `file` connector reads JSON files (`.json`, `.jsonl`, `.ndjson`, every column as `jsonb`) and patterns such as `orders_*.csv`, which read every matching file as one table; a file that lands later arrives on the next run. A pattern reads any number of files, 50 at a time (measured with 5000).
 - `rowvioli key new --help` says what it writes. The `odbc` connector without the driver manager says to install `unixodbc`.
 
 Changed (a working set-up can notice these; both fail the run and name the option):
@@ -19,6 +19,7 @@ Changed (a working set-up can notice these; both fail the run and name the optio
 
 Fixed:
 
+- An empty file fails and says that it is empty.
 - A ragged CSV fails instead of losing its header or arriving as one column.
 - A file name with `[`, `*` or `?` is no longer expanded a second time by DuckDB, which could read another file than the one named.
 - A table whose target schema or table changes is new again: due at the next run, without the age, attempts and reason of the old name, since no mirror exists under the new name.
