@@ -33,6 +33,8 @@ def read(connection, table, options):
     for option in ("path", "columns"):
         if option not in options:
             raise Exception(f"{table}: the option {option} is missing")
+    if "rows" in options and not (isinstance(options["rows"], str) and options["rows"]):
+        raise Exception(f"{table}: the option rows must be a field name")
     columns = options["columns"]
     for name, type in columns.items():
         if type not in TYPES:

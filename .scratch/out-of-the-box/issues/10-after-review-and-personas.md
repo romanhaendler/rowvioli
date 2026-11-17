@@ -2,7 +2,7 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -62,3 +62,13 @@ exist, and a first failure pauses one minute. `requested_at` stays. The comment 
 - [ ] The whole suite is green.
 
 ## Comments
+
+Built (branch `ootb-10`, from `out-of-the-box` 9132791); every behaviour has a test that went red on the old code, except the swap case `max_aeg` (already caught as two edits for a long setting, kept as coverage):
+- Key: a missing key file says to copy `worker.key` from where `key new` was run; the start check opens the file (a directory gives `Is a directory`, an unreadable file `Permission denied`). `seal.unseal` says that the key is not the one the definition was applied with and names both ways out; the key id stays. `holds no private key` is wrapped by `load.py` unchanged.
+- `edits` counts a swap of neighbours as one. `typos` has no minimum length any more. Checked: `sep`, `skip`, `sheet`, `page`, `path`, `rows`, `columns`, `header`, `quote` still pass (a test lists them) and `tests/test_apply_mistakes.py` is green.
+- `type`: one edit from a built-in name, and `postgresql`, fail unless the type is an entry point where `apply` runs (`importlib.metadata`, as `contract.py`; nothing is loaded, so `apply` needs no connector). No test type sits one letter from a built-in name, so the passing side is tested with `odbc` itself, `postgis`, `weather` and `testing` (the installed connector of `tests/connector`).
+- Rename: a separate `UPDATE` before the upsert resets `attempted_at`, `attempts`, `reason`, `loaded_at`; `requested_at` stays (tested). A table loading under the old name finishes into the old mirror and sets `loaded_at`/`attempts`, but `attempted_at` stays null: status says `new` and the next run loads the new name. `loaded_at IS NULL` in the status view only gives `age` null.
+- Messages: `rows` not a field name, `apply` without `sources`, `run <name>` that is no source (with the source suggested when one enabled table ends in the name), a second `@` in the target address (counted after `://` before `?`, so several hosts and query strings pass; checked before the key file, in `target.check_address`).
+- Documents: README (start, "Where the keys live", the messages, `apply` section, `file` limits, `__history` begins with the first load, run name), decisions (preamble, 22, 44, 45, 46, rejected hash), open points (three-letter limit gone), CHANGELOG.
+
+Wrong or unclear in the ticket: the `run <name>` suggestion looks only for a table ending in `.<name>` (a table named exactly `<name>`, as files have, is not suggested). A password with `/` or `:` but a single `@` is not caught by the address check. The `\u0000` and JSON number sentences in the README are written from the ticket, not measured by me. The `file` code is untouched, as told.

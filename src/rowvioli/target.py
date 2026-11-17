@@ -20,6 +20,13 @@ CLAIMABLE = files(__package__).joinpath("sql/claimable.sql").read_text()
 NO_SCHEMA = "the target has no schema _rowvioli: run `rowvioli init` first"
 
 
+def check_address(url):
+    """Fails before connecting for a second @ in the address, which the driver would read as part of the host."""
+    if url.split("://", 1)[-1].split("?", 1)[0].count("@") > 1:
+        raise SystemExit("ROWVIOLI_TARGET_URL has more than one @ after the scheme: a password with @, / or : "
+                         "must be percent-encoded")
+
+
 def connect(init=False, versioned=True):
     """Opens the control connection and refuses a target without `_rowvioli` or with another schema version.
     With init=True a missing `_rowvioli` is created instead. With versioned=False only the status view must
@@ -27,6 +34,7 @@ def connect(init=False, versioned=True):
     url = os.environ.get("ROWVIOLI_TARGET_URL")
     if not url:
         raise SystemExit("ROWVIOLI_TARGET_URL is not set")
+    check_address(url)
     conn = adbc.connect(url + ("&" if "?" in url else "?") + KEEPALIVE, autocommit=True)
     for name, value in SESSION.items():
         sql(conn, f"SET {name} = '{value}'")
