@@ -62,13 +62,13 @@ Unchanged from the first round:
 - **An empty page in the middle of REST paging ends the load.** An empty page is how paging ends, so an API that answers one in the middle delivers a table that stops there. The limit on deletions catches a large cut, a small one passes.
 - **A REST column that is absent from every row of one page fails the run.** An API that leaves out null fields can therefore fail on a page where an optional column is null in every row.
 - **`timestamptz 'infinity'` from a Postgres source fails the run** with `Error occurred writing COPY data:` and nothing after it. The driver gives no cause.
-- **A misspelt setting of three letters or fewer is not caught.** `kye` goes to the connector as an option, because short option names such as `sep` must stay possible.
 - **A JSON number with a fraction passes through a 64-bit float** in the `file` connector: beyond 15 to 17 significant digits it is rounded. Whole numbers of any size and exponents arrive exactly.
 - **An unterminated quote in a CSV loads with the quote kept**: `1,"Anna` followed by more lines arrives as a row whose value is `"Anna`, without an error. Forcing `quote = '"'` would fail such a file, and also one with a literal `"` in an unquoted field, which loads right today. Whoever sets `quote = '"'` gets the failure.
 - **`columns` casts follow DuckDB**, for CSV and JSON: `1.7` cast to `integer` becomes `2`.
-- **A JSON file holds objects.** An empty file and one of other values fail with DuckDB's words (`json_read expected records, but got non-record JSON instead.`), which do not say "empty". A file that is one object is one row.
+- **A JSON file holds objects.** A file of other values (`[1, 2]`, or `[]`) fails with DuckDB's words (`json_read expected records, but got non-record JSON instead.`); a file of no bytes says that it is empty. A file that is one object is one row.
 - **The files of a pattern must all have the column**: a JSON key that one file lacks fails the run, while inside one file it is null. `*` does not match a name that starts with a dot, and `**` is one directory level, like `*`.
 - **DuckDB's messages can name a value of the file** (a record with an unknown key, a value that does not cast).
+- **Each file of a pattern is checked before it is read**, about 3 ms per file: 10,000 files take half a minute before the first row. A pattern reads 50 files at a time; open files under Linux were not measured.
 - **A JSON file is read twice**, once for its columns and once for its rows; so is every file of a pattern of JSON files.
 - **A REST field whose own name contains a dot cannot be named in `rows`**, and `apply` does not check `rows`: a value that is not text fails at the run.
 - **The pooler check has holes.** A control connection behind a pooler in transaction mode is caught by comparing `pg_backend_pid()` in two transactions. An idle pooler hands out the same server connection and passes it; a busy one was caught in 84 of 100 checks (PgBouncer 1.26.1, eight busy neighbours; [measurements](measurements.md#14-the-pooler-check-behind-pgbouncer-in-transaction-mode)). Session mode is the requirement, the check a net.

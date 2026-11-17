@@ -2,7 +2,7 @@
 
 Every decision of the concept with its reason, its price and what was rejected. The order follows the discussion of 2026-11-11, so the document also shows how the design got to where it is.
 
-There were two rounds on that day. Decisions 1 to 19 are the first round. The second round (decisions 20 to 30) replaced the model of orders, a jobs repo and an external scheduler with a maximum age per table, definitions in the target and stateless workers. Decisions of the first round that no longer hold are marked and kept, with their text unchanged. A third round (decisions 32 to 35) followed on 2026-11-12, after a throwaway prototype had tried out the model of the second round. A fourth round (decision 36) added load times, a fifth (decision 37) the lines of a worker, a sixth (decision 38) the rule for licences, a seventh (decisions 39 and 40) target names and history. An eighth (decisions 41 to 43) followed on 2026-11-15, after the shakedown of the built wheel.
+There were two rounds on that day. Decisions 1 to 19 are the first round. The second round (decisions 20 to 30) replaced the model of orders, a jobs repo and an external scheduler with a maximum age per table, definitions in the target and stateless workers. Decisions of the first round that no longer hold are marked and kept, with their text unchanged. A third round (decisions 32 to 35) followed on 2026-11-12, after a throwaway prototype had tried out the model of the second round. A fourth round (decision 36) added load times, a fifth (decision 37) the lines of a worker, a sixth (decision 38) the rule for licences, a seventh (decisions 39 and 40) target names and history. An eighth (decisions 41 to 43) followed on 2026-11-15, after the shakedown of the built wheel, and a ninth (decisions 44 to 46) on 2026-11-18, after the first mirror out of the box.
 
 Evidence refers to `docs/measurements.md`.
 
@@ -27,7 +27,7 @@ The first idea was a very fast Rust program. The discussion showed that speed wa
 **Price.** Every run writes the whole table once, even if nothing changed. At 10⁷ rows staging, diff and publishing add up to more than a minute.
 
 **Rejected.**
-- *Hash per row in the worker*. Faster for large tables, but brings the hash definition, its recomputation after type changes and key ranges for bounded memory.
+- *Hash per row in the worker*. It brings the hash definition, its recomputation after type changes and key ranges for bounded memory.
 - *A stored hash column in the mirror.* Would roughly halve the comparison on wide tables because only key and hash of the mirror are read. Kept in reserve for a concrete table that is too slow.
 - *`EXCEPT`.* 40 times slower on a wide table.
 - *Sorted merge of two ordered streams.* Needs identical sort order in source and target, which collations do not guarantee.
@@ -284,7 +284,7 @@ Patterns can be added later as a second job of the worker without changing the m
 
 **Decision.** `rowvioli apply <directory>` writes the definition into the target: one row per source, one row per table. A worker brings its connectors, the address of the target and the private key, and nothing else. It has no checkout and no file that describes a source.
 
-`apply` is idempotent, never touches what the workers experienced, treats the directory as the whole definition and runs in one transaction. What is no longer in the directory is disabled, never deleted.
+`apply` is idempotent, never touches what the workers experienced (one exception, decision 46), treats the directory as the whole definition and runs in one transaction. What is no longer in the directory is disabled, never deleted.
 
 **Why.** All workers see the same definition at the same moment. The minutes of different states from decision 14 are gone, and so are the checkout, the `git pull` and the question how a worker notices a new program version. A new program version is an ordinary restart of the service. The pipeline that deploys the definition needs access to the target and nothing else.
 
@@ -628,36 +628,37 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 
 ## 44. Names that are always the same are defaults
 
-**Decision.** `ROWVIOLI_KEY_FILE` unset means `worker.key` in the current directory, and `apply` without a directory takes `sources`, as `list` does. `run` and `work` stop at the start when the key file does not exist: they name its path and say that `rowvioli key new` creates it, and no table is attempted. The first mirror then needs one variable, `ROWVIOLI_TARGET_URL`.
+**Decision.** `ROWVIOLI_KEY_FILE` unset means `worker.key` in the current directory, and `apply` without a directory takes `sources`, as `list` does. `run` and `work` stop at the start when the key file does not exist: they open it, and when that fails they name its path and the reason, and for a missing file say to copy `worker.key` from where `rowvioli key new` was run (only for a new target does `key new` create it); no table is attempted. The first mirror then needs one variable, `ROWVIOLI_TARGET_URL`.
 
-**Why.** `key new` writes `worker.key` into the current directory and the definition lives in `sources/` by convention, so the first mirror said both names twice, and the slip that mattered, a run before `key new`, showed only per table as a failed decryption that named no next step.
+**Why.** `key new` writes `worker.key` into the current directory and the definition lives in `sources/` by convention, so the first mirror said both names twice, and the slip that mattered, a run without the key, showed only per table as a failed decryption that named no next step. The first wording sent a second machine to `key new`, which creates a pair that decrypts nothing; the message now says to copy the key, and the reason of a wrong key (`holds no private key <id>`) names both ways out.
 
 **Price.** A worker whose working directory is not where its key is (a service, cron) must still set `ROWVIOLI_KEY_FILE` or its working directory. A relative default depends on where the command runs.
 
 **Rejected.**
-- *`apply --init` creating the key pair.* The owner refused it: a private key must not appear as a side effect where the definition is deployed. That place holds every secret of the sources already, and a second private key there that nobody asked for is a copy to lose or leak. `key new` stays a command of its own, and `apply` without `worker.pub` says so.
+- *`apply --init` creating the key pair.* The owner refused it: a private key must not appear as a side effect where the definition is deployed. That place holds every secret of the sources already, and a second private key there that nobody asked for is a copy to lose or leak. `key new` stays a command of its own, and `apply` without `worker.pub` says that `key new` creates it.
 
 ## 45. A near miss of a built-in type fails apply
 
-**Decision.** A source `type` that is one letter from `file`, `odbc` or `rest`, or two from `postgres` (the rule of a misspelt setting), fails `apply` and `apply --check` with `type postgress is not a connector; did you mean postgres?`. Any other type passes.
+**Decision.** A source `type` that is one edit (a letter added, left out, changed, or two neighbours swapped) from `postgres`, `file`, `odbc` or `rest`, or is `postgresql`, fails `apply` and `apply --check` with `type fiel is not installed here; did you mean file?`, unless a connector of that type is installed where `apply` runs: then it passes, and the message says so. `postgis`, two edits from `postgres`, and any other type pass. `apply` still works where no connector is installed.
 
-**Why.** Decision 22 leaves the connectors to the workers, so `apply` does not know which are installed, and a mistyped `type` showed at the first run, per table. The four built-in names are the only ones `apply` can know, and a slip on one of them is far likelier than a connector of someone else that happens to be that close.
+**Why.** Decision 22 leaves the connectors to the workers, so `apply` does not know which are installed, and a mistyped `type` showed at the first run, per table. The four built-in names are the only ones `apply` can know, and a slip on one of them is far likelier than a connector of someone else that happens to be that close. Asking the entry points of the machine that applies costs nothing and gives a connector of one's own named `jdbc` a way through.
 
-**Price.** A connector of one's own cannot be named one letter from `file`, `odbc` or `rest`, or two from `postgres`: `test` and `fine` fail. An installed connector is still not checked: `weather` passes whether or not a worker has it.
-
-**Rejected.**
-- *Asking the installed connectors in `apply`.* The deployment needs no driver (decision 22).
-
-## 46. A changed target name makes a table due at once
-
-**Decision.** `apply` resets `attempted_at` of a table whose target schema or table changes. The table is `new` again and due at the next run. It is the one fact a worker wrote that `apply` touches.
-
-**Why.** Under the new name no mirror exists yet, and the table kept its age: a table last loaded under the old name sat out its `max_age` while `run` printed `{"tables": {}}`, as if nothing were to do.
-
-**Price.** `apply` moves a load time forward for a rename. The old tables stay where they are (decision 39), and the first run under the new name loads everything again, as a new table does.
+**Price.** A connector of one's own one edit from a built-in name fails `apply` on a machine that does not have it installed, such as a pipeline runner. An installed connector is otherwise not checked: `weather` passes whether or not a worker has it.
 
 **Rejected.**
-- *Leaving `attempted_at` alone and asking the person to request a load.* Nothing says so, and the first load under a new name is not a request but a first load.
+- *Refusing every type `apply` does not know.* The deployment needs no driver (decision 22).
+- *Two edits from `postgres`.* `postgis` is a name of its own, and the slip it would catch is rare.
+
+## 46. A changed target name makes a table new again
+
+**Decision.** `apply` resets `attempted_at`, `attempts`, `reason` and `loaded_at` of a table whose target schema or table changes. The table is `new` again: status shows no age and no old reason, it is due at the next run, and a first failure pauses one minute. `requested_at` stays. These are the only facts a worker wrote that `apply` touches. A table that is loading under the old name finishes into the old mirror, sets `loaded_at` and `attempts`, but not `attempted_at`: it stays new, and the next run loads the new name.
+
+**Why.** Under the new name no mirror exists yet, and the table kept its age, its attempts and its reason: a table last loaded under the old name sat out its `max_age` while `run` printed `{"tables": {}}`, and status described a mirror that does not exist.
+
+**Price.** `apply` moves a load time forward for a rename and forgets how often the table failed. The old tables stay where they are (decision 39), and the first run under the new name loads everything again, as a new table does.
+
+**Rejected.**
+- *Leaving the table alone and asking the person to request a load.* Nothing says so, and the first load under a new name is not a request but a first load.
 
 ## Corrections after the prototype
 

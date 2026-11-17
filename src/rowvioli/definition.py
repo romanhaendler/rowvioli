@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 import tomllib
+from importlib.metadata import entry_points
 from pathlib import Path
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -48,11 +49,8 @@ def read(directory, env=None, only=None):
             whole[name] = s
             settings(s, SOURCE_SETTINGS, where)
             typos(s, where)
-            # apply does not know the connectors (decision 22), but a near miss of a built-in one is a slip
-            for built_in in ("postgres", "file", "odbc", "rest"):
-                if isinstance(s.get("type"), str) and s["type"] != built_in and edits(s["type"], built_in) <= (
-                        2 if len(built_in) >= 6 else 1):
-                    raise SystemExit(f"{where}: type {s['type']} is not a connector; did you mean {built_in}?")
+            if isinstance(s.get("type"), str):
+                type_slip(s["type"], where)
             for k in TABLE_ONLY.keys() & s.keys():  # one table's, so no default for all, no connector option either
                 raise SystemExit(f"{where}: {k} belongs to a table, not to the source")
             for required in ("type", "max_age", "connection", "tables"):
@@ -138,24 +136,37 @@ def settings(block, known, where):
 
 
 def edits(a, b):
-    """Edit distance of two words (insert, delete, replace)."""
-    row = list(range(len(b) + 1))
-    for i, x in enumerate(a, 1):
-        prev, row[0] = row[0], i
-        for j, y in enumerate(b, 1):
-            prev, row[j] = row[j], min(row[j] + 1, row[j - 1] + 1, prev + (x != y))
-    return row[-1]
+    """Edit distance of two words (insert, delete, replace, swap of two neighbours)."""
+    d = [[i] + [0] * len(b) for i in range(len(a) + 1)]
+    d[0] = list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        for j in range(1, len(b) + 1):
+            d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] != b[j - 1]))
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                d[i][j] = min(d[i][j], d[i - 2][j - 2] + 1)
+    return d[-1][-1]
 
 
 def typos(block, where):
-    """A key that is no setting but a typo of one would silently go to the connector as an option. Short words
-    are left alone (`sep` is one edit from nothing but two from `key`): shortcut: one edit under 6 letters."""
+    """A key that is no setting but a typo of one would silently go to the connector as an option: one edit from
+    a setting under 6 letters, two from 6 (`sep` is two edits from `key`, so it stays an option)."""
     known = SOURCE_SETTINGS.keys() | TABLE_ONLY.keys()
     for k in block.keys() - known:
         for setting in known:
-            if len(k) >= 4 and edits(k, setting) <= (2 if len(setting) >= 6 else 1):
+            if edits(k, setting) <= (2 if len(setting) >= 6 else 1):
                 raise SystemExit(f"{where}: {k} is not a setting; did you mean {setting}? "
                                  "(other keys go to the connector as options)")
+
+
+def type_slip(type, where):
+    """apply does not know the connectors (decision 22), but a near miss of a built-in name that no installed
+    connector bears is a slip. An installed type always passes, so a connector of one's own can be named alike."""
+    if type in {e.name for e in entry_points(group="rowvioli.connectors")}:
+        return
+    for built_in in ("postgres", "file", "odbc", "rest"):
+        if edits(type, built_in) <= 1 or (type, built_in) == ("postgresql", "postgres"):
+            raise SystemExit(f"{where}: type {type} is not installed here; did you mean {built_in}? A connector of "
+                             f"your own passes once it is installed where apply runs")
 
 
 def interval(value, where):

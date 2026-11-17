@@ -1,5 +1,6 @@
 """The commands: arguments, the answer on stdout, the exit code."""
 import argparse
+import errno
 import importlib.metadata
 import json
 import os
@@ -50,10 +51,16 @@ def command(a):
     missing = [v for v in needs.get(a.command, []) if not os.environ.get(v)]
     if missing:
         raise SystemExit(f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} not set")
+    if a.command in needs:
+        target.check_address(os.environ["ROWVIOLI_TARGET_URL"])  # before the key file: it is the first slip to fix
     if a.command in ("run", "work"):  # one place for the default; the run processes inherit the absolute path
         key = os.path.abspath(os.environ.get("ROWVIOLI_KEY_FILE") or "worker.key")
-        if not os.path.exists(key):
-            raise SystemExit(f"the key file {key} does not exist; `rowvioli key new` creates it")
+        try:
+            open(key, "rb").close()  # opened, not just looked for: a directory or an unreadable file stops here too
+        except OSError as e:
+            raise SystemExit(f"the key file {key}: {e.strerror}" + (
+                "; copy worker.key from where `rowvioli key new` was run (only for a new target does "
+                "`rowvioli key new` create it)" if e.errno == errno.ENOENT else ""))
         os.environ["ROWVIOLI_KEY_FILE"] = key
     if a.command == "init":
         target.connect(init=True)
@@ -61,6 +68,8 @@ def command(a):
     elif a.command == "key":
         seal.new_key()
         print("created worker.key (keep it secret) and worker.pub")
+    elif a.command == "apply" and a.directory == "sources" and not Path("sources").is_dir():
+        raise SystemExit(f"{Path('sources').resolve()} does not exist; `rowvioli apply <directory>` takes another")
     elif a.command == "apply" and a.check:
         definition.read(a.directory)
         print("the definition is valid")

@@ -161,7 +161,15 @@ def run(source, table, slots):
         like = [] if requested or not table else sql(
             conn, "SELECT source_table FROM _rowvioli.status WHERE source = $1 AND right(source_table, $3::int) = $2::text",
             [source, "." + table, len(table) + 1])
+        # a first name that is no source: the person may have given the table, so look for the source that holds it
+        is_source = requested or sql(conn, "SELECT 1 FROM _rowvioli.status WHERE source = $1", [source])
+        sources = [] if is_source else [r[0] for r in sql(
+            conn, "SELECT DISTINCT source FROM _rowvioli.status WHERE right(source_table, $2::int) = $1::text",
+            ["." + source, len(source) + 1])]
         conn.close()
+        if not is_source:
+            raise SystemExit((f"{source} {table}: " if table else "") + f"{source} is no source: the first name of `run` is a source, the second a table"
+                             + (f"; did you mean `rowvioli run {sources[0]} {source}`" if len(sources) == 1 else ""))
         if not requested:
             raise SystemExit(f"{source} {table}".strip() + ": no enabled table has this name"
                              + (f"; did you mean {like[0][0]}" if len(like) == 1 else ""))

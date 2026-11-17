@@ -1,21 +1,25 @@
 # A short README: the proposal
 
-Branch `readme-short`. The README had 1019 lines and is the PyPI page. It now has 131: a newcomer reads what the program is, sees the first mirror, and finds a link for everything else. The rest moved to seven pages under `docs/`, text unchanged apart from headings, links and one lead sentence per page.
+Branch `readme-short`. The README had 1020 lines (at cd32b1b of `out-of-the-box`) and is the PyPI page. It now has 131: a newcomer reads what the program is, sees the first mirror, and finds a link for everything else. The rest moved to seven pages under `docs/`, text unchanged apart from headings, links and one lead sentence per page.
 
 ## The cut
 
 | Page | Answers | Lines | From the old README |
 |---|---|---|---|
-| `README.md` | What is it, how do I get a first mirror, what is promised, how do I install it, where is the rest | 1019 → 131 | top screen, Guarantees, Further documents |
+| `README.md` | What is it, how do I get a first mirror, what is promised, how do I install it, where is the rest | 1020 → 131 | top screen, Guarantees, Further documents |
 | `docs/definition.md` | How do I write a source down, which settings exist, what does `apply` refuse | 55 | Defining a source |
 | `docs/loading.md` | When is a table loaded, what does a run do, which checks stop it, what do I do by hand, how do workers share the work | 257 | Overview, When a table is loaded, A run (with How the program works, Checks, What a person does by hand), Workers |
 | `docs/target.md` | What is in the target, how do I read history, how is it compared and published, how does Postgres count, what happens on failures | 186 | Target schema (split: a new heading "History"), Comparing in the target, How Postgres counts, Failures |
-| `docs/connections.md` | How is a connection written, encrypted, stored; TLS; keys; rotation; what it protects against | 104 | Connections |
+| `docs/connections.md` | How is a connection written, encrypted, stored; TLS; keys; rotation; what it protects against | 105 | Connections |
 | `docs/commands.md` | What does each command do and need, `apply` in detail, the answer and exit code of `run` | 69 | Commands |
 | `docs/operation.md` | How do I run it: the definition's repo, a worker as a service and its log lines, the target and its rights as SQL, deploying under load | 132 | Operation |
 | `docs/connectors.md` | Which connectors exist with their options, licences, a custom connector, column types | 129 | Connectors (with Types) |
 
 Within a page the old `###` subsections became `##` where the page title replaced the section heading, so every old anchor slug still exists, on its new page. Links between pages are relative; the README's links are absolute GitHub URLs.
+
+## Merged with the fix round
+
+`out-of-the-box` at cd32b1b changed eleven README lines after this branch was cut. Each went to where its text now lives: the `work` line of the start (README), the `__history` sentence and the near-miss `type` rule (`definition.md`), the second machine's copy of `worker.key` ("Where the keys live", `connections.md`), the `run` row, the target address with a second `@`, the key file message, `apply`'s reset and its near-miss list (`commands.md`), the `file` pattern limits and JSON numbers (`connectors.md`). The pages were cut again from the new README with the same line ranges, so their text is the fix round's word for word. The README's "Operation and security" now says a worker brings "a copy of `worker.key`", in line with the new start. No new code comment points at the README.
 
 ## What the README keeps, and why
 

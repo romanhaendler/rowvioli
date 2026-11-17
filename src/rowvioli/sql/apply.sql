@@ -1,5 +1,7 @@
 -- `apply`, in one transaction. The whole definition is the one jsonb parameter $1 of every statement.
--- Only the definition's columns are written: what the workers experienced is never touched.
+-- Only the definition's columns are written: what the workers experienced is never touched, with one exception:
+-- a table under a new target name loses its history of loads (attempted_at, attempts, reason, loaded_at), since the
+-- mirror under that name does not exist yet. requested_at stays: a request still counts.
 
 -- A time zone this Postgres does not know raises here: on a row it would fail the status view for every table.
 SELECT DISTINCT now() AT TIME ZONE timezone FROM jsonb_to_recordset($1::jsonb -> 'tables') AS x(timezone text);
@@ -15,6 +17,14 @@ SELECT name, type, parallel, options, decode(connection, 'base64'), key_id, true
 UPDATE _rowvioli.sources SET enabled = false
  WHERE name NOT IN (SELECT x ->> 'name' FROM jsonb_array_elements($1::jsonb -> 'sources') x);
 
+-- before the upsert, which overwrites the names it compares with. A table loading under the old name publishes into
+-- the old mirror and sets loaded_at, but attempted_at stays null: it is new again and the next run loads the new name.
+UPDATE _rowvioli.tables t SET attempted_at = NULL, attempts = 0, reason = NULL, loaded_at = NULL
+  FROM jsonb_to_recordset($1::jsonb -> 'tables') AS x(source text, source_table text, target_schema text,
+                                                     target_table text)
+ WHERE t.source = x.source AND t.source_table = x.source_table
+   AND (t.target_schema, t.target_table) IS DISTINCT FROM (x.target_schema, x.target_table);
+
 INSERT INTO _rowvioli.tables AS t (source, source_table, target_schema, target_table, key, max_age, at, timezone,
                                    log, max_delete_share, max_seconds, options, enabled)
 SELECT source, source_table, target_schema, target_table, key, max_age::interval, at, timezone, log, max_delete_share,
@@ -24,9 +34,6 @@ SELECT source, source_table, target_schema, target_table, key, max_age::interval
                                                      timezone text, log boolean, max_delete_share numeric,
                                                      max_seconds int, options jsonb)
     ON CONFLICT (source, source_table) DO UPDATE SET target_schema = excluded.target_schema,
-       -- the one thing a worker wrote that apply resets: a table under a new name is new, so it is due at once
-       attempted_at = CASE WHEN (t.target_schema, t.target_table) IS DISTINCT FROM
-                                (excluded.target_schema, excluded.target_table) THEN NULL ELSE t.attempted_at END,
        target_table = excluded.target_table, key = excluded.key,
        max_age = excluded.max_age, at = excluded.at, timezone = excluded.timezone, log = excluded.log,
        max_delete_share = excluded.max_delete_share, max_seconds = excluded.max_seconds, options = excluded.options,

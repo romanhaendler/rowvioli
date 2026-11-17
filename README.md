@@ -25,7 +25,7 @@ url = "postgresql://reader:$ERP_PASSWORD@erp-db01/erp"
 export ROWVIOLI_TARGET_URL=postgresql://etl@pg01/dwh   # the target: the one variable every command needs
 rowvioli key new            # once per target: worker.key for the workers, worker.pub next to the definition
 rowvioli apply --init       # once per deployment: writes sources/ into the target, creating the schema first
-rowvioli work               # on any number of machines, with worker.key beside it: keeps every table fresh
+rowvioli work               # on any number of machines, each with a copy of worker.key beside it: keeps every table fresh
 rowvioli status             # whenever you want to look
 ```
 
@@ -95,7 +95,7 @@ def read(connection: dict, table: str, options: dict) -> Iterator[pyarrow.Record
 
 ## Operation and security
 
-The same command at every size: cron starting `rowvioli run` every minute, `rowvioli work` as a service, or the same on more machines. The definition lives in a repository whose pipeline runs `apply`. A worker has no checkout and no file that describes a source; it brings its connectors, `ROWVIOLI_TARGET_URL` and `worker.key`. Connections are stored in the target encrypted to that key, so source passwords are on no worker and in no backup in clear text.
+The same command at every size: cron starting `rowvioli run` every minute, `rowvioli work` as a service, or the same on more machines. The definition lives in a repository whose pipeline runs `apply`. A worker has no checkout and no file that describes a source; it brings its connectors, `ROWVIOLI_TARGET_URL` and a copy of `worker.key`. Connections are stored in the target encrypted to that key, so source passwords are on no worker and in no backup in clear text.
 
 There is no web UI; everything a UI needs is in `_rowvioli`: the view `status`, the log `runs` and the column `requested_at` for a load now.
 

@@ -46,4 +46,6 @@ def unseal(key_file, key_id_, source, ciphertext):
             if sealed["source"] != source:
                 raise ValueError(f"it was sealed for another source, {sealed['source']}")
             return sealed["connection"]
-    raise ValueError(f"{key_file} holds no private key {key_id_}")
+    raise ValueError(f"{key_file} holds no private key {key_id_}: it is not the key the definition was applied with; "
+                     "use the worker.key that belongs to the worker.pub next to the definition, "
+                     "or apply again with this key's worker.pub")

@@ -68,6 +68,7 @@ There is one key pair for all workers of a target.
 - The private key is never in the database, never in Git, and never passed as the value of an environment variable.
 - The public key is taken from the file next to the definition (`worker.pub` in the parent of the directory `apply` gets), not from the database. Someone with write access to the database therefore cannot slip in a key of their own.
 - A worker can hold several private keys, which is what makes rotation possible.
+- A second machine gets a copy of `worker.key`, made where `rowvioli key new` was run. `key new` there would create a different pair, which belongs to no `worker.pub` that was applied: every table then fails with `holds no private key <id>`, and the reason names both ways out, the right `worker.key` or `apply` again with the new `worker.pub`. `key new` is for a new target.
 
 ## What happens to the decrypted connection
 

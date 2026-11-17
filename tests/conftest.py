@@ -32,7 +32,7 @@ ROWVIOLI = shutil.which("rowvioli", path=os.path.dirname(sys.executable))
 
 def _start(name):
     subprocess.run(["docker", "run", "-d", "--name", name, "--label", "rowvioli-test",
-                    "-e", "POSTGRES_PASSWORD=x", "-p", "127.0.0.1::5432", IMAGE],
+                    "-e", "POSTGRES_PASSWORD=x", "-p", "127.0.0.1::5432", IMAGE, "-c", "max_connections=500"],
                    check=True, capture_output=True)
 
 
@@ -53,18 +53,33 @@ def _wait(url):
     raise RuntimeError(f"postgres at {url} did not start")
 
 
+_NAMES = "ROWVIOLI_TEST_SERVERS"  # "source,target" container names; set by the controller, inherited by xdist workers
+
+
+def pytest_configure(config):
+    # One pair of containers for the whole run: started here, in the controller only (xdist workers start after
+    # this and inherit the environment), removed in pytest_unconfigure, which also runs after Ctrl-C.
+    if hasattr(config, "workerinput") or config.option.collectonly or _NAMES in os.environ:
+        return
+    tag = uuid.uuid4().hex[:8]
+    names = [f"rowvioli-test-{tag}-source", f"rowvioli-test-{tag}-target"]
+    os.environ[_NAMES] = ",".join(names)
+    for n in names:
+        _start(n)
+    for n in names:
+        _wait(_url(n))
+    config._rowvioli_servers = names
+
+
+def pytest_unconfigure(config):
+    if names := getattr(config, "_rowvioli_servers", None):
+        subprocess.run(["docker", "rm", "-f", "-v", *names], capture_output=True)
+
+
 @pytest.fixture(scope="session")
 def servers():
-    tag = uuid.uuid4().hex[:8]
-    names = {"source": f"rowvioli-test-{tag}-source", "target": f"rowvioli-test-{tag}-target"}
-    try:
-        for n in names.values():
-            _start(n)
-        for n in names.values():
-            _wait(_url(n))
-        yield names
-    finally:
-        subprocess.run(["docker", "rm", "-f", "-v", *names.values()], capture_output=True)
+    source, target = os.environ[_NAMES].split(",")
+    return {"source": source, "target": target}
 
 
 def _query(url, sql, params=None):
