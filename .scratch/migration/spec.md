@@ -1,6 +1,6 @@
 # Migration: `init` brings the bookkeeping schema to the program's version
 
-Status: needs-triage (a draft for the owner; nothing here is decided, the questions at the end are his)
+Status: needs-triage (the owner answered the five questions on 2026-11-18, see the end; not yet cut into tickets)
 
 From `docs/open-points.md`, "Not built": migrating the schema from one version to the next. Written
 2026-11-18, after 0.1.0, whose schema is version 3.
@@ -51,22 +51,19 @@ a run loads; `init` twice changes nothing. One such fixture per released schema 
 Opus for the first step and the mechanism (what locks a migration takes while workers of the old version are
 connected has to be found out); Sonnet for each later step, which is then one file and one fixture.
 
-## Questions for the owner
+## Decided by the owner, 2026-11-18
 
-1. **Is `init` the right place, or should it be said aloud** (`rowvioli init --migrate`)? Recommended: plain
-   `init`. It is idempotent already, it needs the rights already, and a flag would be a second way to say
-   the same thing. The price: an `init` run by habit on a production target changes it. It prints what it did.
-2. **May workers of the old version keep running against a migrated target** when the step only adds
-   (a new nullable column, a new view)? Recommended: no, one rule: the version is equal or the program
-   refuses. Two kinds of steps would be the pile of rules this project avoids. The price is the gap in
-   "What a deployment looks like".
-3. **Should a worker wait instead of exit** when it meets a newer target, so that a service without restart
-   policy survives the gap? Recommended: exit with the message. Waiting hides that the worker is outdated.
-4. **Is "never down" acceptable**, i.e. a failed release is rolled forward, not back? Recommended: yes; a
-   backup of `_rowvioli` (three small tables) before `init` is the way back, and the README says so.
-5. **Which change comes first?** The mechanism is worth building only together with its first real step.
-   Candidates from the open points: the view over dead runs (a view only, so it would exercise "views are
-   replaced" but no table step), or reading from a timestamp on (a column in `tables`).
+1. **Plain `init` migrates.** No flag. It prints what it did.
+2. **One rule for versions**: the program's version equals the target's or the program refuses, also when a
+   step only adds something.
+3. **An outdated worker exits with the message.** It does not wait.
+4. **Never down.** A failed release is rolled forward; a backup of `_rowvioli` before `init` is the way back,
+   and the README says so.
+5. **The first step is reading only rows from a timestamp on** (the most frequent gap in the shakedown of
+   2026-11-18: P16, P22), built together with the mechanism.
+
+Until the mechanism exists the project is in version 0 and the schema may change without a step (owner,
+same day): a release that changes it says so in the changelog, and the target is initialised anew.
 
 ## Out of Scope
 
