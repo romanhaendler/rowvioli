@@ -2,7 +2,10 @@
 stream of batches whose schema follows the driver's column descriptions. The driver is installed by the operator."""
 import re
 
-import arrow_odbc
+try:
+    import arrow_odbc
+except OSError as e:  # no driver manager: arrow-odbc's own message is a dlopen path
+    raise ImportError("the ODBC driver manager is missing; install unixodbc (libodbc)") from e
 
 # not quoted, since quoting differs between sources, and a plain name needs none on any of them
 PLAIN = re.compile(r"\w+(\.\w+)*")

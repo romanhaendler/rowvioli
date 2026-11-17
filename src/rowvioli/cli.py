@@ -17,12 +17,13 @@ def main():
     p.add_argument("--version", action="version", version=importlib.metadata.version("rowvioli"))
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("init", help="create the schema _rowvioli in the target")
-    sub.add_parser("key", help="create a key pair").add_argument("action", choices=["new"])
+    sub.add_parser("key", help="create a key pair").add_argument(
+        "action", choices=["new"], help="new: write worker.key (private, keep it secret) and worker.pub here")
     lp = sub.add_parser("list", help="print the tables of a source")
     lp.add_argument("source")
     lp.add_argument("--definition", default="sources", help="directory of the definition")
     ap = sub.add_parser("apply", help="write the definition into the target")
-    ap.add_argument("directory")
+    ap.add_argument("directory", nargs="?", default="sources", help="directory of the definition (default: sources)")
     ap.add_argument("--check", action="store_true", help="only read and check the definition")
     ap.add_argument("--init", action="store_true", help="create the schema _rowvioli first if it is missing")
     ap.add_argument("--key", help="public key file (default: worker.pub next to the directory)")
@@ -45,10 +46,15 @@ def main():
 
 def command(a):
     needs = {"init": ["ROWVIOLI_TARGET_URL"], "status": ["ROWVIOLI_TARGET_URL"],
-             "run": ["ROWVIOLI_TARGET_URL", "ROWVIOLI_KEY_FILE"], "work": ["ROWVIOLI_TARGET_URL", "ROWVIOLI_KEY_FILE"]}
+             "run": ["ROWVIOLI_TARGET_URL"], "work": ["ROWVIOLI_TARGET_URL"]}
     missing = [v for v in needs.get(a.command, []) if not os.environ.get(v)]
     if missing:
         raise SystemExit(f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} not set")
+    if a.command in ("run", "work"):  # one place for the default; the run processes inherit the absolute path
+        key = os.path.abspath(os.environ.get("ROWVIOLI_KEY_FILE") or "worker.key")
+        if not os.path.exists(key):
+            raise SystemExit(f"the key file {key} does not exist; `rowvioli key new` creates it")
+        os.environ["ROWVIOLI_KEY_FILE"] = key
     if a.command == "init":
         target.connect(init=True)
         print("the schema _rowvioli is ready in the target")

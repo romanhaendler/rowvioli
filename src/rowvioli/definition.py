@@ -48,6 +48,11 @@ def read(directory, env=None, only=None):
             whole[name] = s
             settings(s, SOURCE_SETTINGS, where)
             typos(s, where)
+            # apply does not know the connectors (decision 14), but a near miss of a built-in one is a slip
+            for built_in in ("postgres", "file", "odbc", "rest"):
+                if isinstance(s.get("type"), str) and s["type"] != built_in and edits(s["type"], built_in) <= (
+                        2 if len(built_in) >= 6 else 1):
+                    raise SystemExit(f"{where}: type {s['type']} is not a connector; did you mean {built_in}?")
             for k in TABLE_ONLY.keys() & s.keys():  # one table's, so no default for all, no connector option either
                 raise SystemExit(f"{where}: {k} belongs to a table, not to the source")
             for required in ("type", "max_age", "connection", "tables"):
