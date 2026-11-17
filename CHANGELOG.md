@@ -19,7 +19,6 @@ Changed (a working set-up can notice these):
 - An option a `postgres`, `odbc` or `rest` table does not know (`incremental = "updated"` on `postgres`) fails the run and names the option and those the connector knows.
 - A source that delivers zero rows publishes when the table says `max_delete_share = 1.0`; without it the run still fails, and the reason says so.
 - The `path` of a `file` connection stays readable in a reason; every other value of a connection is still hidden.
-
 - A CSV skips no line before its header unless `skip` says so. A CSV with lines before its header needs `skip`.
 - A CSV that splits into a single column fails unless `sep` is given. A CSV of one column needs `sep`.
 
