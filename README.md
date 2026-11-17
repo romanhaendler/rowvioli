@@ -287,7 +287,7 @@ Data passes through the program only in the lines `read` and `copy_into_staging`
 
 | Check | Aborts if |
 |---|---|
-| Schema | a column is missing or has changed its type, as far as the driver tells types apart (see [Types](#types)). A new column is added to the target. |
+| Schema | a column is missing or has changed its type, as far as the driver tells types apart (see [Types](#types)), or holds a value its type in the target does not hold. A new column is added to the target. |
 | Key | a key combination occurs twice in the staging table, a key column is null, or the key in the definition differs from the primary key of the mirror. |
 | Safety limits | the source delivers zero rows while the mirror has rows, or more than `max_delete_share` of the rows would disappear. |
 | Change log | a change log exists and this run would not write to it (`log = false`, or the key was taken away), or it exists and its mirror does not. |
@@ -336,6 +336,22 @@ DROP TABLE raw_shop.items;
 ```
 
 A table without a change log needs only the second statement. To keep the old rows, rename the old tables as above before the next run.
+
+**A numeric column needs more digits than the mirror holds**, for example after the source went from `numeric(12,2)` to `numeric(12,4)`. The mirror keeps its type and loads while the values fit; the first that does not fails the run:
+
+```
+raw_shop.items failed after 0.1s: column amount holds a value that its type numeric(12,2) in raw_shop.items does not hold (1.2345)
+```
+
+Widen the column in the mirror and its change log. The history view reads the log, so it goes first, and the next run creates it again:
+
+```sql
+DROP VIEW raw_shop.items__history;
+ALTER TABLE raw_shop.items ALTER amount TYPE numeric(12,4);
+ALTER TABLE raw_shop.items__log ALTER amount TYPE numeric(12,4);
+```
+
+A view of your own on the mirror blocks the `ALTER` as well; drop it before and create it again after. The same statements give a mirror made by 0.1.0 the source's precision and scale; it loads without them.
 
 ## Comparing in the target
 
@@ -994,10 +1010,11 @@ The column types in the target follow from the Arrow schema the connector delive
 
 - **Arrow only.** A connector names its schema. Types are never guessed from the first rows, so they cannot flip between two runs.
 - **Files.** The `file` connector delivers every CSV and Excel column as text and every JSON column as `jsonb`, except those the option `columns` names with a DuckDB type, for example `columns = { amount = "decimal(10,2)" }`. Parquet keeps its own types. Giving a column a type after the first load is a change of type ([What a person does by hand](#what-a-person-does-by-hand)).
-- **Decimals from Postgres.** The ADBC driver reads `numeric` as text and cannot write text into a `numeric` column. The `postgres` connector therefore has to convert to `decimal128`. An unconstrained `numeric` with more than 38 digits on either side of the point fails the run.
+- **Decimals keep their precision and scale.** An Arrow `decimal128(p,s)` arrives as `numeric(p,s)`, from every connector, so a `numeric(12,2)` `137.00` stays `137.00`, and DuckDB's `decimal(10,2)` is `numeric(10,2)`. From the `postgres` connector this holds up to 38 digits; an unconstrained `numeric`, and one beyond 38 digits, arrive as `numeric` (the connector delivers them as Arrow's `decimal256`). An unconstrained `numeric` with more than 38 digits on either side of the point, or `NaN`, fails the run. The driver drops trailing zeros, so an unconstrained `1.10` arrives as `1.1`.
+- **An existing column keeps its type.** A column whose type in the mirror differs from the source's only in precision or scale, `numeric(10,2)` where the source has `numeric`, takes the values that fit and fails the run on the first one that does not, naming the column, the type and the value. A mirror made by 0.1.0 therefore keeps loading with its `numeric` columns. The program never alters a column ([What a person does by hand](#what-a-person-does-by-hand)).
 - **What the driver cannot carry from Postgres arrives as text.** The `postgres` connector reads `money` as `numeric` (the driver would deliver cents), and every type the driver would deliver as raw bytes (`inet`, `xml`, `timetz`, ranges, `bit`, `point`, `tsvector` and the like) as text, and an array of such a type as one text value, not as an array. `inet` keeps its netmask: `10.0.0.2` arrives as `10.0.0.2/32`. `bytea`, `uuid`, numbers, dates, timestamps, intervals, enums and arrays of these arrive with their own type.
 - **`json` arrives as `jsonb`**, from every connector. The staging step turns it into `jsonb`, because the driver cannot write `jsonb` and `json` has no equality, so a table with it could not be compared on its second run. A mirror that has a `json` column from before fails the schema check once; drop it as described under [What a person does by hand](#what-a-person-does-by-hand).
-- **The driver decides the types in the target.** ADBC creates the staging table and the mirror takes its types. Some are lost on the way: `varchar(n)` arrives as `text`, `numeric(p,s)` as `numeric`. The schema check sees types only as the driver shows them, so a change from `text` to `varchar(20)` passes unseen. This is the price of one driver (decision 28).
+- **The driver decides the other types in the target.** ADBC creates the staging table and the mirror takes its types. `varchar(n)` arrives as `text`, and an existing `varchar(n)` column in a target table is a change of type. The schema check sees types only as the driver shows them, so a change from `text` to `varchar(20)` passes unseen. This is the price of one driver (decisions 28 and 49).
 
 ## Web UI
 

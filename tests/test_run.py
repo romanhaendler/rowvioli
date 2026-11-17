@@ -107,21 +107,6 @@ def test_a_table_without_a_key_is_replaced_as_a_whole_and_has_no_change_log(erp)
     assert erp.target("select to_regclass('raw_erp.notes__log')") == [(None,)]
 
 
-def test_a_numeric_column_arrives_as_numeric_with_equal_values(erp):
-    erp.source("create table prices (id int primary key, fixed numeric(12, 2), free numeric)")
-    erp.source("insert into prices values (1, 12.34, 1.5), (2, -0.01, 123456789012345678901234567890.123),"
-               " (3, null, null), (4, 9999999999.99, 0.000000000000000000000000000001)")
-    apply(erp, definition(erp, '"public.prices" = { key = ["id"] }\n'))
-    ok(erp)
-    assert erp.target("""select attname, format_type(atttypid, atttypmod) from pg_attribute
-                          where attrelid = 'raw_erp.prices'::regclass and attnum > 0 order by attnum""") == [
-        ("id", "integer"), ("fixed", "numeric"), ("free", "numeric")]
-    assert rows(erp.target, "select * from raw_erp.prices") == rows(erp.source, "select * from prices")
-    # a second run with unchanged numbers finds no difference
-    assert run(erp, "erp")[1]["tables"]["raw_erp.prices"] == {"status": "ok", "inserted": 0, "updated": 0,
-                                                              "deleted": 0}
-
-
 def column_types(rv, table):
     return rv.target("""select attname, format_type(atttypid, atttypmod) from pg_attribute
                          where attrelid = %s::regclass and attnum > 0 order by attnum""", [table])

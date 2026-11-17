@@ -74,6 +74,7 @@ def load(conn, t):
     staged = sql(conn, COLUMNS, ["pg_temp._stage"])
     mirror = sql(conn, COLUMNS, [t["mirror"]])  # empty before the first run
     log_columns = sql(conn, COLUMNS, [t["log_table"]])
+    staged = fit(conn, t, staged, mirror, log_columns)
     check(conn, t, staged, mirror, log_columns)
     t["step"] = "comparing with the mirror"
     counts = diff(conn, t, staged, mirror) if t["key"] else None
@@ -119,6 +120,33 @@ def check(conn, t, staged, mirror, log_columns):
             raise Exception(f"a key combination of ({names}) occurs twice")
 
 
+def fit(conn, t, staged, mirror, log_columns):
+    """A staged column whose type differs from the target's only in its precision or scale (numeric and
+    numeric(10,2)) takes the mirror's, so that the comparison happens in the target type, when every value passes
+    unchanged into the mirror and the change log (decision 49). Returns the staged columns."""
+    into = []
+    for table, columns in ((t["name"], mirror), (t["name"] + "__log", log_columns)):
+        have = dict(columns)
+        for name, type in staged:
+            if have.get(name, type) == type or not sql(conn, "SELECT $1::regtype = $2::regtype",
+                                                       [type, have[name]])[0][0]:
+                continue  # the same, new, or a real change of type, which check() catches
+            c = quote(name)
+            try:
+                bad = sql(conn, f"SELECT {c}::text FROM _stage WHERE {c}::{have[name]} IS DISTINCT FROM {c} LIMIT 1")
+            except Exception as e:  # a value too large for the precision raises instead
+                bad = [[reason_line([], e, "checking the data")]]
+            if bad:
+                raise Exception(f"column {name} holds a value that its type {have[name]} in {table} does not hold"
+                                f" ({bad[0][0]})")
+            if table == t["name"]:
+                into.append(f"ALTER {c} TYPE {have[name]}")
+    if into:
+        sql(conn, "ALTER TABLE _stage " + ", ".join(into))
+        return sql(conn, COLUMNS, ["pg_temp._stage"])
+    return staged
+
+
 def check_delete_share(conn, t, rows_read, counts):
     """After step 5: a broken source must not empty the mirror in a perfectly consistent way (decision 18).
     Without a key the shrinkage counts."""
@@ -147,7 +175,14 @@ def stage(conn, t):
         raise Exception(f"table {t['source_table']} has no column {', '.join(gone)}; it has: "
                         + ", ".join(batches.schema.names))
     with conn.cursor() as c:
-        rows_read = c.adbc_ingest("_stage", batches, mode="create", temporary=True)
+        # the driver creates every decimal as numeric; Arrow's decimal128 keeps its precision and scale (decision 49)
+        # a reader without batches: Arrow cannot make an empty array of a list of an extension type
+        c.adbc_ingest("_stage", pa.RecordBatchReader.from_batches(batches.schema, []), mode="create", temporary=True)
+        exact = [f"ALTER {quote(f.name)} TYPE numeric({f.type.precision}, {f.type.scale})"
+                 for f in batches.schema if pa.types.is_decimal128(f.type)]
+        if exact:
+            sql(conn, "ALTER TABLE _stage " + ", ".join(exact))
+        rows_read = c.adbc_ingest("_stage", batches, mode="append", temporary=True)
     # zero rows protect a mirror that has rows; a first load or an empty mirror publishes them
     if rows_read == 0 and sql(conn, "SELECT to_regclass($1)", [t["mirror"]])[0][0] and \
             sql(conn, f"SELECT 1 FROM {t['mirror']} LIMIT 1"):
