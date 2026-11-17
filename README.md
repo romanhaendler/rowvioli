@@ -22,11 +22,10 @@ url = "postgresql://reader:$ERP_PASSWORD@erp-db01/erp"
 ```
 
 ```sh
-export ROWVIOLI_TARGET_URL=postgresql://etl@pg01/dwh   # the target, for every command
-rowvioli init               # once per target: creates the schema _rowvioli
+export ROWVIOLI_TARGET_URL=postgresql://etl@pg01/dwh   # the target: the one variable every command needs
 rowvioli key new            # once per target: worker.key for the workers, worker.pub next to the definition
-rowvioli apply sources/     # once per deployment: writes the definition into the target
-ROWVIOLI_KEY_FILE=worker.key rowvioli work   # on any number of machines: keeps every table fresh
+rowvioli apply --init       # once per deployment: writes sources/ into the target, creating the schema first
+rowvioli work               # on any number of machines, with worker.key beside it: keeps every table fresh
 rowvioli status             # whenever you want to look
 ```
 
@@ -169,7 +168,7 @@ What follows from it:
 | `max_delete_share` | source or table | 0.5 | The run aborts if a larger share of the rows would disappear. Without a key: if the table would shrink by more. |
 | `max_seconds` | source or table | 3600 | A hanging run is ended after this time. It is the one bound of a run: no connector sets a timeout of its own. |
 
-Any other key, at source or table level, is passed to the connector unchanged as an option, for example `path` for a REST connector. A table's option overrides the source's of the same name. The names in the table above belong to rowvioli, so a connector cannot have an option called `at` or `timezone`, and a name at the wrong level, such as `key` at a source, fails `apply`. So does a name that is one or two letters from a setting of rowvioli, such as `max_agee`: it is almost certainly a typo, and the table would run with the default.
+Any other key, at source or table level, is passed to the connector unchanged as an option, for example `path` for a REST connector. A table's option overrides the source's of the same name. The names in the table above belong to rowvioli, so a connector cannot have an option called `at` or `timezone`, and a name at the wrong level, such as `key` at a source, fails `apply`. So does a name that is one or two letters from a setting of rowvioli, such as `max_agee`: it is almost certainly a typo, and the table would run with the default. So does a `type` one or two letters from `postgres`, `file`, `odbc` or `rest`; any other type passes, since `apply` does not know the connectors.
 
 Nobody has to type 200 table names and keys. `rowvioli list erp` asks the source and prints them in this format, ready to paste. It is a helper for people. Nothing in the running system calls it.
 
@@ -632,7 +631,7 @@ There is one key pair for all workers of a target.
 | Key | Where | Who may see it |
 |---|---|---|
 | Public key | `worker.pub`, a file next to the definition | everybody. It changes only through a merge request. |
-| Private key | a file on each worker, named by `ROWVIOLI_KEY_FILE`, mode 600 | the service user of the worker |
+| Private key | a file on each worker, `worker.key` in its working directory or the one `ROWVIOLI_KEY_FILE` names, mode 600 | the service user of the worker |
 
 - The private key is never in the database, never in Git, and never passed as the value of an environment variable.
 - The public key is taken from the file next to the definition (`worker.pub` in the parent of the directory `apply` gets), not from the database. Someone with write access to the database therefore cannot slip in a key of their own.
@@ -677,17 +676,17 @@ A connector is code the operator trusts. It receives the decrypted connection an
 | Command | Does | Needs |
 |---|---|---|
 | `rowvioli init` | Creates the schema `_rowvioli` in the target and says so: `the schema _rowvioli is ready in the target`. | target |
-| `rowvioli key new` | Creates a key pair in the current directory: `worker.key` for the workers and `worker.pub` for the definition, and says so. Overwrites neither. | nothing |
+| `rowvioli key new` | Creates a key pair in the current directory: `worker.key` for the workers and `worker.pub` for the definition, and says so: `created worker.key (keep it secret) and worker.pub`. Overwrites neither. | nothing |
 | `rowvioli list erp` | Prints the tables of a source with their keys, ready to paste into its `tables` block. Reads the definition from `sources/` (or `--definition <dir>`). | definition, environment, connector, source |
-| `rowvioli apply --check sources/` | Reads the definition and checks it. Writes nothing. Meant for a laptop and for the pipeline of a merge request. | definition |
-| `rowvioli apply sources/` | Writes the definition into the target: one row per source and table, connections encrypted. With `--init` it creates the schema `_rowvioli` first when it is missing. | definition, environment, `worker.pub` next to the directory (or `--key <file>`), target |
+| `rowvioli apply --check` | Reads the definition and checks it. Writes nothing. Meant for a laptop and for the pipeline of a merge request. | definition |
+| `rowvioli apply` | Writes the definition into the target: one row per source and table, connections encrypted. Without a directory it takes `sources`, as `list` does. With `--init` it creates the schema `_rowvioli` first when it is missing. | definition, environment, `worker.pub` next to the directory (or `--key <file>`), target |
 | `rowvioli status [erp [dbo.Customers]]` | Prints the enabled tables with their target name, age, due time, status and reason or progress, from the view `_rowvioli.status`. Names narrow it the way `run` takes them. Exits 0 whenever it could print the state. | target |
-| `rowvioli work --slots 4` | Runs permanently and loads whatever is due, up to four tables at a time. | connectors, private key, target |
-| `rowvioli run` | Loads everything that is due, once, and ends. | connectors, private key, target |
-| `rowvioli run erp` | Requests all tables of `erp` and loads until nothing of `erp` is due. | connectors, private key, target |
-| `rowvioli run erp dbo.Customers` | The same for a single table, named as in the source. An unknown or disabled name fails and, when exactly one enabled table ends in the name, suggests it: `erp customers: no enabled table has this name; did you mean public.customers`. | connectors, private key, target |
+| `rowvioli work --slots 4` | Runs permanently and loads whatever is due, up to four tables at a time. | connectors, private key (`worker.key`), target |
+| `rowvioli run` | Loads everything that is due, once, and ends. | connectors, private key (`worker.key`), target |
+| `rowvioli run erp` | Requests all tables of `erp` and loads until nothing of `erp` is due. | connectors, private key (`worker.key`), target |
+| `rowvioli run erp dbo.Customers` | The same for a single table, named as in the source. An unknown or disabled name fails and, when exactly one enabled table ends in the name, suggests it: `erp customers: no enabled table has this name; did you mean public.customers`. | connectors, private key (`worker.key`), target |
 
-`rowvioli apply --init sources/` saves the extra `init` on a fresh target, and does nothing more when the schema exists. It needs what `init` needs, `CREATE` on the database, so a pipeline role with only the GRANT lines in [The target](#the-target) applies without the flag to a target that an admin has initialised.
+`rowvioli apply --init` saves the extra `init` on a fresh target, and does nothing more when the schema exists. It needs what `init` needs, `CREATE` on the database, so a pipeline role with only the GRANT lines in [The target](#the-target) applies without the flag to a target that an admin has initialised, after `rowvioli init`. It creates no key pair: a private key must not appear as a side effect where the definition is deployed, so `apply` without `worker.pub` stops and says that `rowvioli key new` creates it (decision 44).
 
 `rowvioli --version` prints the version of the installed package.
 
@@ -699,15 +698,19 @@ When `run` without a name loads nothing because tables wait out the pause after 
 2026-11-15 14:44:49 1 table waits out its pause after a failure, the first until 14:45:49; `rowvioli run <source>` loads them now
 ```
 
-Every command that needs the target finds it in `ROWVIOLI_TARGET_URL`. A password with `@`, `/` or `:` must be percent-encoded there (`@` is `%40`), because this address is written by hand, unlike a source's connection, which `apply` encodes. A worker finds its private key through `ROWVIOLI_KEY_FILE`. `run`, `work` and `status` check what they need at start and name every one that is missing, for example `ROWVIOLI_TARGET_URL and ROWVIOLI_KEY_FILE are not set`.
+Every command that needs the target finds it in `ROWVIOLI_TARGET_URL`. A password with `@`, `/` or `:` must be percent-encoded there (`@` is `%40`), because this address is written by hand, unlike a source's connection, which `apply` encodes. A worker finds its private key through `ROWVIOLI_KEY_FILE`, and in `worker.key` in the current directory without it. `run`, `work` and `status` check what they need at start and name what is missing, for example `ROWVIOLI_TARGET_URL is not set`. `run` and `work` also stop at the start when the key file does not exist, before any table is attempted, and name the path and the command that creates it:
+
+```
+the key file /srv/etl/worker.key does not exist; `rowvioli key new` creates it
+```
 
 `apply` in detail:
 
 - **Idempotent.** Applying the same definition twice gives the same state. Sources and tables are created or updated by name.
-- **It never touches what the workers experienced.** `loaded_at`, `attempted_at`, `attempts` and `requested_at` stay as they are. A deployment by itself triggers no load and loses no request. A changed `max_age` or `at` takes effect with the next query: a table that is due by the new values is loaded. A table that is new in the definition has never been attempted and is therefore due at once.
-- **The definition is always the whole.** `apply` gets a directory. What is no longer in it is disabled, never deleted, and its target tables stay, but it holds no name any more: the definition alone says who owns a name. Whoever takes the name over meets the checks before publishing on the first run. Applying the wrong directory by mistake is undone by applying the right one.
+- **It never touches what the workers experienced.** `loaded_at`, `attempted_at`, `attempts` and `requested_at` stay as they are. A deployment by itself triggers no load and loses no request. A changed `max_age` or `at` takes effect with the next query: a table that is due by the new values is loaded. A table that is new in the definition has never been attempted and is therefore due at once. One exception: a table whose target schema or table changes gets its `attempted_at` reset, because under the new name no mirror exists yet. It is due at once, as a new table is (decision 46).
+- **The definition is always the whole.** `apply` gets a directory, `sources` unless it is given another. What is no longer in it is disabled, never deleted, and its target tables stay, but it holds no name any more: the definition alone says who owns a name. Whoever takes the name over meets the checks before publishing on the first run. Applying the wrong directory by mistake is undone by applying the right one.
 - **Disabling is the only way to stop a table.** Until then it is loaded and retried. A run that is loading the table when it is disabled finishes.
-- **It fails rather than guess.** On a missing variable (all of them named at once), a setting that is one or two letters from one of rowvioli's own, a directory with no source file, a missing public key (the message names the path it tried), a target name given twice (`list` fails the same way, see [Defining a source](#defining-a-source)), or a target without the schema `_rowvioli` (then it says: run `rowvioli init` first). A misspelt setting does not reach the connector as an option, and an empty directory would disable everything:
+- **It fails rather than guess.** On a missing variable (all of them named at once), a setting that is one or two letters from one of rowvioli's own, a directory with no source file, a `type` that is a near miss of a built-in connector (`type postgress is not a connector; did you mean postgres?`), a `file` pattern without `target_table`, a missing public key (the message names the path it tried and says that `rowvioli key new` creates it), a target name given twice (`list` fails the same way, see [Defining a source](#defining-a-source)), or a target without the schema `_rowvioli` (then it says: run `rowvioli init` first). A misspelt setting does not reach the connector as an option, and an empty directory would disable everything:
 
   ```
   erp.toml: erp: max_agee is not a setting; did you mean max_age? (other keys go to the connector as options)
@@ -890,23 +893,25 @@ A connector may offer a second function, `tables(connection)`, that lists the ta
 |---|---|---|---|
 | `postgres` | PostgreSQL | ADBC | nothing |
 | `odbc` | any ODBC source; tested against PostgreSQL only | arrow-odbc | an ODBC driver manager and the vendor's driver |
-| `file` | CSV, Excel, Parquet | DuckDB | access to the files |
+| `file` | CSV, Excel, Parquet, JSON | DuckDB | access to the files |
 | `rest` | flat JSON objects over HTTP, page by page | Python generator | nothing |
 
-Version 0.1.0 ships `postgres`, `file` (without JSON), `odbc` and `rest`. JSON files in `file` are not built.
+**`odbc`** reads the whole table with `SELECT * FROM <table>`. The connection has one field, `string`, an ODBC connection string. The table name is dotted parts of letters, digits and underscores and is not quoted. The column types follow the driver's description of the columns. Without the driver manager the connector fails and says to install `unixodbc` (libodbc). `rowvioli list` reads the tables and their primary keys from `INFORMATION_SCHEMA`, so a source without it needs its tables block written by hand. It is tested against PostgreSQL through the open psqlODBC driver; SQL Server and Informix are not tested, so check the types of decimals, dates, timestamps and unbounded text on them first. A text value longer than the size the driver reports for its column (psqlODBC: 8190 bytes for `text`, raised with `MaxLongVarcharSize=<bytes>` in the connection string) fails the run instead of being cut; for columns the driver reports as unbounded, such as `varchar(max)`, rowvioli allows 1 MiB per value (untested). The tests need a driver manager and the driver `PostgreSQL Unicode`; where there is none, they skip and name `tests/odbc/run.sh`, which runs them in a container.
 
-**`odbc`** reads the whole table with `SELECT * FROM <table>`. The connection has one field, `string`, an ODBC connection string. The table name is dotted parts of letters, digits and underscores and is not quoted. The column types follow the driver's description of the columns. `rowvioli list` reads the tables and their primary keys from `INFORMATION_SCHEMA`, so a source without it needs its tables block written by hand. It is tested against PostgreSQL through the open psqlODBC driver; SQL Server and Informix are not tested, so check the types of decimals, dates, timestamps and unbounded text on them first. A text value longer than the size the driver reports for its column (psqlODBC: 8190 bytes for `text`, raised with `MaxLongVarcharSize=<bytes>` in the connection string) fails the run instead of being cut; for columns the driver reports as unbounded, such as `varchar(max)`, rowvioli allows 1 MiB per value (untested). The tests need a driver manager and the driver `PostgreSQL Unicode`; where there is none, they skip and name `tests/odbc/run.sh`, which runs them in a container.
-
-**`file`** reads one file per table from the directory `path` of the connection, by extension: `.csv`, `.xlsx`, `.parquet`. A table is the file name as written in the definition. A name that leaves `path` (`../x.csv`, an absolute path) fails the run and names the table. A relative `path` is resolved against the worker's working directory, so under systemd or cron write it absolute or set `WorkingDirectory`. Every option of the table except `columns` goes to DuckDB's reader as it is (`read_csv`, `read_xlsx`, `read_parquet`), so a European CSV is one option away:
+**`file`** reads one file per table from the directory `path` of the connection, by extension: `.csv`, `.xlsx`, `.parquet`, and `.json`, `.jsonl` or `.ndjson` for JSON. A table is the file name as written in the definition, or a pattern with `*` or `?` such as `orders_*.csv`, which reads every matching file as one table; a file that lands later arrives on the next run. A pattern needs `target_table`, and its files must be of one kind and have the same columns, or the run fails and names the file. Every file, also each match of a pattern, must lie inside `path`: a name or a match that leaves it (`../x.csv`, an absolute path, a symbolic link) fails the run and names the table. A relative `path` is resolved against the worker's working directory, so under systemd or cron write it absolute or set `WorkingDirectory`. Every option of the table except `columns` goes to DuckDB's reader as it is (`read_csv`, `read_xlsx`, `read_parquet`, `read_json`), so a European CSV is one option away:
 
 ```toml
 "items.csv" = { key = ["item_no"], sep = ";", decimal_separator = ",", nullstr = "n/a",
                 columns = { amount = "decimal(10,2)" } }
 ```
 
-An option the reader does not know fails the run. The options are those of DuckDB's `read_csv`, `read_xlsx` and `read_parquet`.
+A CSV skips no line before its header unless `skip` says so. A CSV that splits into a single column fails unless `sep` is given, because that is how DuckDB reads a file whose lines have different numbers of fields; a file of one column needs `sep = ","`. A field with a quote that is never closed is read as text with the quote in it; `quote = '"'` makes such a file fail.
 
-**`rest`** reads a JSON array of flat objects from `url` + `path`. The connection has `url` and optionally `token`, sent as a Bearer header. `path` is a path on the connection's host: it starts with `/`, and one that would lead the token elsewhere (`.evil.com/x`) fails the run and `apply`. A table needs `path` and `columns`, which names every column with a type: `text`, `int8`, `float8`, `bool`, `date`, `timestamp` or `timestamptz`. The mirror has the columns in the order `columns` names them. A field not named is left out, a missing field in some objects is null, but a named column that is absent from every object of an answer fails the run and names the column, so a renamed field does not empty the mirror. A field that is present with `null` stays a null. The connector sets no timeout; `max_seconds` bounds the run. With `page = "page"` that query parameter counts from 1 and the connector asks until a page comes back empty, and fails the run if a page repeats the one before; without `page` there is one request. An empty first page publishes an empty table. A `timestamptz` without a zone is read as UTC. For other paging, wrapped responses or headers, write a [custom connector](#a-custom-connector-complete).
+A JSON file holds objects, as an array or one per line. Each key becomes a column of type `jsonb` holding the value as written, nested objects and arrays too, so a type never changes between two runs; `columns` gives a column a DuckDB type, cast from the value's text (`columns = { id = "bigint", name = "text" }`). A number with a fraction passes through a 64-bit float, so beyond 15 to 17 significant digits it is rounded. An empty JSON file fails, since it names no column.
+
+An option the reader does not know fails the run. The options are those of DuckDB's `read_csv`, `read_xlsx`, `read_parquet` and `read_json`; for JSON, `maximum_depth` and `records` are fixed.
+
+**`rest`** reads a JSON array of flat objects from `url` + `path`, or, with the option `rows`, from a field of the answer. The connection has `url` and optionally `token`, sent as a Bearer header. `path` is a path on the connection's host: it starts with `/`, and one that would lead the token elsewhere (`.evil.com/x`) fails the run and `apply`. A table needs `path` and `columns`, which names every column with a type: `text`, `int8`, `float8`, `bool`, `date`, `timestamp` or `timestamptz`. The mirror has the columns in the order `columns` names them. A field not named is left out, a missing field in some objects is null, but a named column that is absent from every object of an answer fails the run and names the column, so a renamed field does not empty the mirror. A field that is present with `null` stays a null. The connector sets no timeout; `max_seconds` bounds the run. With `page = "page"` that query parameter counts from 1 and the connector asks until a page comes back empty, and fails the run if a page repeats the one before; without `page` there is one request. `rows` names the field that holds the array, one name or several joined by dots (`data`, `result.items`); without it the answer itself is the array. Paging ends when the array in the field is empty. An answer without the field, or with something else than an array of flat objects there, fails the run and names `rows`. An empty first page publishes an empty table. A `timestamptz` without a zone is read as UTC. For other paging or headers, write a [custom connector](#a-custom-connector-complete).
 
 ### Licences
 
@@ -987,7 +992,7 @@ A connector that needs licensed software, worked through from an empty directory
 The column types in the target follow from the Arrow schema the connector delivers.
 
 - **Arrow only.** A connector names its schema. Types are never guessed from the first rows, so they cannot flip between two runs.
-- **Files.** The `file` connector delivers every CSV and Excel column as text, except those the option `columns` names with a DuckDB type, for example `columns = { amount = "decimal(10,2)" }`. Parquet keeps its own types. Giving a column a type after the first load is a change of type ([What a person does by hand](#what-a-person-does-by-hand)).
+- **Files.** The `file` connector delivers every CSV and Excel column as text and every JSON column as `jsonb`, except those the option `columns` names with a DuckDB type, for example `columns = { amount = "decimal(10,2)" }`. Parquet keeps its own types. Giving a column a type after the first load is a change of type ([What a person does by hand](#what-a-person-does-by-hand)).
 - **Decimals from Postgres.** The ADBC driver reads `numeric` as text and cannot write text into a `numeric` column. The `postgres` connector therefore has to convert to `decimal128`. An unconstrained `numeric` with more than 38 digits on either side of the point fails the run.
 - **What the driver cannot carry from Postgres arrives as text.** The `postgres` connector reads `money` as `numeric` (the driver would deliver cents), and every type the driver would deliver as raw bytes (`inet`, `xml`, `timetz`, ranges, `bit`, `point`, `tsvector` and the like) as text, and an array of such a type as one text value, not as an array. `inet` keeps its netmask: `10.0.0.2` arrives as `10.0.0.2/32`. `bytea`, `uuid`, numbers, dates, timestamps, intervals, enums and arrays of these arrive with their own type.
 - **`json` arrives as `jsonb`**, from every connector. The staging step turns it into `jsonb`, because the driver cannot write `jsonb` and `json` has no equality, so a table with it could not be compared on its second run. A mirror that has a `json` column from before fails the schema check once; drop it as described under [What a person does by hand](#what-a-person-does-by-hand).

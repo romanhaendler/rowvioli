@@ -595,7 +595,7 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 
 **Why.** Decision 26 encrypts the connection as a whole, the address too, so that whoever can write to the target cannot point a password at another server. An option that is joined to the address undid it: `path = ".evil.com/x"` sent the token to a host of someone else's choosing, and a `file` table `../outside.csv` read any file the worker can read. The check belongs in the connector because a writer of the target does not pass `apply`.
 
-**Price.** A REST API whose pages live on another host needs a connector of its own. A `file` source cannot read through a symbolic link that leaves its directory.
+**Price.** A REST API whose pages live on another host needs a connector of its own. A `file` source cannot read through a symbolic link that leaves its directory, also not as a match of a pattern.
 
 **Rejected.**
 - *Checking only in `apply`.* A writer of the target bypasses it.
@@ -625,6 +625,39 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 **Rejected.**
 - *A timeout option for `rest`.* A second bound beside the first.
 - *A longer fixed timeout.* It moves the problem.
+
+## 44. Names that are always the same are defaults
+
+**Decision.** `ROWVIOLI_KEY_FILE` unset means `worker.key` in the current directory, and `apply` without a directory takes `sources`, as `list` does. `run` and `work` stop at the start when the key file does not exist: they name its path and say that `rowvioli key new` creates it, and no table is attempted. The first mirror then needs one variable, `ROWVIOLI_TARGET_URL`.
+
+**Why.** `key new` writes `worker.key` into the current directory and the definition lives in `sources/` by convention, so the first mirror said both names twice, and the slip that mattered, a run before `key new`, showed only per table as a failed decryption that named no next step.
+
+**Price.** A worker whose working directory is not where its key is (a service, cron) must still set `ROWVIOLI_KEY_FILE` or its working directory. A relative default depends on where the command runs.
+
+**Rejected.**
+- *`apply --init` creating the key pair.* The owner refused it: a private key must not appear as a side effect where the definition is deployed. That place holds every secret of the sources already, and a second private key there that nobody asked for is a copy to lose or leak. `key new` stays a command of its own, and `apply` without `worker.pub` says so.
+
+## 45. A near miss of a built-in type fails apply
+
+**Decision.** A source `type` that is one letter from `file`, `odbc` or `rest`, or two from `postgres` (the rule of a misspelt setting), fails `apply` and `apply --check` with `type postgress is not a connector; did you mean postgres?`. Any other type passes.
+
+**Why.** Decision 22 leaves the connectors to the workers, so `apply` does not know which are installed, and a mistyped `type` showed at the first run, per table. The four built-in names are the only ones `apply` can know, and a slip on one of them is far likelier than a connector of someone else that happens to be that close.
+
+**Price.** A connector of one's own cannot be named one letter from `file`, `odbc` or `rest`, or two from `postgres`: `test` and `fine` fail. An installed connector is still not checked: `weather` passes whether or not a worker has it.
+
+**Rejected.**
+- *Asking the installed connectors in `apply`.* The deployment needs no driver (decision 22).
+
+## 46. A changed target name makes a table due at once
+
+**Decision.** `apply` resets `attempted_at` of a table whose target schema or table changes. The table is `new` again and due at the next run. It is the one fact a worker wrote that `apply` touches.
+
+**Why.** Under the new name no mirror exists yet, and the table kept its age: a table last loaded under the old name sat out its `max_age` while `run` printed `{"tables": {}}`, as if nothing were to do.
+
+**Price.** `apply` moves a load time forward for a rename. The old tables stay where they are (decision 39), and the first run under the new name loads everything again, as a new table does.
+
+**Rejected.**
+- *Leaving `attempted_at` alone and asking the person to request a load.* Nothing says so, and the first load under a new name is not a request but a first load.
 
 ## Corrections after the prototype
 
