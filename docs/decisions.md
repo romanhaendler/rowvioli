@@ -381,7 +381,7 @@ If network zones are needed later, `rowvioli work --sources erp,crm` is the smal
 
 **Why.** Lock, TEMP tables and transaction have to be on the same connection, so two drivers side by side are not possible: it is one or the other. Experiment 8 played a complete run through ADBC: the session lock survives COMMIT and ROLLBACK and ends with the connection, the staging table is a TEMP table on that connection, the driver streams, nothing is visible before COMMIT, and errors arrive with their SQLSTATE.
 
-**Price.** The driver wraps every query that returns rows into `COPY`. `SHOW` fails because of that and has to be written as `current_setting(...)`. The driver decides the column types of the staging table, and the mirror inherits them. The prototype named the losses: `varchar(n)` becomes `text` and `numeric(p,s)` becomes `numeric`, so the schema check cannot see a change between such types, and an unconstrained `numeric` beyond 38 digits fails the run. The driver also decides the chunk size, about 16 MB, and with it the memory of a run. These are stated, not fought.
+**Price.** The driver wraps every query that returns rows into `COPY`. `SHOW` fails because of that and has to be written as `current_setting(...)`. The driver decides the column types of the staging table, and the mirror inherits them. The prototype named the losses: `varchar(n)` becomes `text` and `numeric(p,s)` becomes `numeric`, so the schema check cannot see a change between such types, and an unconstrained `numeric` beyond 38 digits fails the run. Decision 49 gives `numeric(p,s)` back up to 38 digits. The driver also decides the chunk size, about 16 MB, and with it the memory of a run. These are stated, not fought.
 
 **Rejected.**
 - *psycopg 3, row by row.* Passes every row through Python objects and takes eight times as long to fill the staging table.
@@ -682,6 +682,23 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 
 **Rejected.**
 - *A setting of its own for empty loads* (see 42).
+
+## 49. A numeric keeps its precision and scale, and the target's type counts
+
+**Decision.** The staging table gives an Arrow `decimal128(p,s)` the type `numeric(p,s)`, from every connector; the driver would create `numeric`. A staged column whose type differs from the mirror's or the change log's only in precision or scale (`numeric` and `numeric(10,2)`) takes the mirror's type, when every value passes into it unchanged; a value that does not fails the run and names the column, the type, the table and the value. The program never alters a mirror or a change log. The `postgres` connector delivers `numeric(p,s)` up to 38 digits as `decimal128(p,s)`, and an unconstrained `numeric` and one beyond 38 digits as `decimal256`, which arrives as `numeric`.
+
+**Why.** The shakedown: a source value `137.00` in `numeric(12,2)` stood in the mirror as `137` (P3), and four of eight existing target tables with `numeric(10,2)` failed their first run with a change of type nobody made, whose way out, an `ALTER TABLE`, a view on the table blocked (P16). With the staging table in the target's type the comparison happens in the target type (decision 2), so a second unchanged run finds nothing, and Postgres's own cast decides whether a value fits: no type table of our own. One idea carries it: a new mirror gets the source's type, an existing one keeps its own.
+
+**Price.** A new mirror of a `numeric(p,s)` beyond 38 digits gets `numeric`, as before. A change of precision or scale in the source is not carried: the mirror keeps its type and loads while the values fit, and the first value that does not fails the run; widening is a few statements by hand, and a consumer's view on the mirror has to be dropped and created again by its owner. A mirror made by 0.1.0 keeps `numeric`. The staging table is created empty before it is filled, one round trip more per run; a column that takes the mirror's type costs a rewrite of the staging table. `varchar(n)` still arrives as `text`: to Postgres they are two types, not one type with a length, so an existing `varchar(n)` column stays a change of type. The driver writes a decimal without its trailing zeros, so an unconstrained `numeric` `1.10` arrives as `1.1`, an equal value.
+
+**Rejected.**
+- *The program altering the mirror to the source's type.* It fails behind a view (P16), and it changes a type that consumers build on without anyone asking.
+- *A schema check that ignores precision and scale.* The insert would round `1.005` into `numeric(10,2)` without a word.
+- *Creating the staging table from a type table of our own.* What decision 28 rejected in pgpq.
+- *Naming an unconstrained `numeric` in the field's metadata.* A second agreement between connector and core, for what `decimal256` already says.
+- *Altering the staging table after filling it.* A rewrite: 0.6 to 1.0 s per 10⁶ rows measured, against 0.03 s for altering it empty.
+
+**Evidence.** `tests/test_numeric.py`; the measurement in ticket 14.
 
 ## Corrections after the prototype
 

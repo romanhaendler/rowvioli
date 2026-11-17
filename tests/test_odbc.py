@@ -67,6 +67,9 @@ def test_a_table_is_mirrored_with_its_types_and_a_change_reaches_the_change_log(
                         " and table_name = 'customers' order by ordinal_position") == [
         ("customer_no", "integer"), ("name", "text"), ("balance", "numeric"), ("born", "date"),
         ("seen", "timestamp without time zone")]
+    # psqlODBC describes numeric(10,2) so, and the decimal keeps it
+    assert ready.target("select format_type(atttypid, atttypmod) from pg_attribute where attname = 'balance'"
+                        " and attrelid = 'raw_erp.customers'::regclass") == [("numeric(10,2)",)]
     assert ready.target("select * from raw_erp.customers order by 1") == [
         (1, "Anna", Decimal("2.50"), date(1990, 5, 17), datetime(2026, 11, 12, 8, 30, 15)),
         (2, "Ben", None, None, None)]

@@ -77,7 +77,7 @@ Unchanged from the first round:
 - **A process per run costs about 0.18 s.** It matters only for hundreds of tiny tables per minute on one machine.
 - **A worker's restart can take up to `max_seconds`**, because it lets its runs finish (decision 33).
 - **The ADBC driver cannot run `SHOW`** and other statements that return rows but cannot be wrapped into `COPY`.
-- **The driver decides the types in the target** (decision 28). `varchar(n)` arrives as `text` and `numeric(p,s)` as `numeric`, so a change between such types passes the schema check. An unconstrained `numeric` beyond 38 digits fails the run.
+- **The driver decides the types in the target** (decisions 28 and 49). `varchar(n)` arrives as `text`, so a change from `text` to `varchar(n)` passes the schema check and an existing `varchar(n)` target column fails it. A `numeric(p,s)` beyond 38 digits arrives as `numeric` in a new mirror. An unconstrained `numeric` beyond 38 digits, or `NaN`, fails the run. Through ODBC, psqlODBC describes an unconstrained `numeric` as `numeric(28,6)`, and the value arrives cut to six decimals.
 
 ## Not built
 

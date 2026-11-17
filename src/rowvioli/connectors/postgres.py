@@ -62,10 +62,12 @@ def _is_numeric(field):
 
 def _decimal(field):
     """The driver reads `numeric` as text and cannot write text into `numeric` (README "Types"), so it becomes a
-    decimal with the column's precision and scale, and the target gets `numeric` again."""
+    decimal with the column's precision and scale: decimal128 up to 38 digits, which the target keeps, decimal256
+    beyond and for an unconstrained `numeric`, which arrive as `numeric`."""
     typmod = int((field.metadata or {}).get(b"POSTGRESQL:typmod", b"-1"))
     if typmod < 0:
         # unconstrained: 38 digits on either side of the point; more fails the run (README "Types")
         return pa.decimal256(76, 38)
-    p, s = (typmod - 4) >> 16, (typmod - 4) & 0xFFFF
+    # the scale is 11 bits with a sign since Postgres 15: numeric(5,-2) rounds to hundreds
+    p, s = (typmod - 4) >> 16, (((typmod - 4) & 0x7FF) ^ 1024) - 1024
     return pa.decimal128(p, s) if p <= 38 else pa.decimal256(p, s)

@@ -83,6 +83,9 @@ def test_columns_names_types_for_csv_and_excel(files):
     assert code == 0, answer
     for table in ("customers_csv", "customers_xlsx"):
         assert types(files, table) == [("customer_no", "integer"), ("name", "text"), ("balance", "numeric")]
+        # DuckDB's decimal keeps its precision and scale
+        assert files.target(f"select format_type(atttypid, atttypmod) from pg_attribute where attname = 'balance'"
+                            f" and attrelid = 'raw_files.{table}'::regclass") == [("numeric(10,2)",)]
         assert files.target(f"select customer_no, balance from raw_files.{table} order by 1") == [
             (1, Decimal("2.5")), (2, None), (3, Decimal("10"))]
 

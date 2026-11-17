@@ -12,8 +12,9 @@ Added:
 - The `file` connector reads JSON files (`.json`, `.jsonl`, `.ndjson`, every column as `jsonb`) and patterns such as `orders_*.csv`, which read every matching file as one table; a file that lands later arrives on the next run. A pattern reads any number of files, 50 at a time (measured with 5000).
 - `rowvioli key new --help` says what it writes. The `odbc` connector without the driver manager says to install `unixodbc`.
 
-Changed (a working set-up can notice these; each fails the run and names the option):
+Changed (a working set-up can notice these):
 
+- A new mirror has `numeric(p,s)` where the source has it (up to 38 digits), so `137.00` stays `137.00`; DuckDB's `decimal(10,2)` arrives as `numeric(10,2)`. An existing column of the same type with another precision or scale is taken over: a mirror made by 0.1.0, with `numeric` where the source has `numeric(12,2)`, keeps loading and keeps `numeric`, with nothing to do; a target table with `numeric(10,2)` loads the values that fit and fails on the first that does not, naming the column, the type and the value. The README's "What a person does by hand" widens such a column.
 - An option a `postgres`, `odbc` or `rest` table does not know (`incremental = "updated"` on `postgres`) fails the run and names the option and those the connector knows.
 - A source that delivers zero rows publishes when the table says `max_delete_share = 1.0`; without it the run still fails, and the reason says so.
 - The `path` of a `file` connection stays readable in a reason; every other value of a connection is still hidden.
@@ -27,6 +28,7 @@ Fixed:
 - An empty file fails and says that it is empty.
 - A ragged CSV fails instead of losing its header or arriving as one column.
 - A file name with `[`, `*` or `?` is no longer expanded a second time by DuckDB, which could read another file than the one named.
+- A `numeric` with a negative scale, such as `numeric(5,-2)` (Postgres 15 and later), loads instead of failing with `Rescaling Decimal value would cause data loss`.
 - A table whose target schema or table changes is new again: due at the next run, without the age, attempts and reason of the old name, since no mirror exists under the new name.
 
 ## 0.1.0 (2026-11-17)
