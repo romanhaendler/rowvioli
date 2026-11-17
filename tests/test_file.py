@@ -1,5 +1,6 @@
 """The `file` connector: CSV, Excel, Parquet and JSON files and patterns from a directory (spec test 15)."""
 import json
+import subprocess
 from datetime import date
 from decimal import Decimal
 
@@ -7,6 +8,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from conftest import ROWVIOLI
 
 CUSTOMERS = [(1, "Anna", 2.5), (2, "Ben", None), (3, "Cleo", 10.0)]
 
@@ -173,6 +175,44 @@ def test_a_pattern_mirrors_every_matching_file_and_a_new_file_arrives_on_the_nex
     r = files.run("run", "files", "orders_*.csv")
     assert json.loads(r.stdout)["tables"]["raw_files.orders"] == {"status": "ok", "inserted": 1, "updated": 0,
                                                                   "deleted": 0}
+
+
+@pytest.mark.parametrize("kind", ["csv", "jsonl"])
+def test_a_pattern_of_a_thousand_files_mirrors_with_few_open_files(files, kind):
+    for n in range(1000):  # a file a day for almost three years
+        (files.dir / "files" / f"day_{n:04}.{kind}").write_text(
+            f"order_no,amount\n{n},{n}0\n" if kind == "csv" else json.dumps({"order_no": n, "amount": n * 10}))
+    files.definition({"files.toml": f"""
+[files]
+type = "file"
+max_age = "1h"
+[files.connection]
+path = "{files.dir / 'files'}"
+[files.tables]
+"day_*.{kind}" = {{ key = ["order_no"], target_table = "orders" }}
+"""})
+    assert files.run("apply", "sources").returncode == 0
+    # the run's process inherits the limit: a file held open per match would exceed it
+    r = subprocess.run(["sh", "-c", 'ulimit -n 128 && exec "$0" run', ROWVIOLI], cwd=files.dir,
+                       env=files._env(None), capture_output=True, text=True, timeout=120)
+    assert json.loads(r.stdout)["tables"]["raw_files.orders"] == {"status": "ok", "inserted": 1000, "updated": 0,
+                                                                  "deleted": 0}, r.stderr
+
+
+def test_a_pattern_keeps_equal_rows_of_two_files_and_reads_columns_by_name(files):
+    (files.dir / "files" / "part_1.csv").write_text("a,b\n1,x\n")
+    (files.dir / "files" / "part_2.csv").write_text("a,b\n1,x\n")
+    (files.dir / "files" / "part_3.csv").write_text("b,a\ny,2\n")
+    code, answer = load(files, '"part_*.csv" = { target_table = "parts" }\n')
+    assert code == 0, answer
+    assert files.target("select a, b from raw_files.parts order by a") == [("1", "x"), ("1", "x"), ("2", "y")]
+
+
+def test_an_empty_csv_fails_saying_it_is_empty(files):
+    (files.dir / "files" / "empty.csv").write_text("")
+    code, answer = load(files, '"empty.csv" = {}\n')
+    assert code == 1
+    assert answer["raw_files.empty"]["reason"] == "empty.csv: the file is empty"
 
 
 def test_a_pattern_that_matches_nothing_fails(files):

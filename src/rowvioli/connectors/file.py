@@ -6,8 +6,10 @@ arrive as text and JSON as jsonb, a column per key, except the columns the optio
 (a JSON value is cast from its text, so `"Anna"` loses its quotes). Every other option is a named parameter of
 DuckDB's reader, such as `sep`, `skip` or `sheet`; a name that belongs to rowvioli, such as `parallel`, reaches no
 connector. A CSV skips no line before its header unless `skip` says so, and one that splits into a single column
-fails unless `sep` is given: that is how DuckDB reads lines with different numbers of fields."""
+fails unless `sep` is given: that is how DuckDB reads lines with different numbers of fields. An empty file fails."""
+import functools
 import glob
+import itertools
 import re
 from pathlib import Path
 
@@ -20,6 +22,8 @@ READERS = {".csv": "read_csv", ".xlsx": "read_xlsx", ".parquet": "read_parquet",
            ".jsonl": "read_json", ".ndjson": "read_json"}
 # a type name with an optional precision, since it is written into the query: `integer`, `decimal(10,2)`
 TYPE = re.compile(r"[A-Za-z][A-Za-z0-9_ ]*(\(\d+(,\s*\d+)?\))?")
+# the files of a pattern DuckDB reads at once; at most so many are open
+FILES_PER_READ = 50
 
 
 def read(connection, table, options):
@@ -37,6 +41,8 @@ def read(connection, table, options):
             raise Exception(f"{name}: the file connector reads {', '.join(READERS)} files")
         if not file.is_file():
             raise Exception(f"{name}: no such file in {connection['path']}")
+        if not file.stat().st_size:  # else DuckDB reads it as a CSV of one column
+            raise Exception(f"{name}: the file is empty")
     if len({READERS[f.suffix.lower()] for f in files}) > 1:
         raise Exception(f"{table}: matches {' and '.join(sorted({f.suffix.lower() for f in files}))} files; "
                         "a table reads files of one kind")
@@ -60,21 +66,35 @@ def read(connection, table, options):
     text = "->>'$'" if json else ""  # a JSON value is cast from its text, as in a CSV: "Anna" without the quotes
     casts = ", ".join(f'CAST({quote(c)}{text} AS {t}) AS {quote(c)}' for c, t in columns.items())
     db = duckdb.connect()
-    one = f"SELECT * FROM {reader}(?" + "".join(f", {name} = ?" for name in options) + ")"
+
+    def relation(path, **extra):
+        named = {**options, **extra}
+        return db.sql(f"SELECT * FROM {reader}(?" + "".join(f", {name} = ?" for name in named) + ")",
+                      params=[path, *named.values()])
     # escaped, since DuckDB would expand *, ? and [ in a name once more and read a file nobody checked
-    parts = [db.sql(one, params=[glob.escape(str(f)), *options.values()]) for f in files]
-    first = dict(zip(parts[0].columns, parts[0].types))
-    result = parts[0]
-    for name, part in zip(names[1:], parts[1:]):
-        if dict(zip(part.columns, part.types)) != first:  # one file's other columns would be lost or null
-            have = [", ".join(f"{c} {t}" for c, t in zip(p.columns, p.types)) for p in (part, parts[0])]
+    paths = [glob.escape(str(f)) for f in files]
+    # each file's columns; its relation goes at once, since it holds the file open
+    shapes = [list(zip(part.columns, part.types)) for part in map(relation, paths)]
+    first = dict(shapes[0])
+    for name, shape in zip(names[1:], shapes[1:]):
+        if dict(shape) != first:  # the read of the list would drop or null one file's other columns
+            have = [", ".join(f"{c} {t}" for c, t in s) for s in (shape, shapes[0])]
             raise Exception(f"{table}: {name} has the columns {have[0]}, {names[0]} has {have[1]}")
-        result = result.union(part.project(", ".join(quote(c) for c in first)))  # by name, not by position
     if reader == "read_csv" and len(first) == 1 and not {"sep", "delim", "delimiter"} & options.keys():
         raise Exception(f"{table}: no separator splits every line into the same number of fields; fix the lines, "
                         "or set sep (also for a file of one column) and skip (for lines before the header)")
-    if casts:
-        result = result.project(f"* REPLACE ({casts})")
+    order = ", ".join(quote(c) for c in first)
+
+    def rows(group):  # the columns by name, not by position, then the casts
+        if reader == "read_xlsx":  # its reader takes no list
+            part = functools.reduce(lambda a, b: a.union(b), (relation(p).project(order) for p in group))
+        else:
+            part = relation(group).project(order)
+        return part.project(f"* REPLACE ({casts})") if casts else part
+    # a few files per read, one read after the other: DuckDB opened up to 600 files of one list at once, and a
+    # union of more than 333 files is too deep for it
+    groups = [paths[i:i + FILES_PER_READ] for i in range(0, len(paths), FILES_PER_READ)]
+    result = rows(groups[0])
     batches = result.to_arrow_reader()
     # DuckDB hands JSON over as text; as Arrow's json it becomes jsonb. Not by arrow_lossless_conversion: that
     # turns a hugeint into bytes and a boolean into a number
@@ -83,8 +103,9 @@ def read(connection, table, options):
 
     def keep_open():  # the reader needs the connection until the last batch
         try:
-            for batch in batches:
-                yield batch.cast(schema)
+            for group in itertools.chain([batches], (rows(g).to_arrow_reader() for g in groups[1:])):
+                for batch in group:
+                    yield batch.cast(schema)
         finally:
             db.close()
     return pa.RecordBatchReader.from_batches(schema, keep_open())
