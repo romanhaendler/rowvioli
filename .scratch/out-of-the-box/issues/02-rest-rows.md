@@ -2,7 +2,7 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -23,3 +23,18 @@ No value of the answer enters a reason.
 - [ ] The whole suite is green.
 
 ## Comments
+
+Built in `rest.py` and `tests/test_rest.py` only. `rows` is split at dots and walked through the answer's objects; the
+result must be an array of flat objects, else the run fails with "<path> must answer a JSON array of flat objects in
+the field <rows> (option rows)" (no value of the answer in it). Paging, the page-repeats check and the absent-column
+check already worked on the extracted array, so they needed no change. Tests: wrapped and nested, paged and unpaged;
+missing field, wrong depth, a bare array and a non-array field fail naming `rows` and keep the mirror.
+
+For the documents (README "rest" section, open points):
+- README: "`rows`: the field of the answer that holds the array of rows, one name or several joined by dots
+  (`data`, `result.items`); without it the answer itself is the array. Paging ends when the array in the field is
+  empty. An answer without the field, or with something else than an array of flat objects there, fails the run and
+  names `rows`."
+- Limit: a field whose own name contains a dot cannot be named. `apply` does not check `rows` (a non-text value
+  fails at the run).
+- Open points: remove the entry about wrapped REST answers.
