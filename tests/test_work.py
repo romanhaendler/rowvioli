@@ -5,11 +5,13 @@ import pty
 import re
 import select
 import signal
+import socket
 import subprocess
 import time
+import uuid
 
 import pytest
-from conftest import ROWVIOLI, _query, until
+from conftest import HOST, IMAGE, ROWVIOLI, _query, _wait, until
 from test_run import apply, ok, run
 
 
@@ -173,6 +175,49 @@ def test_a_worker_survives_an_unreachable_target_and_loads_again_once_it_accepts
     _query(other, f"alter database {db} allow_connections true")
     ready.target("update _rowvioli.tables set requested_at = now()")
     until(lambda: ready.target("select count(*) from _rowvioli.runs where status = 'ok'") == [(2,)])
+
+
+def test_a_run_whose_target_restarts_ends_within_seconds_and_the_table_loads_again(ready):
+    """Ticket 11: the run's process waits on its source, not on its dead connection; its worker ends it."""
+    name = f"rowvioli-test-{uuid.uuid4().hex[:8]}-restarted"  # the suite's target must not restart
+    with socket.socket() as s:  # a fixed port, so that the address survives the restart
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    try:
+        subprocess.run(["docker", "run", "-d", "--name", name, "--label", "rowvioli-test", "-e", "POSTGRES_PASSWORD=x",
+                        "-p", f"127.0.0.1:{port}:5432", IMAGE], check=True, capture_output=True)
+        url = f"postgresql://postgres:x@{HOST}:{port}/postgres"
+        _wait(url)
+        env = {"ROWVIOLI_TARGET_URL": url}
+        assert ready.run("init", env=env).returncode == 0
+        ready.source("create table pace (seconds float); insert into pace values (1)")
+        ready.source("create view hanging as select slow(g, (select seconds from pace)) as id from generate_series(1, 60) g")
+        ready.definition({"erp.toml": source(ready, "erp", "", '"public.hanging" = { key = ["id"] }')})
+        assert ready.run("apply", "sources", env=env).returncode == 0
+        worker = ready.start("work", env=env)
+        until(lambda: _query(url, "select status from _rowvioli.status") == [("loading",)])
+        [run] = [int(x) for x in subprocess.run(["pgrep", "-P", str(worker.pid)], capture_output=True,
+                                                 text=True).stdout.split()]
+        subprocess.run(["docker", "restart", name], check=True, capture_output=True)
+        until(lambda: not alive(run), timeout=10)  # the source would hold it for a minute
+        _wait(url)
+        ready.source("update pace set seconds = 0")  # replacing the view would wait: the source still reads for it
+        _query(url, "update _rowvioli.tables set requested_at = now()")  # instead of waiting out the pause
+        until(lambda: _query(url, "select status from _rowvioli.status") == [("ok",)], timeout=30)
+        assert sorted(_query(url, "select * from raw_erp.hanging")) == sorted(ready.source("select * from hanging"))
+        err = said_after_sigterm(worker)
+        assert "raw_erp.hanging failed after" in err and "connection to the target lost" in err, err
+        assert "the target is unreachable" in err and "SELECT" not in err, err  # a reason is one line
+    finally:
+        subprocess.run(["docker", "rm", "-fv", name], capture_output=True)
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
 
 
 def said_after_sigterm(worker):

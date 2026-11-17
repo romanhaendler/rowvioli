@@ -21,6 +21,9 @@ SCOPE = "($1::text = '' OR source = $1::text) AND ($2::text = '' OR source_table
 CLAIMABLE_AND_BUSY = f"""SELECT (SELECT count(*) FROM ({CLAIMABLE}) c),
                                 count(*) FILTER (WHERE status = 'loading' OR due_at <= now())
                            FROM _rowvioli.status WHERE {SCOPE}"""
+# of the given runs, those whose table is no longer loading: their lock went with their connection (decision 7)
+LOST = """SELECT r.run FROM _rowvioli.runs r JOIN _rowvioli.status s ON s.id = r."table"
+           WHERE r.run = ANY(string_to_array($1, ',')::bigint[]) AND s.status <> 'loading'"""
 
 MASCOT = """\
   .~~~~~~~.   .~~~~~~~.
@@ -63,12 +66,13 @@ def loop(slots, source="", table="", once=False):
                 record(conn, ended[0])
                 ended.pop(0)
             claimable, busy = sql(conn, CLAIMABLE_AND_BUSY, [source, table])[0]
+            end_lost(conn, runs)
         except adbc.Error as e:  # the target is unreachable: try again in two seconds (open point E11)
             if once:
                 raise
             if conn:
                 say("the target is unreachable, connecting again every two seconds: "
-                + load.scrub(load.target_secrets(), str(e)))
+                    + load.reason_line(load.target_secrets(), e, "asking the target"))
             conn, claimable = None, 0
         if stopping and not stopped:
             stopped = True
@@ -133,13 +137,22 @@ def listen(runs, answers, ended, seconds, lines):
             continue
         p.wait()  # end of its output: the process has ended
         claim = runs.pop(p)
-        if claim and "answer" not in claim:  # it died after its claim, e.g. kill -9
-            answers[claim["claimed"]] = {"status": "failed", "reason": "worker lost"}
-            say_end(claim, "failed", "worker lost")
+        if claim and "answer" not in claim:  # it died after its claim, e.g. kill -9, or end_lost killed it
+            answers[claim["claimed"]] = {"status": "failed", "reason": claim.get("reason", "worker lost")}
+            say_end(claim, "failed", answers[claim["claimed"]]["reason"])
         if claim is None and p.returncode != 0:
             say(f"a run process ended with exit code {p.returncode} before it claimed anything")
         return claim is None and p.returncode != 0
     return False
+
+
+def end_lost(conn, runs):
+    """Kills a run whose connection to the target is gone: it notices only at its next statement, which may come
+    after a long read of its source, and it can never publish. One that already answered is left to end."""
+    waiting = {c["run"]: p for p, c in runs.items() if c and "answer" not in c}
+    for (run,) in sql(conn, LOST, [",".join(map(str, waiting))]) if waiting else []:
+        waiting[run].kill()
+        runs[waiting[run]]["reason"] = "connection to the target lost"  # said once its output ends
 
 
 def record(conn, claim):
