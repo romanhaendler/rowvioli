@@ -60,6 +60,17 @@ def test_a_run_that_exceeds_max_seconds_is_ended_and_the_status_shows_why(ready)
     assert ready.target("select to_regclass('raw_erp.hanging')") == [(None,)]
 
 
+def test_a_run_ended_after_max_seconds_keeps_its_reason_when_a_claim_closed_its_row_first(ready):
+    slow(ready, "hanging", 30, 1)
+    apply(ready, source(ready, "erp", "max_seconds = 2", '"public.hanging" = { key = ["id"] }'))
+    p = ready.start("run")
+    until(lambda: ready.target("select status from _rowvioli.status") == [("loading",)])
+    # what another worker's claim does to a run whose lock it finds free, between the kill and the reason
+    ready.target("update _rowvioli.runs set status = 'failed', finished_at = now(), reason = 'worker lost'")
+    assert p.wait(timeout=15) == 1
+    assert ready.target("select reason from _rowvioli.runs") == [("ended after max_seconds = 2",)]
+
+
 def test_one_slot_loads_the_tables_in_the_order_of_how_far_they_miss_their_maximum_age(ready):
     for name in ("a", "b", "c"):
         ready.source(f"create table {name} (id int primary key)")
@@ -201,6 +212,10 @@ def test_a_run_whose_target_restarts_ends_within_seconds_and_the_table_loads_aga
         subprocess.run(["docker", "restart", name], check=True, capture_output=True)
         until(lambda: not alive(run), timeout=10)  # the source would hold it for a minute
         _wait(url)
+        # the log, runs and the status give the same reason
+        lost = "connection to the target lost"
+        until(lambda: _query(url, "select status, reason from _rowvioli.runs") == [("failed", lost)])
+        assert _query(url, "select status, reason from _rowvioli.status") == [("failed", lost)]
         ready.source("update pace set seconds = 0")  # replacing the view would wait: the source still reads for it
         _query(url, "update _rowvioli.tables set requested_at = now()")  # instead of waiting out the pause
         until(lambda: _query(url, "select status from _rowvioli.status") == [("ok",)], timeout=30)

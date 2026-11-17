@@ -128,6 +128,8 @@ def listen(runs, answers, ended, seconds, lines):
                 say(f"{said['claimed']} started, run {said['run']}")
             elif "answer" not in runs[p]:  # a run killed after max_seconds may still have answered
                 answers[said.pop("table")] = runs[p]["answer"] = said
+                if said.get("reason") == "connection to the target lost":  # the run could not record it itself
+                    ended.append(runs[p] | {"reason": said["reason"]})
                 if said["status"] == "ok":
                     say_end(runs[p], "ok", f"{said['inserted']} inserted, {said['updated']} updated, "
                                            f"{said['deleted']} deleted")
@@ -151,15 +153,21 @@ def end_lost(conn, runs):
     after a long read of its source, and it can never publish. One that already answered is left to end."""
     waiting = {c["run"]: p for p, c in runs.items() if c and "answer" not in c}
     for (run,) in sql(conn, LOST, [",".join(map(str, waiting))]) if waiting else []:
-        waiting[run].kill()
         runs[waiting[run]]["reason"] = "connection to the target lost"  # said once its output ends
+        record(conn, runs[waiting[run]])  # its lock is gone, so it cannot publish any more
+        waiting[run].kill()
 
 
 def record(conn, claim):
-    """The reason of a run killed after max_seconds, on the run and its table, if the run is still running."""
-    sql(conn, """WITH r AS (UPDATE _rowvioli.runs SET status = 'failed', finished_at = clock_timestamp(), reason = $2
-                             WHERE run = $1 AND status = 'running' RETURNING "table")
-                 UPDATE _rowvioli.tables SET reason = $2 WHERE id IN (SELECT "table" FROM r)""",
+    """The reason of a run the worker ended (after max_seconds, or with its target connection lost), on the run and
+    its table, if the run is still running. A claim may have closed the row first as `worker lost` once the lock was
+    free: the reason the worker knows replaces it, but not on the table, which belongs to that claim's run now."""
+    sql(conn, """WITH old AS (SELECT "table", status FROM _rowvioli.runs WHERE run = $1),
+                      r AS (UPDATE _rowvioli.runs SET status = 'failed', reason = $2,
+                                   finished_at = coalesce(finished_at, clock_timestamp())
+                             WHERE run = $1 AND (status = 'running' OR reason = 'worker lost'))
+                 UPDATE _rowvioli.tables SET reason = $2
+                  WHERE id IN (SELECT "table" FROM old WHERE status = 'running')""",
         [claim["run"], claim["reason"]])
 
 

@@ -168,7 +168,10 @@ def test_a_run_whose_server_process_is_killed_fails_and_run_says_so(slow):
     assert json.loads(out)["tables"] == {"raw_erp.slow": {"status": "failed", "reason": "connection to the target lost"}}
     assert "Traceback" not in err
     assert held_table_locks(slow) == 0
-    assert status(slow) == ("failed", "worker lost")  # the reason cannot be written without a connection
+    # the run cannot write its reason without a connection, its worker writes it (ticket 15)
+    assert status(slow) == ("failed", "connection to the target lost")
+    assert slow.target("select status, reason from _rowvioli.runs order by run desc limit 1") == [
+        ("failed", "connection to the target lost")]
     assert mirror(slow) == before
 
 
