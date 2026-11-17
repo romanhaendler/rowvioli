@@ -11,6 +11,7 @@ Tests never import the program. They use the `rv` fixture:
   until(check)               polls check() until it is truthy (10 s), returns its value
 Each test gets a fresh database in each container, so tests and worktrees do not collide.
 """
+import contextlib
 import os
 import shutil
 import signal
@@ -97,7 +98,8 @@ class Rv:
         pids = [int(x) for x in subprocess.run(["pgrep", "-P", str(worker.pid)], capture_output=True,
                                                text=True).stdout.split()]
         for pid in pids:
-            os.kill(pid, signal.SIGKILL)
+            with contextlib.suppress(ProcessLookupError):  # a run may end between pgrep and the kill
+                os.kill(pid, signal.SIGKILL)
         return pids
 
     def target(self, sql, params=None):
