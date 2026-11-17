@@ -1,6 +1,6 @@
 # Open points
 
-What is undecided, unverified or unbuilt as of 2026-11-17, before the release of 0.1.0, after load times, visibility, target names, history and the first shakedown.
+What is undecided, unverified or unbuilt at the release of 0.1.0 on 2026-11-17, after load times, visibility, target names, history and the first shakedown.
 
 ## Decisions for the owner
 
@@ -79,7 +79,6 @@ Unchanged from the first round:
 - The web UI.
 - The command `request`, reading only rows from a timestamp on, patterns for table names, and workers that serve only some sources.
 - Migrating the schema from one version to the next.
-- Publishing 0.1.0: it happens with the first push to `main` (trusted publishing on PyPI must be registered by then). Until then nothing is released or tagged.
 
 The prototype's code is on branch `prototype-impl`.
 
@@ -88,4 +87,4 @@ The prototype's code is on branch `prototype-impl`.
 - Whether Sling or ingestr already cover most of this.
 - DuckDB as the engine of the whole program instead of only the `file` connector.
 - Whether another small tool for mirroring into Postgres already works with a maximum age per table.
-- The PyPI project, the domains `rowvioli.com`, `.de`, `.io`, `.dev` and the GitHub account are not reserved yet; registering them is the owner's step. They were free on 2026-11-11.
+- The domains `rowvioli.com`, `.de`, `.io`, `.dev` and a GitHub account or organisation named `rowvioli` are not reserved; they were free on 2026-11-11.
