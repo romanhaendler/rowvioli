@@ -26,7 +26,7 @@ The repo is public. It refers to projects a reader cannot see: `hpdl`, `data-ext
 - Text reads as if the reference had never been there: no dangling "as above", no empty section, no broken
   anchor or table of contents entry, numbering intact.
 - Not a private project, so they stay: `rowvioli` itself and its GitHub URLs, public tools (Sling, ingestr, dlt,
-  Airbyte, DuckDB, PgBouncer), `dwh` and `hr` as example database names, `rowvioli-demo` only if it is a
+  Airbyte, DuckDB, PgBouncer), `dwh` as an example database name and `hr` as an example schema name, `rowvioli-demo` only if it is a
   container or compose name in this repo (check; remove if it points at a directory outside it).
 
 ## Acceptance criteria
