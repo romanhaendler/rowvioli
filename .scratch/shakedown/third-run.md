@@ -1,4 +1,4 @@
-# Shakedown 2026-11-18: the entries that had not run, and P1 and P4 again
+# Shakedown 2026-11-17: the entries that had not run, and P1 and P4 again
 
 Status: needs-triage (taken up in `.scratch/out-of-the-box/`, tickets 09 to 14; what stays is listed below)
 
@@ -51,7 +51,7 @@ six requests of a coding agent from the README, the guide and `--help` (P4). Eig
 26 lines of TOML with equal data (P16).
 
 P22's answer to the open point: Sling and ingestr cover the loading (more sources, incremental, CDC; their
-documentation read on 2026-11-18), not the freshness model; the second half is from memory.
+documentation read on 2026-11-17), not the freshness model; the second half is from memory.
 
 ## Lessons for the procedure
 

@@ -6,7 +6,7 @@
 
 **Model:** Opus
 
-From the shakedown of 2026-11-18, host H4 (operation), leads from one agent: reproduce first, drop what does
+From the shakedown of 2026-11-17, host H4 (operation), leads from one agent: reproduce first, drop what does
 not go red. Repros: restart the target (`docker restart`) twelve seconds into a load of a table that takes
 over a minute to read (a source view with `pg_sleep`), and a target on a 200 MB tmpfs
 (`--tmpfs /var/lib/postgresql/data:size=200m`) with a table too large for it.

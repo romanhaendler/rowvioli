@@ -6,7 +6,7 @@
 
 **Model:** Opus
 
-From the review of 2026-11-18 (findings 1 and 8), confirmed there by running.
+From the review of 2026-11-17 (findings 1 and 8), confirmed there by running.
 
 ## What to build
 

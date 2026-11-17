@@ -6,7 +6,7 @@
 
 **Model:** Opus
 
-From the review of `out-of-the-box..part-2` on 2026-11-18. CONFIRMED findings were seen to go wrong there;
+From the review of `out-of-the-box..part-2` on 2026-11-17. CONFIRMED findings were seen to go wrong there;
 each fix starts from its red test all the same.
 
 ## What to build

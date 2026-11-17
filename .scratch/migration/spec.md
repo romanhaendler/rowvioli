@@ -1,9 +1,9 @@
 # Migration: `init` brings the bookkeeping schema to the program's version
 
-Status: needs-triage (the owner answered the five questions on 2026-11-18, see the end; not yet cut into tickets)
+Status: needs-triage (the owner answered the five questions on 2026-11-17, see the end; not yet cut into tickets)
 
 From `docs/open-points.md`, "Not built": migrating the schema from one version to the next. Written
-2026-11-18, after 0.1.0, whose schema is version 3.
+2026-11-17, after 0.1.0, whose schema is version 3.
 
 ## Problem Statement
 
@@ -51,7 +51,7 @@ a run loads; `init` twice changes nothing. One such fixture per released schema 
 Opus for the first step and the mechanism (what locks a migration takes while workers of the old version are
 connected has to be found out); Sonnet for each later step, which is then one file and one fixture.
 
-## Decided by the owner, 2026-11-18
+## Decided by the owner, 2026-11-17
 
 1. **Plain `init` migrates.** No flag. It prints what it did.
 2. **One rule for versions**: the program's version equals the target's or the program refuses, also when a
@@ -60,7 +60,7 @@ connected has to be found out); Sonnet for each later step, which is then one fi
 4. **Never down.** A failed release is rolled forward; a backup of `_rowvioli` before `init` is the way back,
    and the README says so.
 5. **The first step is reading only rows from a timestamp on** (the most frequent gap in the shakedown of
-   2026-11-18: P16, P22), built together with the mechanism.
+   2026-11-17: P16, P22), built together with the mechanism.
 
 Until the mechanism exists the project is in version 0 and the schema may change without a step (owner,
 same day): a release that changes it says so in the changelog, and the target is initialised anew.

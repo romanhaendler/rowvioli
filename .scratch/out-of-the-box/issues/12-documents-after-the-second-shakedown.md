@@ -6,7 +6,7 @@
 
 **Model:** Sonnet
 
-From the shakedown of 2026-11-18 (P16 migrating team, P20 consumer, P3 staff engineer, P23 successor). Text
+From the shakedown of 2026-11-17 (P16 migrating team, P20 consumer, P3 staff engineer, P23 successor). Text
 and one test helper; no behaviour changes.
 
 ## What to build
@@ -35,7 +35,7 @@ happened, in the smallest way, and fix the tests that then turn out to assert no
 
 In `docs/open-points.md`: "Whether Sling or ingestr already cover most of this" gets the persona's answer as
 a lead, not a fact: they cover the loading (more sources, incremental, CDC; their documentation checked on
-2026-11-18), not the freshness model; the second half is from memory and unchecked.
+2026-11-17), not the freshness model; the second half is from memory and unchecked.
 
 ## Acceptance criteria
 
