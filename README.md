@@ -42,7 +42,7 @@ That is the whole usage. `docker compose up` in [examples/quickstart](https://gi
 
 ## Try it in a minute
 
-With Python and Docker and nothing else: a throwaway Postgres as the target, a CSV file as the source. `pip install` goes best into a virtual environment. The last lines change the file and run again.
+With Python and Docker and nothing else: a throwaway Postgres as the target, a CSV file as the source. `pip install` goes best into a virtual environment. The last lines change the file and ask for the table again before its hour is up, then stop the container, which `--rm` removes. The block can be pasted again from the same directory; it keeps the key it made the first time.
 
 ```sh
 docker run -d --rm --name rowvioli-try -e POSTGRES_PASSWORD=try -p 127.0.0.1:55432:5432 postgres:16-alpine
@@ -65,12 +65,14 @@ path = "data"
 [try.tables]
 "customers.csv" = { key = ["customer_no"] }
 EOF
-rowvioli key new && rowvioli apply --init && rowvioli run && rowvioli status
+test -f worker.key || rowvioli key new
+rowvioli apply --init && rowvioli run && rowvioli status
 docker exec rowvioli-try psql -U postgres -c "select * from raw_try.customers order by 1"
 echo "4,Dora,Essen" >> data/customers.csv && sed 's/Bonn/Cologne/' data/customers.csv > c.tmp && mv c.tmp data/customers.csv
-rowvioli run try   # asks for the table now, before its hour is up
+rowvioli run try
 docker exec rowvioli-try psql -U postgres -c "select * from raw_try.customers__history order by customer_no, _valid_from"
-docker stop rowvioli-try   # --rm removes it
+docker stop rowvioli-try
+cd ..
 ```
 
 What you see (times shortened):

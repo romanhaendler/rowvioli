@@ -574,11 +574,11 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "adbc-driver-postgresql", specifier = ">=1.13" },
-    { name = "arrow-odbc", marker = "extra == 'odbc'", specifier = ">=10.7" },
-    { name = "duckdb", marker = "extra == 'file'", specifier = ">=2" },
+    { name = "arrow-odbc", marker = "extra == 'odbc'", specifier = ">=9.3.0" },
+    { name = "duckdb", marker = "extra == 'file'", specifier = ">=1.5" },
     { name = "httpx", marker = "extra == 'rest'", specifier = ">=0.28" },
-    { name = "pyarrow", specifier = ">=26" },
-    { name = "pynacl", specifier = ">=1.6" },
+    { name = "pyarrow", specifier = ">=19" },
+    { name = "pynacl", specifier = ">=1.5" },
 ]
 provides-extras = ["file", "odbc", "rest"]
 

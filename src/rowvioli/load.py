@@ -51,7 +51,8 @@ def claim(conn, worker, source, table):
                   " WHERE id = $1", [id])
         # the lock was free, so a run of this table that still says `running` is dead (the status shows `worker lost`)
         sql(conn, """UPDATE _rowvioli.runs SET status = 'failed', finished_at = clock_timestamp(), reason = 'worker lost'
-                      WHERE "table" = $1 AND status = 'running'""", [id])
+                      WHERE run = (SELECT max(run) FROM _rowvioli.runs WHERE "table" = $1) AND status = 'running'""",
+            [id])  # only its newest can be: the one row, not all of runs, under the lock all claims share
         [(run,)] = sql(conn, """INSERT INTO _rowvioli.runs ("table", worker, definition)
                                 SELECT $1, $2, definition FROM _rowvioli.meta RETURNING run""", [id, worker])
         with conn.cursor() as c:
@@ -125,29 +126,40 @@ def check(conn, t, staged, mirror, log_columns):
 
 def fit(conn, t, staged, mirror, log_columns):
     """A staged column whose type differs from the target's only in its precision or scale (numeric and
-    numeric(10,2)) takes the mirror's, so that the comparison happens in the target type, when every value passes
-    unchanged into the mirror and the change log (decision 49). Returns the staged columns."""
-    into = []
-    for table, columns in ((t["name"], mirror), (t["name"] + "__log", log_columns)):
-        have = dict(columns)
-        for name, type in staged:
-            if have.get(name, type) == type or not sql(conn, "SELECT $1::regtype = $2::regtype",
-                                                       [type, have[name]])[0][0]:
-                continue  # the same, new, or a real change of type, which check() catches
-            c = quote(name)
-            try:
-                bad = sql(conn, f"SELECT {c}::text FROM _stage WHERE {c}::{have[name]} IS DISTINCT FROM {c} LIMIT 1")
-            except Exception as e:  # a value too large for the precision raises instead
-                bad = [[reason_line([], e, "checking the data")]]
-            if bad:
-                raise Exception(f"column {name} holds a value that its type {have[name]} in {table} does not hold"
-                                f" ({bad[0][0]})")
-            if table == t["name"]:
-                into.append(f"ALTER {c} TYPE {have[name]}")
-    if into:
-        sql(conn, "ALTER TABLE _stage " + ", ".join(into))
-        return sql(conn, COLUMNS, ["pg_temp._stage"])
-    return staged
+    numeric(10,2)) counts as the mirror's, so that the comparison happens in the target type, when every value
+    passes unchanged into the mirror and the change log (decision 49). Returns the staged columns with the types
+    they are checked and published in."""
+    pairs = [(table, name, into) for table, columns in ((t["name"], mirror), (t["name"] + "__log", log_columns))
+             for name, type in staged if (into := dict(columns).get(name, type)) != type]
+    if not pairs:
+        return staged
+    # in one query: which differ only in their modifier, and which target has none, so that a cast changes no value
+    kinds = sql(conn, """SELECT (v->>0)::regtype = (v->>1)::regtype, (v->>1)::regtype::text = v->>1
+                           FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY e(v, n) ORDER BY n""",
+                [json.dumps([[dict(staged)[name], into] for _, name, into in pairs])])
+    misfit(conn, [p for p, (same, plain) in zip(pairs, kinds) if same and not plain])
+    # the others are a real change, which check() catches. The staging table is not altered: numbers compare equal
+    # whatever their modifier, and the mirror's type applies on insert, where it now changes no value
+    taken = {name: into for (table, name, into), (same, _) in zip(pairs, kinds) if same and table == t["name"]}
+    return [(name, taken.get(name, type)) for name, type in staged]
+
+
+def misfit(conn, columns):
+    """Fails on the first value of the (table, column, type) `columns` that its type would change, in one scan."""
+    if not columns:
+        return
+    changed = [f"{quote(name)}::{type} IS DISTINCT FROM {quote(name)}" for _, name, type in columns]
+    values = ", ".join(f"CASE WHEN {c} THEN {quote(name)}::text END" for c, (_, name, _) in zip(changed, columns))
+    try:
+        row = sql(conn, f"SELECT {values} FROM _stage WHERE {' OR '.join(changed)} LIMIT 1")
+    except Exception as e:  # a value too large for the precision raises instead; column by column finds which
+        if len(columns) > 1:
+            for column in columns:
+                misfit(conn, [column])
+        row = [[reason_line([], e, "checking the data")]]
+    for (table, name, type), value in zip(columns, row[0] if row else []):
+        if value is not None:
+            raise Exception(f"column {name} holds a value that its type {type} in {table} does not hold ({value})")
 
 
 def check_delete_share(conn, t, rows_read, counts):
@@ -179,13 +191,18 @@ def stage(conn, t):
         raise Exception(f"table {t['source_table']} has no column {', '.join(gone)}; it has: "
                         + ", ".join(batches.schema.names))
     with conn.cursor() as c:
-        # the driver creates every decimal as numeric; Arrow's decimal128 keeps its precision and scale (decision 49)
+        # the driver creates every decimal as numeric; Arrow's decimal128 keeps its precision and scale (decision 49).
+        # A scale below 0 or above the precision needs Postgres 15 in the target: such a column stays numeric.
+        exact = {f.name: f"numeric({f.type.precision}, {f.type.scale})" for f in batches.schema
+                 if pa.types.is_decimal128(f.type) and 0 <= f.type.scale <= f.type.precision}
         # a reader without batches: Arrow cannot make an empty array of a list of an extension type
-        c.adbc_ingest("_stage", pa.RecordBatchReader.from_batches(batches.schema, []), mode="create", temporary=True)
-        exact = [f"ALTER {quote(f.name)} TYPE numeric({f.type.precision}, {f.type.scale})"
-                 for f in batches.schema if pa.types.is_decimal128(f.type)]
-        if exact:
-            sql(conn, "ALTER TABLE _stage " + ", ".join(exact))
+        empty = pa.RecordBatchReader.from_batches(batches.schema, [])
+        c.adbc_ingest("_driver" if exact else "_stage", empty, mode="create", temporary=True)
+        if exact:  # a table made AS SELECT takes milliseconds, an ALTER of 300 columns seconds
+            sql(conn, "CREATE TEMP TABLE _stage AS SELECT " + ", ".join(
+                f"{quote(n)}::{exact[n]} AS {quote(n)}" if n in exact else quote(n) for n in batches.schema.names)
+                + " FROM _driver")
+            sql(conn, "DROP TABLE _driver")
         rows_read = c.adbc_ingest("_stage", batches, mode="append", temporary=True)
     # zero rows protect a mirror that has rows; a first load or an empty mirror publishes them
     if rows_read == 0 and t["max_delete_share"] < 1 and sql(conn, "SELECT to_regclass($1)", [t["mirror"]])[0][0] and \

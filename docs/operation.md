@@ -131,4 +131,6 @@ The program creates no roles. Whoever can write the definition decides what is l
 
 On Windows the stop signal is Ctrl+Break instead of SIGTERM.
 
+From 0.1.0, update every worker before applying new tables: a mirror that a new worker creates has `numeric(p,s)` where the source has it, and a worker of 0.1.0 fails on it with `has changed its type from numeric(10,2) to numeric`. Going back to 0.1.0 needs `ALTER TABLE ... ALTER <column> TYPE numeric` on such columns, in the mirror and its change log.
+
 A worker that is killed hard takes its runs with it. They show as `worker lost` and are retried after the pause.
