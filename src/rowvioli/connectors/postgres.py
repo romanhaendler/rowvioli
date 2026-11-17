@@ -59,11 +59,11 @@ def _is_numeric(field):
 
 
 def _decimal(field):
-    """The driver reads `numeric` as text and cannot write text into `numeric` (README "Types"), so it becomes a
-    decimal with the column's precision and scale, and the target gets `numeric` again."""
+    """The driver reads `numeric` as text and cannot write text into `numeric` (docs/connectors.md "Types"), so it
+    becomes a decimal with the column's precision and scale, and the target gets `numeric` again."""
     typmod = int((field.metadata or {}).get(b"POSTGRESQL:typmod", b"-1"))
     if typmod < 0:
-        # unconstrained: 38 digits on either side of the point; more fails the run (README "Types")
+        # unconstrained: 38 digits on either side of the point; more fails the run (docs/connectors.md "Types")
         return pa.decimal256(76, 38)
     p, s = (typmod - 4) >> 16, (typmod - 4) & 0xFFFF
     return pa.decimal128(p, s) if p <= 38 else pa.decimal256(p, s)

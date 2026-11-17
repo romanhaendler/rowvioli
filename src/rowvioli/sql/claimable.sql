@@ -1,5 +1,5 @@
 -- The claimable tables, most overdue first: due, not loading, and within `parallel` per source and `max_running`
--- in total, counted from the table locks held in this database (README "How Postgres counts"). Asked by the
+-- in total, counted from the table locks held in this database (docs/target.md "How Postgres counts"). Asked by the
 -- worker to know how many run processes to start, and by the claim under the counting lock (decision 34).
 -- $1 and $2 narrow it to a source and a source table; '' means all.
 WITH held AS (

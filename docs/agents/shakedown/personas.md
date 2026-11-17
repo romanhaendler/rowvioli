@@ -11,7 +11,7 @@ drop one that stops finding anything.
 The wheel with `[file,odbc,rest]` into a fresh `python:3.11-slim` container (the floor) and with the
 newest Python on the Mac; `rowvioli --help` and every subcommand's help; the quickstart flow of the README
 step by step. Targets: the oldest Postgres still supported upstream and the newest; a target user with only
-the rights the README's table names (no superuser, no `CREATE` on the database beyond what `init` needs);
+the rights the table in `docs/operation.md` names (no superuser, no `CREATE` on the database beyond what `init` needs);
 pgbouncer in session mode in front, and transaction mode to see that it fails with a clear message. Run: 2026-11-15.
 
 ### H2 Hostile source data

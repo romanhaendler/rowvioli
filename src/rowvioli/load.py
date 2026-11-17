@@ -1,4 +1,4 @@
-"""One run, in a process of its own (README "A run"): claim, stage, diff, publish, or fail.
+"""One run, in a process of its own (docs/loading.md "A run"): claim, stage, diff, publish, or fail.
 
 Started by the worker loop as `python -m rowvioli.load <worker> <source> <table>`, with a pipe on stdin that
 ends with the worker. It tells the worker on stdout,
@@ -34,7 +34,7 @@ PRIMARY_KEY = """SELECT a.attname FROM pg_index i, unnest(i.indkey) WITH ORDINAL
 
 
 def claim(conn, worker, source, table):
-    """In one transaction under the counting lock (README "How Postgres counts"): takes the table lock of the
+    """In one transaction under the counting lock (docs/target.md "How Postgres counts"): takes the table lock of the
     most overdue claimable table in scope, counts the attempt and opens the run's row with the hash of the
     definition. Returns the run's facts, as the definition says at this moment, or None."""
     sql(conn, "BEGIN")
@@ -84,7 +84,7 @@ def load(conn, t):
 
 
 def check(conn, t, staged, mirror, log_columns):
-    """Step 4 (README "Checks before publishing"). A new column passes, publish adds it (decision 17)."""
+    """Step 4 (docs/loading.md "Checks before publishing"). A new column passes, publish adds it (decision 17)."""
     types = dict(staged)
     for name, type in mirror:
         if name not in types:
@@ -174,7 +174,7 @@ def stream(batches):
 
 
 def diff(conn, t, staged, mirror):
-    """Step 5: the rows that differ into the TEMP table _diff (README "Comparing in the target"), every column
+    """Step 5: the rows that differ into the TEMP table _diff (docs/target.md "Comparing in the target"), every column
     list by name. Returns the counts."""
     had = dict(mirror)
     s = ", ".join("s." + quote(c) for c, _ in staged)
@@ -277,7 +277,7 @@ ODBC_PASSWORD = re.compile(r"(?:^|;)\s*(?:PWD|Password)\s*=\s*(\{(?:[^}]|\}\})*\
 
 def connection_values(value):
     """Every text of a connection, and the password of a URL or an ODBC string in it as written and decoded, since a
-    driver may quote either (README "What happens to the decrypted connection")."""
+    driver may quote either (docs/connections.md "What happens to the decrypted connection")."""
     if isinstance(value, dict):
         return [s for v in value.values() for s in connection_values(v)]
     if isinstance(value, list):

@@ -142,7 +142,7 @@ def alive(pid):
 
 
 def test_a_run_whose_server_process_is_killed_fails_and_run_says_so(slow):
-    """README "Failures": the target drops the connection, the run ends without publishing."""
+    """docs/target.md "Failures": the target drops the connection, the run ends without publishing."""
     before = mirror(slow)
     with psycopg.connect(slow.target_url) as holder:
         holder.execute("lock table raw_erp.slow in access exclusive mode")

@@ -195,7 +195,7 @@ What the numbers say:
 - **A process per run costs about 0.18 s** before it does any work, more than twice the work for a small table. That is irrelevant for tables loaded every few minutes. Decision 25 had assumed half a second.
 - **The view and the claim stay cheap.** 4 ms per claim, serialised by the counting lock, allows about 250 claims a second. The one part that grows with tables times locks is the look into `pg_locks` per table.
 - **The counting lock is what holds the limits.** Without load the race is rare, because claims have to overlap within a few milliseconds and starting a Python process spreads them out. A probe at low load proves nothing.
-- **`client_connection_check_interval` also works during a lock wait.** Both release times stay within the README's "Failures" table.
+- **`client_connection_check_interval` also works during a lock wait.** Both release times stay within the "Failures" table in `docs/target.md`.
 - **The driver hands over batches of about 16 MB**, or the rest at the end of the stream. A small table arrives as one batch.
 
 Every number is a single series on a laptop. Not measured: a Linux client, a real network, and a machine failure (section 11 cuts a container's network).
@@ -255,7 +255,7 @@ What the numbers say:
 
 Limitations: one series, one key shape (a single `bigint` column), versions spread evenly over all keys, a log that fits in memory (48 MB, cached), no concurrent writes. A log some hundred times larger, or one whose rows do not fit in memory, was not measured.
 
-Recommendation: the README names an index, and says it is for one key and a person's choice (a run never builds it): `CREATE INDEX ON <schema>.<table>__log (<key columns>, _loaded_at)`. It also names the direct query above for one moment, with `:moment` replaced and the key columns in `DISTINCT ON` and `ORDER BY`, as the faster way to ask for a moment; the view stays the answer for the versions of one key and for all of history. It names no index for a moment, because none helps.
+Recommendation: the documentation (now `docs/target.md`, "History") names an index, and says it is for one key and a person's choice (a run never builds it): `CREATE INDEX ON <schema>.<table>__log (<key columns>, _loaded_at)`. It also names the direct query above for one moment, with `:moment` replaced and the key columns in `DISTINCT ON` and `ORDER BY`, as the faster way to ask for a moment; the view stays the answer for the versions of one key and for all of history. It names no index for a moment, because none helps.
 
 ## 14. The pooler check behind pgbouncer in transaction mode
 

@@ -107,7 +107,7 @@ def listen(runs, answers, ended, seconds, lines):
     while (now := time.monotonic()) < end:
         for p, claim in runs.items():
             if claim and claim["deadline"] <= now:
-                p.kill()  # README "Order when finishing": kill first, write the reason afterwards
+                p.kill()  # docs/target.md "Order when finishing": kill first, write the reason afterwards
                 claim["deadline"], claim["reason"] = math.inf, f"ended after max_seconds = {claim['max_seconds']}"
                 say_end(claim, "failed", claim["reason"])
                 answers[claim["claimed"]] = claim["answer"] = {"status": "failed", "reason": claim["reason"]}
