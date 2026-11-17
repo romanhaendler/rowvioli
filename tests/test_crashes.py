@@ -71,6 +71,20 @@ def kill_and_check(rv, worker):
     assert json.loads(out)["tables"] == {"raw_erp.slow": {"status": "failed", "reason": "worker lost"}}
 
 
+def test_the_next_run_closes_the_row_of_a_dead_run(slow):
+    with psycopg.connect(slow.target_url) as holder:
+        holder.execute("lock table raw_erp.slow in access exclusive mode")
+        worker = slow.start("run")
+        until(lambda: waiting_on(slow, "raw_erp.slow"))
+        kill_and_check(slow, worker)
+        holder.rollback()
+    slow.target("update _rowvioli.tables set requested_at = now()")
+    ok(slow)
+    assert slow.target("""select status, reason, finished_at is not null from _rowvioli.runs
+                           order by run desc offset 1 limit 1""") == [("failed", "worker lost", True)]
+    assert slow.target("select count(*) from _rowvioli.runs where status = 'running'") == [(0,)]
+
+
 def mirror(rv):
     return rows(rv.target, "select * from raw_erp.slow"), rows(rv.target, "select * from raw_erp.slow__log")
 

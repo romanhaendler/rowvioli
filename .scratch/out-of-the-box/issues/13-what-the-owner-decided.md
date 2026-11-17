@@ -2,7 +2,7 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -46,3 +46,5 @@ dead runs" goes, the scrubbing limit loses its `path` example), `docs/connector-
 - [ ] The whole suite is green.
 
 ## Comments
+
+Resolved. Options are refused in the connector (`contract.known_options`, one message form for `postgres`, `odbc`, `rest`); the `odbc` refusal is untested here (no driver). Zero rows: `check` in `load.stage` also needs `max_delete_share < 1`; decisions 47 (options, `path`) and 48 (zero rows, refining 42). `path` is exempt in `connection_values` only for `type = "file"`, its URL password is still scrubbed. The dead run: the status view derives `worker lost` from the missing lock (nobody writes it), so the claim, under the table lock, closes any `running` row of that table. No schema change. Consumer rights tried with a role holding only the README's two lines: it reads `status`, and `tables`, `runs`, `meta`, `sources` are denied. In the tests the source password is `x`, so a reason shows `ma***_delete_share`: the tests match `_delete_share = 1.0`.

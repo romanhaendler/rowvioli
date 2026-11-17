@@ -12,7 +12,6 @@ Decided in the second round and no longer open: new tables of the source do not 
 
 ## Left open
 
-- **Seeing dead runs** (A5, `.scratch/prototype/findings.md`). A dead run's row in `runs` stays `running` without `finished_at`, and only its table shows `failed: worker lost`. If people should see dead runs as such, a second small view over `runs` is needed.
 
 ## Not verified
 
@@ -50,7 +49,7 @@ Unchanged from the first round:
 - **The place where `apply` runs holds every secret** in its environment.
 - **An older ciphertext can be put back** by someone with write access to the target.
 - **A wrongly built connection shows only when a table is loaded.** `apply` does not know the connector; it catches only a `type` near a built-in one (decision 45).
-- **Removing secrets from error texts is best effort.** The program removes every value of a connection as written, stripped of surrounding whitespace and as Python quotes it, and a password in a URL or ODBC string as written and decoded; from the target's errors only the password of its address. A driver can still reformat a connection string or quote part of a value in another way. A secret of one or two characters may also be removed from inside other words of a reason, which makes it unreadable and hides nothing else; a rule for it is not worth its cost. Every value of a connection is removed, also a harmless one: with `path = "csv"` on a `file` source, reasons read `a table must be a file inside ***`.
+- **Removing secrets from error texts is best effort.** The program removes every value of a connection as written, stripped of surrounding whitespace and as Python quotes it, and a password in a URL or ODBC string as written and decoded; from the target's errors only the password of its address. A driver can still reformat a connection string or quote part of a value in another way. A secret of one or two characters may also be removed from inside other words of a reason, which makes it unreadable and hides nothing else; a rule for it is not worth its cost. Every value of a connection is removed, also a harmless one, except the `path` of a `file` connection (decision 47).
 - **The private key file has to reach every worker** once, by whatever the organisation uses for that.
 - **No common point in time in the source.** Two tables are not read at the same moment.
 - **A table with a key cannot have a column `_op`**, nor `_run`, `_loaded_at`, `_valid_from` or `_valid_to` with a change log. The diff, the change log and the history view use these names.

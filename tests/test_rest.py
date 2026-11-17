@@ -140,6 +140,8 @@ def test_a_refusal_fails_the_run_with_status_and_path_and_no_token(api):
     ('path = "/zone", columns = { station = "text", at = "timestamp" }', "at"),
     ('columns = { station = "text" }', "option path"),
     ('path = "/open"', "option columns"),
+    ('path = "/open", columns = { station = "text" }, pagee = "p"',
+     "the option pagee is not one of the rest connector's; it knows path, columns, page, rows"),
     ('path = "/int-float", page = "page", columns = { station = "text" }', "does not page"),  # ignores the page
 ])
 def test_bad_types_values_and_responses_fail_the_run_naming_the_cause(api, options, cause):

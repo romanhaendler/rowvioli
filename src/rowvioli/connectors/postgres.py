@@ -1,11 +1,13 @@
-"""The postgres connector: expects `url`, reads the whole table through ADBC as a stream of batches."""
+"""The postgres connector: expects `url` and knows no option; reads the whole table through ADBC as a stream of batches."""
 import adbc_driver_postgresql.dbapi as adbc
 import pyarrow as pa
 
+from ..contract import known_options
 from ..target import quote
 
 
 def read(connection, table, options):
+    known_options("postgres", table, options)
     conn = adbc.connect(connection["url"])
     cur = conn.cursor()
     name = ".".join(quote(p) for p in table.split("."))

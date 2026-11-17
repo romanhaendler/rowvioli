@@ -12,13 +12,18 @@ Added:
 - The `file` connector reads JSON files (`.json`, `.jsonl`, `.ndjson`, every column as `jsonb`) and patterns such as `orders_*.csv`, which read every matching file as one table; a file that lands later arrives on the next run. A pattern reads any number of files, 50 at a time (measured with 5000).
 - `rowvioli key new --help` says what it writes. The `odbc` connector without the driver manager says to install `unixodbc`.
 
-Changed (a working set-up can notice these; both fail the run and name the option):
+Changed (a working set-up can notice these; each fails the run and names the option):
+
+- An option a `postgres`, `odbc` or `rest` table does not know (`incremental = "updated"` on `postgres`) fails the run and names the option and those the connector knows.
+- A source that delivers zero rows publishes when the table says `max_delete_share = 1.0`; without it the run still fails, and the reason says so.
+- The `path` of a `file` connection stays readable in a reason; every other value of a connection is still hidden.
 
 - A CSV skips no line before its header unless `skip` says so. A CSV with lines before its header needs `skip`.
 - A CSV that splits into a single column fails unless `sep` is given. A CSV of one column needs `sep`.
 
 Fixed:
 
+- The next run of a table closes the row of a run that died: `failed`, reason `worker lost`, with a finish time, instead of `running` for ever.
 - An empty file fails and says that it is empty.
 - A ragged CSV fails instead of losing its header or arriving as one column.
 - A file name with `[`, `*` or `?` is no longer expanded a second time by DuckDB, which could read another file than the one named.

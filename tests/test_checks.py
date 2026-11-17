@@ -207,3 +207,34 @@ def test_a_new_empty_source_table_is_mirrored_as_an_empty_table(erp):
     code, answer = run(erp)
     assert code == 0, answer
     assert erp.target("select count(*) from raw_erp.fresh") == [(0,)]
+
+
+def test_an_option_postgres_does_not_know_fails_the_run_and_names_it(erp):
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], incremental = "updated" }\n'))
+    assert failed(erp) == ("public.customers: the option incremental is not one of the postgres connector's; "
+                           "it knows no option")
+
+
+def test_an_emptied_source_publishes_when_max_delete_share_is_1(erp):
+    ok(erp)
+    erp.source("delete from customers")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert "_delete_share = 1.0" in failed(erp)  # not "max_": the source's password is "x"
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], max_delete_share = 1.0 }\n'))
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    assert rows(erp.target, MIRROR) == []
+    assert erp.target("select _op, count(*) from raw_erp.customers__log where _run = (select max(run) from "
+                      "_rowvioli.runs) group by 1") == [("D", 3)]
+
+
+def test_a_table_without_a_key_is_emptied_the_same_way(erp):
+    apply(erp, definition(erp, '"public.customers" = {}\n'))
+    ok(erp)
+    erp.source("delete from customers")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert "_delete_share = 1.0" in failed(erp)
+    apply(erp, definition(erp, '"public.customers" = { max_delete_share = 1.0 }\n'))
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    assert rows(erp.target, MIRROR) == []
