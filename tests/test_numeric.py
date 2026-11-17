@@ -13,19 +13,21 @@ def prices(rv, columns, values):
 
 
 def test_a_new_mirror_has_the_sources_precision_and_scale_and_a_second_run_finds_no_change(erp):
-    prices(erp, "a numeric(12, 2), b numeric(38, 10), c numeric(50, 5), d numeric, e numeric(5, 0), f numeric(5, -2)",
-           "(1, 137.00, 1.5, 123.45, 1.10, 5, 12345), (2, null, null, null, null, null, null),"
+    prices(erp, "a numeric(12, 2), b numeric(38, 10), c numeric(50, 5), d numeric, e numeric(5, 0), f numeric(5, -2),"
+                " g numeric(3, 5)",
+           "(1, 137.00, 1.5, 123.45, 1.10, 5, 12345, 0.00123), (2, null, null, null, null, null, null, null),"
            " (3, -0.01, 1234567890123456789012345678.0123456789, 123456789012345678901234567890123456789012345.12345,"
-           " 0.000000000000000000000000000001, 99999, -99900)")
+           " 0.000000000000000000000000000001, 99999, -99900, -0.00999)")
     ok(erp)
-    exact = [("a", "numeric(12,2)"), ("b", "numeric(38,10)"), ("e", "numeric(5,0)"), ("f", "numeric(5,-2)")]
-    # beyond Arrow's 38 digits, and unconstrained, the driver's decimal256 stays numeric
-    assert column_types(erp, "raw_erp.prices") == [("id", "integer"), *exact[:2], ("c", "numeric"), ("d", "numeric"),
-                                                   *exact[2:]]
+    # beyond Arrow's 38 digits, unconstrained (the driver's decimal256), and with a scale outside 0 to the precision,
+    # which a target before Postgres 15 cannot hold, it stays numeric
+    assert column_types(erp, "raw_erp.prices") == [("id", "integer"), ("a", "numeric(12,2)"), ("b", "numeric(38,10)"),
+                                                   ("c", "numeric"), ("d", "numeric"), ("e", "numeric(5,0)"),
+                                                   ("f", "numeric"), ("g", "numeric")]
     assert column_types(erp, "raw_erp.prices__log")[3:] == column_types(erp, "raw_erp.prices")
-    text = "select id, a::text, b::text, e::text, f::text from {} order by id"
+    text = "select id, a::text, b::text, e::text, f::text, g::text from {} order by id"
     assert erp.target(text.format("raw_erp.prices")) == erp.source(text.format("prices"))
-    assert erp.target(text.format("raw_erp.prices"))[0] == (1, "137.00", "1.5000000000", "5", "12300")
+    assert erp.target(text.format("raw_erp.prices"))[0] == (1, "137.00", "1.5000000000", "5", "12300", "0.00123")
     assert erp.target("select id, c, d from raw_erp.prices order by id") == erp.source(
         "select id, c, d from prices order by id")
     assert run(erp, "erp")[1]["tables"]["raw_erp.prices"] == UNCHANGED

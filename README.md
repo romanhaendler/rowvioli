@@ -42,7 +42,7 @@ That is the whole usage. `docker compose up` in [examples/quickstart](https://gi
 
 ## Try it in a minute
 
-With Python and Docker and nothing else: a throwaway Postgres as the target, a CSV file as the source. `pip install` goes best into a virtual environment. The last lines change the file and run again.
+With Python and Docker and nothing else: a throwaway Postgres as the target, a CSV file as the source. `pip install` goes best into a virtual environment. The last lines change the file and ask for the table again before its hour is up, then stop the container, which `--rm` removes. The block can be pasted again from the same directory; it keeps the key it made the first time.
 
 ```sh
 docker run -d --rm --name rowvioli-try -e POSTGRES_PASSWORD=try -p 127.0.0.1:55432:5432 postgres:16-alpine
@@ -65,12 +65,14 @@ path = "data"
 [try.tables]
 "customers.csv" = { key = ["customer_no"] }
 EOF
-rowvioli key new && rowvioli apply --init && rowvioli run && rowvioli status
+test -f worker.key || rowvioli key new
+rowvioli apply --init && rowvioli run && rowvioli status
 docker exec rowvioli-try psql -U postgres -c "select * from raw_try.customers order by 1"
 echo "4,Dora,Essen" >> data/customers.csv && sed 's/Bonn/Cologne/' data/customers.csv > c.tmp && mv c.tmp data/customers.csv
-rowvioli run try   # asks for the table now, before its hour is up
+rowvioli run try
 docker exec rowvioli-try psql -U postgres -c "select * from raw_try.customers__history order by customer_no, _valid_from"
-docker stop rowvioli-try   # --rm removes it
+docker stop rowvioli-try
+cd ..
 ```
 
 What you see (times shortened):
@@ -642,7 +644,7 @@ COMMIT;  -- releases only the counting lock from step 1, the table lock stays
 - **Step 1 prevents overtaking.** Without it, two workers could read "three of four" at the same time and both take a table.
 - **The count cannot drift.** If a worker dies, its lock disappears from `pg_locks` and no longer counts. Nobody has to book anything back.
 - **The same view detects dead runs.** A run recorded as `running` whose table lock is missing is dead. Nobody has to act on that: the table becomes due again when its pause is over, and the run that claims it then closes the dead run's row in `runs` as `failed` with the reason `worker lost`.
-- **Order when finishing.** A run first records its result and then releases the lock. The other way round, a finished run would briefly look like a dead one. The one exception is a run ended after `max_seconds`: the worker kills it first and writes the reason afterwards, so it briefly shows as `worker lost`.
+- **Order when finishing.** A run first records its result and then releases the lock. The other way round, a finished run would briefly look like a dead one. The one exception is a run ended after `max_seconds`: the worker kills it first and writes the reason afterwards, so it briefly shows as `worker lost`. A claim in that moment closes its row as `worker lost`; the worker's reason then replaces it in `runs`.
 - **Number 0 is reserved.** It marks the counting lock. Sources get numbers from 1.
 
 The prototype claimed this way with 6 workers of 4 slots, two sources with `parallel` 2 and 3, and `max_running = 4`. A probe every 20 ms never saw more than the limits, and both were reached. With the counting lock removed, the same test broke the total limit in 1 of 4 runs. Details in [docs/measurements.md](https://github.com/romanhaendler/rowvioli/blob/main/docs/measurements.md#9-the-prototype).
@@ -975,6 +977,8 @@ The program creates no roles. Whoever can write the definition decides what is l
 
 On Windows the stop signal is Ctrl+Break instead of SIGTERM.
 
+From 0.1.0, update every worker before applying new tables: a mirror that a new worker creates has `numeric(p,s)` where the source has it, and a worker of 0.1.0 fails on it with `has changed its type from numeric(10,2) to numeric`. Going back to 0.1.0 needs `ALTER TABLE ... ALTER <column> TYPE numeric` on such columns, in the mirror and its change log.
+
 A worker that is killed hard takes its runs with it. They show as `worker lost` and are retried after the pause.
 
 ## Connectors
@@ -1102,7 +1106,7 @@ The column types in the target follow from the Arrow schema the connector delive
 
 - **Arrow only.** A connector names its schema. Types are never guessed from the first rows, so they cannot flip between two runs.
 - **Files.** The `file` connector delivers every CSV and Excel column as text and every JSON column as `jsonb`, except those the option `columns` names with a DuckDB type, for example `columns = { amount = "decimal(10,2)" }`. Parquet keeps its own types. Giving a column a type after the first load is a change of type ([What a person does by hand](#what-a-person-does-by-hand)).
-- **Decimals keep their precision and scale.** An Arrow `decimal128(p,s)` arrives as `numeric(p,s)`, from every connector, so a `numeric(12,2)` `137.00` stays `137.00`, and DuckDB's `decimal(10,2)` is `numeric(10,2)`. From the `postgres` connector this holds up to 38 digits; an unconstrained `numeric`, and one beyond 38 digits, arrive as `numeric` (the connector delivers them as Arrow's `decimal256`). An unconstrained `numeric` with more than 38 digits on either side of the point, or `NaN`, fails the run. The driver drops trailing zeros, so an unconstrained `1.10` arrives as `1.1`.
+- **Decimals keep their precision and scale.** An Arrow `decimal128(p,s)` arrives as `numeric(p,s)`, from every connector, when its scale is between 0 and its precision (others need Postgres 15 and arrive as `numeric`), so a `numeric(12,2)` `137.00` stays `137.00`, and DuckDB's `decimal(10,2)` is `numeric(10,2)`. From the `postgres` connector this holds up to 38 digits; an unconstrained `numeric`, and one beyond 38 digits, arrive as `numeric` (the connector delivers them as Arrow's `decimal256`). An unconstrained `numeric` with more than 38 digits on either side of the point, or `NaN`, fails the run. The driver drops trailing zeros, so an unconstrained `1.10` arrives as `1.1`.
 - **An existing column keeps its type.** A column whose type in the mirror differs from the source's only in precision or scale, `numeric(10,2)` where the source has `numeric`, takes the values that fit and fails the run on the first one that does not, naming the column, the type and the value. A mirror made by 0.1.0 therefore keeps loading with its `numeric` columns. The program never alters a column ([What a person does by hand](#what-a-person-does-by-hand)).
 - **What the driver cannot carry from Postgres arrives as text.** The `postgres` connector reads `money` as `numeric` (the driver would deliver cents), and every type the driver would deliver as raw bytes (`inet`, `xml`, `timetz`, ranges, `bit`, `point`, `tsvector` and the like) as text, and an array of such a type as one text value, not as an array. `inet` keeps its netmask: `10.0.0.2` arrives as `10.0.0.2/32`. `bytea`, `uuid`, numbers, dates, timestamps, intervals, enums and arrays of these arrive with their own type.
 - **`json` arrives as `jsonb`**, from every connector. The staging step turns it into `jsonb`, because the driver cannot write `jsonb` and `json` has no equality, so a table with it could not be compared on its second run. A mirror that has a `json` column from before fails the schema check once; drop it as described under [What a person does by hand](#what-a-person-does-by-hand).
