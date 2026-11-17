@@ -24,6 +24,7 @@ def main():
     ap = sub.add_parser("apply", help="write the definition into the target")
     ap.add_argument("directory")
     ap.add_argument("--check", action="store_true", help="only read and check the definition")
+    ap.add_argument("--init", action="store_true", help="create the schema _rowvioli first if it is missing")
     ap.add_argument("--key", help="public key file (default: worker.pub next to the directory)")
     rp = sub.add_parser("run", help="load what is due, once")
     rp.add_argument("source", nargs="?")
@@ -58,7 +59,7 @@ def command(a):
         definition.read(a.directory)
         print("the definition is valid")
     elif a.command == "apply":
-        apply.apply(a.directory, a.key or str(Path(a.directory).resolve().parent / "worker.pub"))
+        apply.apply(a.directory, a.key or str(Path(a.directory).resolve().parent / "worker.pub"), a.init)
     elif a.command == "list":
         print_tables(a.definition, a.source)
     elif a.command == "status":

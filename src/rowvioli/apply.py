@@ -9,7 +9,7 @@ import adbc_driver_postgresql.dbapi as adbc
 from . import definition, seal, target
 
 
-def apply(directory, key_file):
+def apply(directory, key_file, init=False):
     sources, tables, digest = definition.read(directory, os.environ)
     try:
         public = seal.public_key(key_file)
@@ -20,7 +20,13 @@ def apply(directory, key_file):
     for s in sources:
         s["connection"] = base64.b64encode(seal.seal(public, s["name"], s["connection"])).decode()
         s["key_id"] = seal.key_id(public)
-    conn = target.connect()
+    try:
+        conn = target.connect()
+    except SystemExit as e:
+        if not init or e.code != target.NO_SCHEMA:
+            raise
+        conn = target.connect(init=True)
+        print("the schema _rowvioli is ready in the target")
     # a changed target name moves nothing: say so, so that no stale mirror is left behind unknowingly
     old = {(src, tbl): f"{schema}.{name}" for src, tbl, schema, name in target.sql(
         conn, "SELECT source, source_table, target_schema, target_table FROM _rowvioli.tables")}

@@ -374,3 +374,38 @@ def test_check_fails_each_invalid_definition_without_a_target_or_the_variables(r
     r = check(rv, {"erp.toml": ERP.replace(old, new), "crm.toml": CRM})
     assert r.returncode != 0 and says in r.stderr, r.stderr
     assert "Traceback" not in r.stderr
+
+
+def test_apply_init_creates_the_schema_on_a_fresh_target_and_applies(rv):
+    assert rv.run("key", "new").returncode == 0
+    rv.definition({"erp.toml": ERP})
+    r = rv.run("apply", "--init", "sources", env=ENV)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines() == ["the schema _rowvioli is ready in the target", "applied 1 sources with 3 tables"]
+    assert rv.target("select count(*) from _rowvioli.tables") == [(3,)]
+
+
+def test_apply_init_on_an_existing_schema_prints_only_applied_and_keeps_the_rows(ready):
+    rv = ready
+    rv.definition({"erp.toml": ERP})
+    assert rv.run("apply", "--init", "sources", env=ENV).returncode == 0
+    r = rv.run("apply", "--init", "sources", env=ENV)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines() == ["applied 1 sources with 3 tables"]
+    assert rv.target("select count(*) from _rowvioli.tables") == [(3,)]
+
+
+def test_apply_without_init_on_a_fresh_target_names_init(rv):
+    assert rv.run("key", "new").returncode == 0
+    rv.definition({"erp.toml": ERP})
+    r = rv.run("apply", "sources", env=ENV)
+    assert r.returncode != 0
+    assert "rowvioli init" in r.stderr
+
+
+def test_apply_init_with_a_broken_definition_creates_no_schema(rv):
+    assert rv.run("key", "new").returncode == 0
+    rv.definition({"erp.toml": ERP.replace('max_age = "1h"', 'max_age = "soon"')})
+    r = rv.run("apply", "--init", "sources", env=ENV)
+    assert r.returncode != 0
+    assert rv.target("select to_regclass('_rowvioli.meta') is null") == [(True,)]

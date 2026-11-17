@@ -680,12 +680,14 @@ A connector is code the operator trusts. It receives the decrypted connection an
 | `rowvioli key new` | Creates a key pair in the current directory: `worker.key` for the workers and `worker.pub` for the definition, and says so. Overwrites neither. | nothing |
 | `rowvioli list erp` | Prints the tables of a source with their keys, ready to paste into its `tables` block. Reads the definition from `sources/` (or `--definition <dir>`). | definition, environment, connector, source |
 | `rowvioli apply --check sources/` | Reads the definition and checks it. Writes nothing. Meant for a laptop and for the pipeline of a merge request. | definition |
-| `rowvioli apply sources/` | Writes the definition into the target: one row per source and table, connections encrypted. | definition, environment, `worker.pub` next to the directory (or `--key <file>`), target |
+| `rowvioli apply sources/` | Writes the definition into the target: one row per source and table, connections encrypted. With `--init` it creates the schema `_rowvioli` first when it is missing. | definition, environment, `worker.pub` next to the directory (or `--key <file>`), target |
 | `rowvioli status [erp [dbo.Customers]]` | Prints the enabled tables with their target name, age, due time, status and reason or progress, from the view `_rowvioli.status`. Names narrow it the way `run` takes them. Exits 0 whenever it could print the state. | target |
 | `rowvioli work --slots 4` | Runs permanently and loads whatever is due, up to four tables at a time. | connectors, private key, target |
 | `rowvioli run` | Loads everything that is due, once, and ends. | connectors, private key, target |
 | `rowvioli run erp` | Requests all tables of `erp` and loads until nothing of `erp` is due. | connectors, private key, target |
 | `rowvioli run erp dbo.Customers` | The same for a single table, named as in the source. An unknown or disabled name fails and, when exactly one enabled table ends in the name, suggests it: `erp customers: no enabled table has this name; did you mean public.customers`. | connectors, private key, target |
+
+`rowvioli apply --init sources/` saves the extra `init` on a fresh target, and does nothing more when the schema exists. It needs what `init` needs, `CREATE` on the database, so a pipeline role with only the GRANT lines in [The target](#the-target) applies without the flag to a target that an admin has initialised.
 
 `rowvioli --version` prints the version of the installed package.
 

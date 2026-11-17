@@ -13,7 +13,7 @@ The package as released in version 0.1.0. The specs under `.scratch/` call the t
 
 | Part | In 0.1.0 | Later |
 |---|---|---|
-| Commands | `init`, `key new`, `list`, `apply` with `--check`, `run`, `work`, `status` | `request` as a shortcut for setting `requested_at` |
+| Commands | `init`, `key new`, `list`, `apply` with `--check` and `--init`, `run`, `work`, `status` | `request` as a shortcut for setting `requested_at` |
 | Connectors | `postgres`, `file` (CSV, Excel, Parquet), `odbc`, `rest` | JSON files in `file` |
 | Core | table lock, staging, checks, diff, publishing, mirror and change log, encrypted connections, the status view, retry | reading only rows from a timestamp on, patterns for table names |
 | Limits | per worker, per source, per target | workers that serve only some sources |
