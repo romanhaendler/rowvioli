@@ -10,6 +10,7 @@ import subprocess
 import time
 import uuid
 
+import psycopg
 import pytest
 from conftest import HOST, IMAGE, ROWVIOLI, _query, _wait, until
 from test_run import apply, ok, run
@@ -157,17 +158,22 @@ def test_with_the_limits_full_the_targets_connections_stay_at_the_running_tables
                       where datname = current_database() and pid <> pg_backend_pid()"""
     # the start-up is over when the count has stayed at 2 + 3 for 2 s: run processes started before the first
     # claims committed find nothing and end, and a slow worker may connect late
-    stable, deadline, values = time.monotonic(), time.monotonic() + 30, []
-    while time.monotonic() - stable < 2:
-        values.append(ready.target(connections)[0][0])
-        if values[-1] != 2 + 3:
-            stable = time.monotonic()
-        assert time.monotonic() < deadline, f"the connections never settled at 5, seen {sorted(set(values))}"
-        time.sleep(0.05)
-    seen, end = set(), time.monotonic() + 8  # four polling intervals
-    while time.monotonic() < end:
-        seen.add(ready.target(connections)[0][0])
-        time.sleep(0.02)
+    # one connection for all the counting: ready.target opens one per query, and on a busy machine the backend of
+    # the query before is still closing when the next one counts, which reads as a sixth connection
+    with psycopg.connect(ready.target_url, autocommit=True) as counting:
+        def count():
+            return counting.execute(connections).fetchone()[0]
+        stable, deadline, values = time.monotonic(), time.monotonic() + 30, []
+        while time.monotonic() - stable < 2:
+            values.append(count())
+            if values[-1] != 2 + 3:
+                stable = time.monotonic()
+            assert time.monotonic() < deadline, f"the connections never settled at 5, seen {sorted(set(values))}"
+            time.sleep(0.05)
+        seen, end = set(), time.monotonic() + 8  # four polling intervals
+        while time.monotonic() < end:
+            seen.add(count())
+            time.sleep(0.02)
     assert seen == {2 + 3}
 
 
