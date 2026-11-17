@@ -40,6 +40,65 @@ erp     public.orders     raw_erp.orders     5m       2m 14s  in 2m 46s  ok
 
 That is the whole usage. `docker compose up` in [examples/quickstart](https://github.com/romanhaendler/rowvioli/tree/main/examples/quickstart) plays it with a source and a target. There is no schedule, no queue and no job. One table in the target is work list, state and monitoring at once.
 
+## Try it in a minute
+
+With Python and Docker and nothing else: a throwaway Postgres as the target, a CSV file as the source. `pip install` goes best into a virtual environment. The last lines change the file and run again.
+
+```sh
+docker run -d --rm --name rowvioli-try -e POSTGRES_PASSWORD=try -p 127.0.0.1:55432:5432 postgres:16-alpine
+until docker exec rowvioli-try pg_isready -h 127.0.0.1 -q; do sleep 1; done
+pip install "rowvioli[file]"
+export ROWVIOLI_TARGET_URL=postgresql://postgres:try@127.0.0.1:55432/postgres
+mkdir -p try/data try/sources && cd try
+cat > data/customers.csv <<'EOF'
+customer_no,name,city
+1,Anna,Bonn
+2,Ben,Essen
+3,Carla,Mainz
+EOF
+cat > sources/try.toml <<'EOF'
+[try]
+type    = "file"
+max_age = "1h"
+[try.connection]
+path = "data"
+[try.tables]
+"customers.csv" = { key = ["customer_no"] }
+EOF
+rowvioli key new && rowvioli apply --init && rowvioli run && rowvioli status
+docker exec rowvioli-try psql -U postgres -c "select * from raw_try.customers order by 1"
+echo "4,Dora,Essen" >> data/customers.csv && sed 's/Bonn/Cologne/' data/customers.csv > c.tmp && mv c.tmp data/customers.csv
+rowvioli run try   # asks for the table now, before its hour is up
+docker exec rowvioli-try psql -U postgres -c "select * from raw_try.customers__history order by customer_no, _valid_from"
+docker stop rowvioli-try   # --rm removes it
+```
+
+What you see (times shortened):
+
+```
+created worker.key (keep it secret) and worker.pub
+the schema _rowvioli is ready in the target
+applied 1 sources with 1 tables
+2026-11-17 21:02:39 raw_try.customers ok after 0.5s: 3 inserted, 0 updated, 0 deleted
+source  table          target             max_age  age  due    status  reason
+try     customers.csv  raw_try.customers  1h       1s   in 1h  ok
+ customer_no | name  | city
+-------------+-------+-------
+ 1           | Anna  | Bonn
+ 2           | Ben   | Essen
+ 3           | Carla | Mainz
+2026-11-17 21:02:41 raw_try.customers ok after 0.2s: 1 inserted, 1 updated, 0 deleted
+ _valid_from | _valid_to  | customer_no | name  |  city
+-------------+------------+-------------+-------+---------
+ 20:02:39    | 20:02:41   | 1           | Anna  | Bonn
+ 20:02:41    |            | 1           | Anna  | Cologne
+ 20:02:39    |            | 2           | Ben   | Essen
+ 20:02:39    |            | 3           | Carla | Mainz
+ 20:02:41    |            | 4           | Dora  | Essen
+```
+
+Anna lived in Bonn until the second run, and the history keeps both versions. Each run also prints a line of JSON, left out here.
+
 Two ideas carry the design:
 
 - **You state the freshness.** A table is due when it is older than its `max_age`. A worker takes the table that misses its target the most. A table that has to be loaded at a time of day names that too: a load time is a request the clock makes.
@@ -58,6 +117,16 @@ What it is not:
 - Not a general scheduler. It knows how old a table may be and at which times of day it is due, and nothing else about time.
 - Not a transformation tool. Columns arrive the way the source delivers them.
 - Not a tool for targets other than PostgreSQL.
+
+For another selection or other column names, make a view in the source (which needs the right to create one there) and list it as a table. A view has no key to find, and `rowvioli list` does not show views, so write the `key` yourself:
+
+```sql
+CREATE VIEW open_orders AS SELECT order_no AS id, amt AS amount FROM orders WHERE status = 'open';
+```
+
+```toml
+"public.open_orders" = { key = ["id"] }
+```
 
 ## Install
 

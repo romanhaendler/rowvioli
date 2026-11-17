@@ -13,8 +13,8 @@ decides whether the program can do better.
   into a virtual environment inside your directory (`uv venv && uv pip install '<wheel>[file,odbc,rest]'`)
   or into a container. Never install the repository's source, never edit anything under
   the repository - it is read-only for you. You may read it: `README.md`,
-  `docs/connector-guide.md`, `docs/decisions.md` (settled decisions), `docs/open-points.md` (known limits),
-  `GLOSSARY.md`, `src/rowvioli/` (the source), `examples/`.
+  the pages under `docs/` it links to (`docs/connector-guide.md` among them), `docs/decisions.md` (settled
+  decisions), `docs/open-points.md` (known limits), `GLOSSARY.md`, `src/rowvioli/` (the source), `examples/`.
 - Work only inside your directory, given in your task.
 - Postgres runs in Docker. Every container you start gets your prefix as its name and
   `--label rowvioli-shakedown=<your id>`, and publishes its port to a random local port

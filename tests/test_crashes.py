@@ -71,6 +71,20 @@ def kill_and_check(rv, worker):
     assert json.loads(out)["tables"] == {"raw_erp.slow": {"status": "failed", "reason": "worker lost"}}
 
 
+def test_the_next_run_closes_the_row_of_a_dead_run(slow):
+    with psycopg.connect(slow.target_url) as holder:
+        holder.execute("lock table raw_erp.slow in access exclusive mode")
+        worker = slow.start("run")
+        until(lambda: waiting_on(slow, "raw_erp.slow"))
+        kill_and_check(slow, worker)
+        holder.rollback()
+    slow.target("update _rowvioli.tables set requested_at = now()")
+    ok(slow)
+    assert slow.target("""select status, reason, finished_at is not null from _rowvioli.runs
+                           order by run desc offset 1 limit 1""") == [("failed", "worker lost", True)]
+    assert slow.target("select count(*) from _rowvioli.runs where status = 'running'") == [(0,)]
+
+
 def mirror(rv):
     return rows(rv.target, "select * from raw_erp.slow"), rows(rv.target, "select * from raw_erp.slow__log")
 
@@ -156,6 +170,21 @@ def test_a_run_whose_server_process_is_killed_fails_and_run_says_so(slow):
     assert held_table_locks(slow) == 0
     assert status(slow) == ("failed", "worker lost")  # the reason cannot be written without a connection
     assert mirror(slow) == before
+
+
+def test_run_whose_own_connection_the_target_drops_says_so_in_one_line(slow):
+    """Ticket 11: the target's message without the query that was sent."""
+    with psycopg.connect(slow.target_url) as holder:
+        holder.execute("lock table raw_erp.slow in access exclusive mode")
+        worker = slow.start("run")
+        run = until(lambda: waiting_on(slow, "raw_erp.slow"))
+        slow.target("""select pg_terminate_backend(pid) from pg_stat_activity
+                        where datname = current_database() and pid not in (pg_backend_pid(), %s, %s)""",
+                    [run, holder.info.backend_pid])
+        out, err = worker.communicate(timeout=20)
+        holder.rollback()
+    assert worker.returncode == 1 and out == ""
+    assert "SELECT" not in err and "terminating connection" in err.splitlines()[-1], err
 
 
 def test_a_reader_never_sees_an_empty_or_half_loaded_mirror(slow):

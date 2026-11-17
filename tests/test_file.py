@@ -1,6 +1,5 @@
 """The `file` connector: CSV, Excel, Parquet and JSON files and patterns from a directory (spec test 15)."""
 import json
-import subprocess
 from datetime import date
 from decimal import Decimal
 
@@ -8,7 +7,6 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from conftest import ROWVIOLI
 
 CUSTOMERS = [(1, "Anna", 2.5), (2, "Ben", None), (3, "Cleo", 10.0)]
 
@@ -43,9 +41,10 @@ path = "{rv.dir / 'files'}"
 {tables}"""})
     r = rv.run("apply", "sources")
     assert r.returncode == 0, r.stderr
-    r = rv.run("run")
-    assert r.stdout, r.stderr
-    return r.returncode, json.loads(r.stdout)["tables"]
+    r = rv.run("run", "files")  # naming the source requests every table, so one that is not due loads too
+    tables = json.loads(r.stdout)["tables"] if r.stdout else {}
+    assert tables, f"no run happened: {r.stderr}"
+    return r.returncode, tables
 
 
 def types(rv, table):
@@ -84,6 +83,9 @@ def test_columns_names_types_for_csv_and_excel(files):
     assert code == 0, answer
     for table in ("customers_csv", "customers_xlsx"):
         assert types(files, table) == [("customer_no", "integer"), ("name", "text"), ("balance", "numeric")]
+        # DuckDB's decimal keeps its precision and scale
+        assert files.target(f"select format_type(atttypid, atttypmod) from pg_attribute where attname = 'balance'"
+                            f" and attrelid = 'raw_files.{table}'::regclass") == [("numeric(10,2)",)]
         assert files.target(f"select customer_no, balance from raw_files.{table} order by 1") == [
             (1, Decimal("2.5")), (2, None), (3, Decimal("10"))]
 
@@ -193,8 +195,7 @@ path = "{files.dir / 'files'}"
 """})
     assert files.run("apply", "sources").returncode == 0
     # the run's process inherits the limit: a file held open per match would exceed it
-    r = subprocess.run(["sh", "-c", 'ulimit -n 128 && exec "$0" run', ROWVIOLI], cwd=files.dir,
-                       env=files._env(None), capture_output=True, text=True, timeout=120)
+    r = files.run("run", timeout=120, open_files=128)
     assert json.loads(r.stdout)["tables"]["raw_files.orders"] == {"status": "ok", "inserted": 1000, "updated": 0,
                                                                   "deleted": 0}, r.stderr
 
@@ -313,3 +314,24 @@ def test_a_csv_with_only_a_header_is_mirrored_as_an_empty_table(files):
     code, answer = load(files, '"empty.csv" = { key = ["id"], sep = ";" }\n')
     assert code == 0, answer
     assert files.target("select count(*) from raw_files.empty") == [(0,)]
+
+
+def test_a_missing_files_reason_shows_the_directory(files):
+    code, answer = load(files, '"gone.csv" = {}\n')
+    assert code == 1
+    assert [a["reason"] for a in answer.values()] == [f"gone.csv: no such file in {files.dir / 'files'}"]
+
+
+def test_the_password_of_a_url_in_the_path_is_hidden_but_the_rest_of_it_is_not(files):
+    files.definition({"files.toml": """
+[files]
+type = "file"
+max_age = "1h"
+[files.connection]
+path = "https://anna:hunter2pw@host/dir"
+[files.tables]
+"gone.csv" = {}
+"""})
+    assert files.run("apply", "sources").returncode == 0
+    r = files.run("run")
+    assert "no such file in https://anna:***@host/dir" in r.stdout and "hunter2pw" not in r.stdout

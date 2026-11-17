@@ -10,6 +10,8 @@ from urllib.parse import urlsplit
 import httpx
 import pyarrow as pa
 
+from ..contract import known_options
+
 TYPES = {"text": pa.string(), "int8": pa.int64(), "float8": pa.float64(), "bool": pa.bool_(), "date": pa.date32(),
          "timestamp": pa.timestamp("us"), "timestamptz": pa.timestamp("us", tz="UTC")}
 
@@ -30,6 +32,7 @@ PARSE = {"date": date.fromisoformat, "timestamp": _timestamp, "timestamptz": _ti
 
 
 def read(connection, table, options):
+    known_options("rest", table, options, ("path", "columns", "page", "rows"))
     for option in ("path", "columns"):
         if option not in options:
             raise Exception(f"{table}: the option {option} is missing")

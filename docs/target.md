@@ -18,6 +18,8 @@ raw_erp.customers__history view over the change log: every version of a row
 
 Staging table and diff are TEMP tables on the control connection. They have no fixed name in the target and disappear with the connection.
 
+The schema may be one that other things read already. Beside every mirror with a key stand `<name>__log` and `<name>__history` in the same schema, and `log = false` leaves them out. A table that is there under the name of a mirror is taken over when its columns, their types and its primary key are those of the source: the first run deletes the rows the source does not have, and the change log begins with the rows that are left. Otherwise the run fails and names the difference.
+
 Bookkeeping in the schema `_rowvioli`:
 
 ```
@@ -33,16 +35,16 @@ meta      schema_version, max_running, definition (hash of the definition last a
 - `sources` and the first line of `tables` are the definition. Only `apply` writes them. A table row carries the settings a table may override, with the source's filled in.
 - The second line of `tables` is what the workers experienced, plus `requested_at`.
 - `runs` is a log: one row per run. Nothing reads it to decide anything.
-- `status` is what people look at. It shows a table as `new`, `loading`, `ok` or `failed`, with the `reason` of a failure in a column of its own. A reason is one line: the driver's own message without its wrapper (`IO:`, `NOT_FOUND:`), traceback or the paths of a traceback. When the driver gave none, it says so and names the step. A table whose run died shows as `failed` with the reason `worker lost`.
+- `status` is what people look at. It shows a table as `new`, `loading`, `ok` or `failed`, with the `reason` of a failure in a column of its own. A reason is one line: the driver's own message without its wrapper (`IO:`, `NOT_FOUND:`), traceback or the paths of a traceback. When the driver gave none, it says so and names the step. A table whose run died shows as `failed` with the reason `worker lost`: the view finds that nobody holds the table lock any more and no reason was written. The run that next claims the table sets the dead run's row in `runs` to `failed`, reason `worker lost`, with a `finished_at`.
 - Progress is computed there too, for example `loading, 485,000 of about 1,000,000 rows`: while a table is loading, `rows_written` shows its rows so far and `rows_last_run` the rows read by its last successful run. The holder of the table lock is in `pg_locks`, its rows so far are in Postgres' own `pg_stat_progress_copy`. A worker writes nothing for it. `rows_written` is empty for a role that is neither the workers' role nor a member of `pg_read_all_stats`.
 
 ## History
 
-Today's state is read from the mirror. What changed when is in the change log, and every row of it says when: `_loaded_at` is the moment its run published, the same `now()` that goes into `loaded_at`. Next to the log stands the view `<target table>__history`, which reads nothing but the log and gives every version of a row with the time it was valid.
+Today's state is read from the mirror. What changed when is in the change log, and every row of it says when: `_loaded_at` is the moment its run published, the same `now()` that goes into `loaded_at`. A run that finds nothing writes no log row, so the newest `_loaded_at` of a log is the last change, not the last load; the last load is the `age` in `rowvioli status`. Next to the log stands the view `<target table>__history`, which reads nothing but the log and gives every version of a row with the time it was valid.
 
 **A change log that exists is complete.** Replaying it from its first row gives the mirror, always. A log that is created begins with every row of the mirror as `I` (for a table on its first run that is the diff; for a mirror that was there before, for example after `log = false` was taken away, it replaces the diff, while the run still reports its diff counts). A run that would leave the log behind its mirror fails instead ([Checks before publishing](loading.md#checks-before-publishing)). So the history is either complete from its first moment or there is none.
 
-Example: customer 7 moves and customer 9 is deleted between two runs. The time is the time of the run, which is the time consumers first saw the change. It is never a time of the source.
+Example: customer 7 moves and customer 9 is deleted between two runs. The time is the time of the run, which is the time consumers first saw the change. It is never a time of the source. Two changes of a row between two runs are one version, the last. A row that is deleted and inserted again between two runs is one `U`, or no change when it comes back as it was.
 
 ```
 mirror  raw_erp.customers
@@ -74,6 +76,15 @@ SELECT * FROM raw_erp.customers__history
 ```
 
 This returns customers 7 (Bonn) and 9 (Essen). A moment before the first load returns nothing: there was no mirror yet. The view exists whenever the change log does, and a column the source adds later appears in it, empty for the versions before. Both exist only for a table with a key and without `log = false`.
+
+What changed in a period is a condition on the change log. An update shows the new values, a delete the last ones:
+
+```sql
+SELECT _op, customer_no, city FROM raw_erp.customers__log
+ WHERE _loaded_at > '2026-11-13 07:59:00+00' AND _loaded_at <= '2026-11-13 07:59:10+00' ORDER BY customer_no;
+```
+
+This returns `U` for customer 7 (Cologne) and `D` for customer 9 (Essen).
 
 On a long history the view is fast for one key and slow for one moment, measured on a log of 499 000 rows ([section 13](measurements.md#13-the-history-view-on-a-long-change-log)). A person who asks for the versions of one key may create an index, which the program never does: `CREATE INDEX ON raw_erp.customers__log (customer_no, _loaded_at)` took such a query from 8.9 to 0.1 ms. For one moment the view takes the time of the whole view (305 ms there) and no index helps; the same moment asked of the log directly took 117 ms, 2.6 times less:
 
@@ -154,7 +165,7 @@ COMMIT;  -- releases only the counting lock from step 1, the table lock stays
 
 - **Step 1 prevents overtaking.** Without it, two workers could read "three of four" at the same time and both take a table.
 - **The count cannot drift.** If a worker dies, its lock disappears from `pg_locks` and no longer counts. Nobody has to book anything back.
-- **The same view detects dead runs.** A run recorded as `running` whose table lock is missing is dead. Nobody has to act on that: the table becomes due again when its pause is over.
+- **The same view detects dead runs.** A run recorded as `running` whose table lock is missing is dead. Nobody has to act on that: the table becomes due again when its pause is over, and the run that claims it then closes the dead run's row in `runs` as `failed` with the reason `worker lost`.
 - **Order when finishing.** A run first records its result and then releases the lock. The other way round, a finished run would briefly look like a dead one. The one exception is a run ended after `max_seconds`: the worker kills it first and writes the reason afterwards, so it briefly shows as `worker lost`.
 - **Number 0 is reserved.** It marks the counting lock. Sources get numbers from 1.
 

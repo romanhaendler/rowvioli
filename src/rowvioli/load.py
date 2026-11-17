@@ -49,6 +49,9 @@ def claim(conn, worker, source, table):
         sql(conn, "SELECT pg_advisory_lock($1::int, $2::int)", [source_id, id])  # the table lock outlives COMMIT
         sql(conn, "UPDATE _rowvioli.tables SET attempted_at = now(), attempts = attempts + 1, reason = NULL"
                   " WHERE id = $1", [id])
+        # the lock was free, so a run of this table that still says `running` is dead (the status shows `worker lost`)
+        sql(conn, """UPDATE _rowvioli.runs SET status = 'failed', finished_at = clock_timestamp(), reason = 'worker lost'
+                      WHERE "table" = $1 AND status = 'running'""", [id])
         [(run,)] = sql(conn, """INSERT INTO _rowvioli.runs ("table", worker, definition)
                                 SELECT $1, $2, definition FROM _rowvioli.meta RETURNING run""", [id, worker])
         with conn.cursor() as c:
@@ -74,6 +77,7 @@ def load(conn, t):
     staged = sql(conn, COLUMNS, ["pg_temp._stage"])
     mirror = sql(conn, COLUMNS, [t["mirror"]])  # empty before the first run
     log_columns = sql(conn, COLUMNS, [t["log_table"]])
+    staged = fit(conn, t, staged, mirror, log_columns)
     check(conn, t, staged, mirror, log_columns)
     t["step"] = "comparing with the mirror"
     counts = diff(conn, t, staged, mirror) if t["key"] else None
@@ -119,6 +123,33 @@ def check(conn, t, staged, mirror, log_columns):
             raise Exception(f"a key combination of ({names}) occurs twice")
 
 
+def fit(conn, t, staged, mirror, log_columns):
+    """A staged column whose type differs from the target's only in its precision or scale (numeric and
+    numeric(10,2)) takes the mirror's, so that the comparison happens in the target type, when every value passes
+    unchanged into the mirror and the change log (decision 49). Returns the staged columns."""
+    into = []
+    for table, columns in ((t["name"], mirror), (t["name"] + "__log", log_columns)):
+        have = dict(columns)
+        for name, type in staged:
+            if have.get(name, type) == type or not sql(conn, "SELECT $1::regtype = $2::regtype",
+                                                       [type, have[name]])[0][0]:
+                continue  # the same, new, or a real change of type, which check() catches
+            c = quote(name)
+            try:
+                bad = sql(conn, f"SELECT {c}::text FROM _stage WHERE {c}::{have[name]} IS DISTINCT FROM {c} LIMIT 1")
+            except Exception as e:  # a value too large for the precision raises instead
+                bad = [[reason_line([], e, "checking the data")]]
+            if bad:
+                raise Exception(f"column {name} holds a value that its type {have[name]} in {table} does not hold"
+                                f" ({bad[0][0]})")
+            if table == t["name"]:
+                into.append(f"ALTER {c} TYPE {have[name]}")
+    if into:
+        sql(conn, "ALTER TABLE _stage " + ", ".join(into))
+        return sql(conn, COLUMNS, ["pg_temp._stage"])
+    return staged
+
+
 def check_delete_share(conn, t, rows_read, counts):
     """After step 5: a broken source must not empty the mirror in a perfectly consistent way (decision 18).
     Without a key the shrinkage counts."""
@@ -136,7 +167,8 @@ def stage(conn, t):
         connection = seal.unseal(os.environ["ROWVIOLI_KEY_FILE"], t["key_id"], t["source"], t["connection"])
     except Exception as e:
         raise Exception(f"the connection of source {t['source']} cannot be decrypted on worker {t['worker']}: {e}")
-    t["values"] = connection_values(connection)
+    # a directory is no secret, and a reason without it is not readable (decision 47)
+    t["values"] = connection_values(connection, ("path",) if t["type"] == "file" else ())
     options = dict(t["options"])
     if isinstance(c := options.get("columns"), list) and all(isinstance(p, list) and len(p) == 2 for p in c):
         options["columns"] = dict(c)  # a dict is stored as pairs (definition.ordered), any other value as written
@@ -147,11 +179,18 @@ def stage(conn, t):
         raise Exception(f"table {t['source_table']} has no column {', '.join(gone)}; it has: "
                         + ", ".join(batches.schema.names))
     with conn.cursor() as c:
-        rows_read = c.adbc_ingest("_stage", batches, mode="create", temporary=True)
+        # the driver creates every decimal as numeric; Arrow's decimal128 keeps its precision and scale (decision 49)
+        # a reader without batches: Arrow cannot make an empty array of a list of an extension type
+        c.adbc_ingest("_stage", pa.RecordBatchReader.from_batches(batches.schema, []), mode="create", temporary=True)
+        exact = [f"ALTER {quote(f.name)} TYPE numeric({f.type.precision}, {f.type.scale})"
+                 for f in batches.schema if pa.types.is_decimal128(f.type)]
+        if exact:
+            sql(conn, "ALTER TABLE _stage " + ", ".join(exact))
+        rows_read = c.adbc_ingest("_stage", batches, mode="append", temporary=True)
     # zero rows protect a mirror that has rows; a first load or an empty mirror publishes them
-    if rows_read == 0 and sql(conn, "SELECT to_regclass($1)", [t["mirror"]])[0][0] and \
+    if rows_read == 0 and t["max_delete_share"] < 1 and sql(conn, "SELECT to_regclass($1)", [t["mirror"]])[0][0] and \
             sql(conn, f"SELECT 1 FROM {t['mirror']} LIMIT 1"):
-        raise Exception("the source delivered zero rows")
+        raise Exception("the source delivered zero rows; max_delete_share = 1.0 allows an empty table")
     # json has no equality, so the comparison could not run; the driver writes Arrow's json only as json
     jsonb = {"json": "jsonb", "json[]": "jsonb[]"}
     to_jsonb = [f"ALTER {quote(n)} TYPE {jsonb[type]} USING {quote(n)}::{jsonb[type]}"
@@ -275,11 +314,11 @@ def widen(conn, table, staged, existing):
 ODBC_PASSWORD = re.compile(r"(?:^|;)\s*(?:PWD|Password)\s*=\s*(\{(?:[^}]|\}\})*\}|[^;]*)", re.I)
 
 
-def connection_values(value):
+def connection_values(value, readable=()):
     """Every text of a connection, and the password of a URL or an ODBC string in it as written and decoded, since a
     driver may quote either (docs/connections.md "What happens to the decrypted connection")."""
     if isinstance(value, dict):
-        return [s for v in value.values() for s in connection_values(v)]
+        return [s for k, v in value.items() for s in connection_values(v) if k not in readable or s != v]
     if isinstance(value, list):
         return [s for v in value for s in connection_values(v)]
     if not isinstance(value, str):

@@ -60,7 +60,7 @@ KillMode=mixed        # SIGTERM to the worker only, so its run processes are not
   2026-11-12 14:09:12 stopping, 1 run finishes
   ```
 
-  A failure carries the reason of the status view; `worker lost` and `ended after max_seconds` are failures too. `the target is unreachable` is written once per outage. Run processes keep their stderr discarded, so no driver message from a source can carry a connection value into a log, and what a library writes to their stdout is dropped too. The line for an unreachable target keeps the driver's message, with the password of `ROWVIOLI_TARGET_URL` replaced by `***`.
+  A failure carries the reason of the status view; `worker lost` and `ended after max_seconds` are failures too. `the target is unreachable` is written once per outage. Run processes keep their stderr discarded, so no driver message from a source can carry a connection value into a log, and what a library writes to their stdout is dropped too. The line for an unreachable target keeps the driver's message as one line, like a reason, with the password of `ROWVIOLI_TARGET_URL` replaced by `***`.
 - **`rowvioli status` shows what is**, without `psql`. It prints the status view as a table; the `due` column says `now` or `in 20m`, so `ok` with an age above the maximum age is a table that is due and that nobody has taken yet (no worker runs). It computes nothing the view does not.
 - A worker has no checkout and no file that describes a source. A new source needs no change on any worker.
 - Source passwords are not on the worker. They are inside the encrypted connections in the target and are decrypted when a run starts.
@@ -83,7 +83,7 @@ Rights in the target:
 | The pipeline that runs `apply` | to write the definition |
 | The workers | to read the definition, to write what they experienced, to create and write the mirrors |
 | Whoever may request a load, for example an application of your own | to read the status view, to write `requested_at` and nothing else; to see progress, membership in `pg_read_all_stats` |
-| Consumers | to read the mirrors and, for history, the views `<target table>__history`. A view is a plain view and runs with its owner's rights, so the right to read it is enough; the change log needs none. Default privileges on tables cover views. |
+| Consumers | to read the mirrors and, for history, the views `<target table>__history`. A view is a plain view and runs with its owner's rights, so the right to read it is enough; the change log needs none. Default privileges on tables cover views. To tell a quiet source from a worker that is gone, `USAGE` on `_rowvioli` and `SELECT` on `_rowvioli.status`: that gives the view and nothing else in the schema (`tables`, `runs` and the connections stay closed). |
 
 The same as SQL, for the roles `pipeline`, `worker`, `requester` and `consumer` and a target database `dwh`. It was tried out with exactly these statements:
 
@@ -111,6 +111,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE worker GRANT USAGE ON SCHEMAS TO consumer;
 ALTER DEFAULT PRIVILEGES FOR ROLE worker GRANT SELECT ON TABLES TO consumer;
 GRANT USAGE ON SCHEMA raw_erp TO consumer;                  -- for a schema that exists already
 GRANT SELECT ON ALL TABLES IN SCHEMA raw_erp TO consumer;   -- and its tables
+GRANT USAGE ON SCHEMA _rowvioli TO consumer;                -- optional: to read the status
+GRANT SELECT ON _rowvioli.status TO consumer;
 ```
 
 A worker needs `CREATE` on the database only to create the schemas of the target tables. With the schemas created beforehand, `GRANT ALL ON SCHEMA raw_erp TO worker` replaces it. Default privileges apply to objects the role named in `FOR ROLE` creates, so name the worker's role there.

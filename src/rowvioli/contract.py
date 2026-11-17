@@ -14,3 +14,12 @@ def connector(type, where=""):
         return next(iter(found)).load()
     except (ImportError, OSError) as e:  # a shipped connector without its extra, or without the library it loads
         raise SystemExit(f'connector "{type}" cannot be loaded{where}: {e}')
+
+
+def known_options(type, table, options, known=()):
+    """What a shipped connector does with an option it does not read: fails the run, naming the table, the
+    option and the options it knows (decision 47). A connector of one's own decides for itself."""
+    for name in options:
+        if name not in known:
+            raise Exception(f"{table}: the option {name} is not one of the {type} connector's; it knows "
+                            + (", ".join(known) or "no option"))

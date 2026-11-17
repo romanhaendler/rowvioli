@@ -71,6 +71,14 @@ due_at =  at once                       if never attempted
 - **A changed `max_age`, `at` or `timezone` takes effect at once**, because nothing derived is stored.
 - **All times come from the clock of the target.** Clocks of workers and callers do not matter.
 
+A table that loads only at night still has the `max_age` of its source, and is due when that is over as well. Give the table a long one of its own:
+
+```toml
+"public.orders" = { key = ["order_no"], at = ["02:00"], timezone = "Europe/Berlin", max_age = "7d" }
+```
+
+`rowvioli status` shows it as due at the next 02:00, for example `in 4h 27m`, whatever its age.
+
 ### Loading now
 
 For a load that should not wait, for example after the nightly batch of the ERP system has finished or after the cause of a failure has been fixed:
@@ -154,14 +162,14 @@ Data passes through the program only in the lines `read` and `copy_into_staging`
 
 ### Checks before publishing
 
-| Check | Aborts if |
-|---|---|
-| Schema | a column is missing or has changed its type, as far as the driver tells types apart (see [Types](connectors.md#types)). A new column is added to the target. |
-| Key | a key combination occurs twice in the staging table, a key column is null, or the key in the definition differs from the primary key of the mirror. |
-| Safety limits | the source delivers zero rows while the mirror has rows, or more than `max_delete_share` of the rows would disappear. |
-| Change log | a change log exists and this run would not write to it (`log = false`, or the key was taken away), or it exists and its mirror does not. |
+| Check | Aborts if | Runs |
+|---|---|---|
+| Schema | a column is missing or has changed its type, as far as the driver tells types apart (see [Types](connectors.md#types)), or holds a value its type in the target does not hold. A new column is added to the target. | step 4, on the filled staging table |
+| Key | a key column is not in the source, a key combination occurs twice in the staging table, a key column is null, or the key in the definition differs from the primary key of the mirror. | a missing key column in step 3, as soon as the connector has delivered its columns, before the staging table exists; the rest in step 4 |
+| Safety limits | the source delivers zero rows while the mirror has rows and `max_delete_share` is below 1, or more than `max_delete_share` of the rows would disappear. | zero rows at the end of step 3; the share after step 5 |
+| Change log | a change log exists and this run would not write to it (`log = false`, or the key was taken away), or it exists and its mirror does not. | step 4 |
 
-The share of deletions is known only from the diff, so it is checked after step 5. The safety limits keep a broken source from emptying the mirror in a perfectly consistent way. Zero rows protects a mirror that has rows. A table on its first load, or a mirror that is empty, publishes zero rows: a new empty table in the source is mirrored as an empty table.
+The share of deletions is known only from the diff, so it is checked after step 5. The safety limits keep a broken source from emptying the mirror in a perfectly consistent way. Zero rows protects a mirror that has rows. A table on its first load, or a mirror that is empty, publishes zero rows: a new empty table in the source is mirrored as an empty table. `max_delete_share = 1.0` on a table (or its source) says that every row may go, so an emptied source then gives an empty mirror (with a key, a `D` row in the change log for each row; without one, an empty table, since a table without a key is replaced as a whole and its mirror is empty when it has no rows). The reason for zero rows names this way out (decision 48).
 
 A table with a key cannot have a column `_op`, and with a change log neither `_run`, `_loaded_at`, `_valid_from` nor `_valid_to`: the diff, the change log and the history view use these names.
 
@@ -205,6 +213,22 @@ DROP TABLE raw_shop.items;
 ```
 
 A table without a change log needs only the second statement. To keep the old rows, rename the old tables as above before the next run.
+
+**A numeric column needs more digits than the mirror holds**, for example after the source went from `numeric(12,2)` to `numeric(12,4)`. The mirror keeps its type and loads while the values fit; the first that does not fails the run:
+
+```
+raw_shop.items failed after 0.1s: column amount holds a value that its type numeric(12,2) in raw_shop.items does not hold (1.2345)
+```
+
+Widen the column in the mirror and its change log. The history view reads the log, so it goes first, and the next run creates it again:
+
+```sql
+DROP VIEW raw_shop.items__history;
+ALTER TABLE raw_shop.items ALTER amount TYPE numeric(12,4);
+ALTER TABLE raw_shop.items__log ALTER amount TYPE numeric(12,4);
+```
+
+A view of your own on the mirror blocks the `ALTER` as well; drop it before and create it again after. The same statements give a mirror made by 0.1.0 the source's precision and scale; it loads without them.
 
 ## Workers
 
