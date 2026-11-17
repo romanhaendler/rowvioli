@@ -27,7 +27,7 @@ Unchanged from the first round:
 
 - **Machine failure.** Nobody closes the connection then. With a container's network cut, Postgres freed the lock after 62 s through the keepalive the session asks for (`target.SESSION`); without it the lock was still held after 240 s. A real machine or a real network was not tried.
 - **`client_connection_check_interval`** was measured on Linux. Postgres supports it only on some operating systems.
-- **The connectors themselves**: arrow-odbc for MSSQL and Informix, DuckDB for files. `data-extractor` has experience with ODBC. The `postgres`, `file`, `odbc` and `rest` connectors are tested; `odbc` only against PostgreSQL through psqlODBC, SQL Server and Informix not at all.
+- **The connectors themselves**: arrow-odbc for MSSQL and Informix, DuckDB for files. The `postgres`, `file`, `odbc` and `rest` connectors are tested; `odbc` only against PostgreSQL through psqlODBC, SQL Server and Informix not at all.
 - **Wide tables with many rows.** 900 columns were measured with 100,000 rows only.
 - **The history view on a log some hundred times larger** than the 48 MB measured, or one that does not fit in memory (section 13).
 - **The COPY from a client over a real network.** Experiment 8 filled the staging table from a client on the same machine.
@@ -35,7 +35,7 @@ Unchanged from the first round:
 ## Known limits
 
 - **Very large tables are read completely on every run.** Planned is one switch per table that reads only rows from a timestamp on and in exchange detects no deletions. It does not change the flow.
-- **At 10⁷ rows the path is slower than `hpdl`.** Staging, diff and publishing add up to more than a minute before any reading.
+- **At 10⁷ rows a run takes over a minute.** Staging, diff and publishing add up to more than a minute before any reading.
 - **No multi-core comparison** of a single table, because the staging table is a TEMP table (decision 6).
 - **Change logs only ever grow.** They are on by default and nothing prunes them.
 - **A load after an event in the source** needs a request from outside.

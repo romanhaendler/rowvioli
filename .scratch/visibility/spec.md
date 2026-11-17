@@ -155,7 +155,7 @@ Disk space: the harness's rule stands. Containers and volumes are removed after 
 
 ## Further Notes
 
-- The owner asked for this on 2026-11-12 after playing with a demo set-up next to the checkout (`../rowvioli-demo`, not part of this repo): "what I am definitely missing is logging", and asked how to look at information and how `work` could communicate that something is being processed.
+- The owner asked for this on 2026-11-12: "what I am definitely missing is logging", and asked how to look at information and how `work` could communicate that something is being processed.
 - Decided here by assumption, because the owner did not answer the two open questions of the brainstorm: plain text instead of JSON lines, and the waiting line is included although it is the only part that needs an additional query.
 - Also by assumption: the lines go to stderr (the brainstorm said stdout). The reason is `run`, whose stdout is an answer that others parse; with stderr, `run` and `work` follow one rule.
 - Also by assumption: `status` is built now. The brainstorm recommended waiting until `psql` gets tiresome; the owner asked for ways to look at information to be built in.
