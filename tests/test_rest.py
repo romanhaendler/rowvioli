@@ -7,6 +7,8 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from rowvioli.connectors import rest
+
 TOKEN = "Marke-0815-geheim"
 READINGS = [
     [{"station": "a", "time": "2026-01-01T10:00:00Z", "temp": 1.5, "day": "2026-01-01", "ok": True, "n": 1, "x": 9, "at": None}],
@@ -198,6 +200,12 @@ def test_a_token_with_a_trailing_newline_shows_nowhere(api):
     seen = "".join(r.stdout + r.stderr for r in out) + str(api.target(
         "select reason from _rowvioli.tables union all select reason from _rowvioli.runs"))
     assert "Geheim-0815-xyz" not in seen
+
+
+def test_a_token_outside_ascii_fails_without_showing_a_character_of_it():
+    with pytest.raises(Exception) as e:
+        list(rest.read({"url": "http://127.0.0.1:1", "token": "tökén"}, "a", {"path": "/x", "columns": {}}))
+    assert str(e.value) == "a: the token holds a character outside ASCII"
 
 
 def test_a_type_mismatch_names_table_column_and_type_but_not_the_value(api):

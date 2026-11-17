@@ -106,7 +106,8 @@ def test_disabled_tables_are_not_in_the_status(rv, table):
 
 
 def due(rv, id):
-    return f"{row(rv, id, "due_at AT TIME ZONE 'UTC'")[0]:%Y-%m-%d %H:%M}"
+    due_at = row(rv, id, "due_at AT TIME ZONE 'UTC'")[0]
+    return f"{due_at:%Y-%m-%d %H:%M}"
 
 
 def test_loaded_before_a_load_time_is_due_at_that_load_time(rv, table):

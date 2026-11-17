@@ -1,4 +1,4 @@
-"""Delivers the option `rows` as a table with one column `n`. With the option `fail` it raises with the connection,
+"""Delivers the option `rows` (or `columns`, as it arrives) as a table with one column `n`. With the option `fail` it raises with the connection,
 its values and the password of its URL (and of an ODBC `string`) in the message: `at_once` when called, `deep` from
 a nested call while the batches are read. With the option `print` it writes the connection to stderr, as a chatty
 driver might, and a progress bar to stdout, as DuckDB does."""
@@ -17,6 +17,8 @@ def read(connection, table, options):
         leak(connection)
     if options.get("fail") == "empty":  # an exception whose message is empty
         raise KeyError
+    if "columns" in options:  # delivered as rows, to show how the option arrived
+        options = {**options, "rows": options["columns"]}
     if options.get("nothing"):  # not even a batch with the columns
         return iter(())
     return batches(connection, options)

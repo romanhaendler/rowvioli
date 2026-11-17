@@ -411,7 +411,7 @@ meta      schema_version, max_running, definition (hash of the definition last a
 - `sources` and the first line of `tables` are the definition. Only `apply` writes them. A table row carries the settings a table may override, with the source's filled in.
 - The second line of `tables` is what the workers experienced, plus `requested_at`.
 - `runs` is a log: one row per run. Nothing reads it to decide anything.
-- `status` is what people look at. It shows a table as `new`, `loading`, `ok` or `failed`, with the `reason` of a failure in a column of its own. A reason is one line: the driver's own message without its wrapper (`IO:`, `NOT_FOUND:`), traceback or file paths. When the driver gave none, it says so and names the step. A table whose run died shows as `failed` with the reason `worker lost`.
+- `status` is what people look at. It shows a table as `new`, `loading`, `ok` or `failed`, with the `reason` of a failure in a column of its own. A reason is one line: the driver's own message without its wrapper (`IO:`, `NOT_FOUND:`), traceback or the paths of a traceback. When the driver gave none, it says so and names the step. A table whose run died shows as `failed` with the reason `worker lost`.
 - Progress is computed there too, for example `loading, 485,000 of about 1,000,000 rows`: while a table is loading, `rows_written` shows its rows so far and `rows_last_run` the rows read by its last successful run. The holder of the table lock is in `pg_locks`, its rows so far are in Postgres' own `pg_stat_progress_copy`. A worker writes nothing for it. `rows_written` is empty for a role that is neither the workers' role nor a member of `pg_read_all_stats`.
 
 Today's state is read from the mirror. What changed when is in the change log, and every row of it says when: `_loaded_at` is the moment its run published, the same `now()` that goes into `loaded_at`. Next to the log stands the view `<target table>__history`, which reads nothing but the log and gives every version of a row with the time it was valid.
@@ -697,7 +697,7 @@ When `run` without a name loads nothing because tables wait out the pause after 
 2026-11-15 14:44:49 1 table waits out its pause after a failure, the first until 14:45:49; `rowvioli run <source>` loads them now
 ```
 
-Every command that needs the target finds it in `ROWVIOLI_TARGET_URL`. A worker finds its private key through `ROWVIOLI_KEY_FILE`. `run`, `work` and `status` check what they need at start and name every one that is missing, for example `ROWVIOLI_TARGET_URL and ROWVIOLI_KEY_FILE are not set`.
+Every command that needs the target finds it in `ROWVIOLI_TARGET_URL`. A password with `@`, `/` or `:` must be percent-encoded there (`@` is `%40`), because this address is written by hand, unlike a source's connection, which `apply` encodes. A worker finds its private key through `ROWVIOLI_KEY_FILE`. `run`, `work` and `status` check what they need at start and name every one that is missing, for example `ROWVIOLI_TARGET_URL and ROWVIOLI_KEY_FILE are not set`.
 
 `apply` in detail:
 
@@ -933,14 +933,20 @@ import httpx
 import pyarrow as pa
 
 SCHEMA = pa.schema([("station", pa.string()),
-                    ("time", pa.timestamp("s", tz="UTC")),
+                    ("time", pa.timestamp("s", tz="UTC")),  # the API sends seconds since 1970
                     ("temp", pa.float64())])
 
 def read(connection, table, options):
-    auth, page = {"Authorization": "Bearer " + connection["token"]}, 1
-    while rows := httpx.get(connection["url"] + options["path"], params={"page": page}, headers=auth).json():
-        yield pa.RecordBatch.from_pylist(rows, schema=SCHEMA)
-        page += 1
+    if not options["path"].startswith("/"):  # the token goes to the connection's host only
+        raise Exception(f"{table}: the option path must start with /")
+    with httpx.Client(base_url=connection["url"], timeout=None,  # max_seconds bounds the run
+                      headers={"Authorization": "Bearer " + connection["token"]}) as client:
+        page = 1
+        while rows := client.get(options["path"], params={"page": page}).json():
+            yield pa.RecordBatch.from_pylist(rows, schema=SCHEMA)
+            page += 1
+    if page == 1:  # an empty table still needs its columns
+        yield pa.RecordBatch.from_pylist([], schema=SCHEMA)
 ```
 
 ```toml

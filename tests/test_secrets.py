@@ -36,6 +36,12 @@ def test_a_foreign_connector_installed_through_the_entry_point_loads_a_table(erp
     assert rows(erp.target, "select * from raw_lab.numbers") == [(7,), (8,)]
 
 
+def test_a_foreign_connector_gets_a_list_named_columns_as_written(erp):
+    lab(erp, 'columns = ["ab", "cd"]')
+    ok(erp, "lab")
+    assert rows(erp.target, "select * from raw_lab.numbers") == [("ab",), ("cd",)]
+
+
 @pytest.mark.parametrize("fail", ["at_once", "deep"])
 def test_a_connector_failing_with_connection_values_in_its_message_leaks_none_of_them(erp, fail):
     out = [lab(erp, f'fail = "{fail}"'), erp.run("run", "lab")]

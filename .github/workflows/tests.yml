@@ -1,6 +1,9 @@
 name: tests
 
-on: push
+on:
+  push:
+  # release.yml runs them before it publishes
+  workflow_call:
 
 jobs:
   tests:

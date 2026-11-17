@@ -5,12 +5,12 @@ from test_secrets import lab
 from test_run import apply, definition, erp, ok, run  # noqa: F401 (erp is a fixture)
 
 
-def test_a_numeric_the_target_cannot_hold_fails_with_the_exception_line_and_no_path(erp):
+def test_a_numeric_the_target_cannot_hold_fails_with_the_cause_and_no_path(erp):
     erp.source("create table nn (id int primary key, v numeric)")
     erp.source("insert into nn values (1, 'NaN')")
     apply(erp, definition(erp, '"public.nn" = { key = ["id"] }\n'))
     why = failed(erp)
-    assert "\n" not in why and "Traceback" not in why and ".py" not in why, why
+    assert "not a valid decimal" in why and "\n" not in why and "Traceback" not in why and ".py" not in why, why
 
 
 def test_a_failed_rest_path_stays_in_the_reason(api):

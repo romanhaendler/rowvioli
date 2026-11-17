@@ -146,7 +146,7 @@ def typos(block, where):
     known = SOURCE_SETTINGS.keys() | TABLE_ONLY.keys()
     for k in block.keys() - known:
         for setting in known:
-            if len(k) >= 4 and k.rstrip("s") != setting.rstrip("s") and edits(k, setting) <= (2 if len(setting) >= 6 else 1):
+            if len(k) >= 4 and edits(k, setting) <= (2 if len(setting) >= 6 else 1):
                 raise SystemExit(f"{where}: {k} is not a setting; did you mean {setting}? "
                                  "(other keys go to the connector as options)")
 

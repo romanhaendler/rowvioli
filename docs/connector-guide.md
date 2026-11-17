@@ -117,8 +117,8 @@ Until rowvioli is on PyPI, put the path of a checkout in place of `rowvioli` in 
 
 Now make it yours:
 
-- **`read(connection, table, options)`** gets the decrypted `[demo.connection]` block as a dict, the table name as written in the definition, and every other key of the table as an option. Open the connection in `read` and return a generator of Arrow batches, as above. A wrong password then fails at once, before the first batch.
-- **Chunks and a fixed schema.** Yield batches of a bounded size, never the whole table. Name the schema (`pa.schema([...])`) from what the source reports for the table, never from the first rows, so types do not flip between runs.
+- **`read(connection, table, options)`** gets the decrypted `[demo.connection]` block as a dict, the table name as written in the definition, and every other key of the table as an option. An option's name must not be within a letter or two of one of rowvioli's settings: `apply` refuses it as a typo. Open the connection in `read` and return a generator of Arrow batches, as above. A wrong password then fails at once, before the first batch.
+- **Chunks and a fixed schema.** Yield batches of a bounded size, never the whole table. Name the schema (`pa.schema([...])`) from what the source reports for the table, never from the first rows, so types do not flip between runs. Yield at least one batch, an empty one with the schema when the source has no rows: a connector that yields nothing fails the run.
 - **`tables(connection)`**, optional, makes `rowvioli list` work. It returns a dict from table name to its key columns, or `None` for a table without a key: `{"dbo.Customers": ["CustomerNo"], "dbo.Notes": None}`. The shipped `odbc` connector (`src/rowvioli/connectors/odbc.py`) is a complete example of both functions.
 
 ## Where the licensed software lives

@@ -137,7 +137,9 @@ def stage(conn, t):
     except Exception as e:
         raise Exception(f"the connection of source {t['source']} cannot be decrypted on worker {t['worker']}: {e}")
     t["values"] = connection_values(connection)
-    options = {k: dict(v) if k == "columns" else v for k, v in t["options"].items()}  # stored as pairs, read as a dict
+    options = dict(t["options"])
+    if isinstance(c := options.get("columns"), list) and all(isinstance(p, list) and len(p) == 2 for p in c):
+        options["columns"] = dict(c)  # a dict is stored as pairs (definition.ordered), any other value as written
     batches = stream(connector.read(connection, t["source_table"], options))
     if batches is None:
         raise Exception("the connector delivered nothing, not even the columns")
@@ -294,18 +296,25 @@ def target_secrets():
     return [password, unquote(password)] if password else []
 
 
-# what ADBC and nanoarrow put before the server's message
-WRAPPER = re.compile(r"^(?:[A-Z_]+: )?(?:\[libpq\] )?(?:nanoarrow call failed: )?(?:Failed to (?:prepare|execute) query"
-                     r"(?: '[^']*')?: )?(?:ERROR:\s+)?")
+# what ADBC and nanoarrow put before the server's message: the call that failed with its errno and Arrow's status,
+# the statement (its SQL may hold quotes and lines)
+WRAPPER = re.compile(r"^(?:[A-Z_]+: )?(?:\[libpq\] )?(?:nanoarrow call failed: )?"
+                     r"(?:[A-Za-z]+\(.*?\) = \(\d+\) [^.]*\. [A-Za-z ]+: )?"
+                     r"(?:Failed to (?:prepare query|execute query(?: '.*?')?|execute prepared statement): )?"
+                     r"(?:PGRES_[A-Z_]+ )?(?:ERROR:\s+)?", re.S)
 
 
 def reason_line(values, e, step):
     """The reason as it is stored, shown and logged: scrubbed, the first line of the driver's message without its
-    wrapper, or the exception's own line (the last) when the message holds a traceback; a line saying so, with the
-    exception's type, when there is none."""
-    lines = scrub(values, str(e)).strip().split("\n")
-    line = WRAPPER.sub("", lines[-1] if "Traceback (most recent call last)" in str(e) else lines[0]).strip()
-    return line or f"the driver gave no message while {step} ({type(e).__name__})"
+    wrapper, joined with the next when it ends in a colon. A message that holds a traceback gives the text before
+    it, or the exception's own line (the traceback's last) when nothing is before it; ADBC cuts long messages, so
+    the end may be missing. A line saying so, with the exception's type, when there is no message."""
+    text = scrub(values, str(e)).strip()
+    before, _, traceback = text.partition("Traceback (most recent call last)")
+    before = re.sub(r"\s*Detail: Python exception:\s*$", "", before)
+    first, *rest = (WRAPPER.sub("", before).strip() or traceback.strip().split("\n")[-1]).split("\n")
+    line = f"{first} {rest[0].strip()}" if first.endswith(":") and rest else first
+    return line.strip() or f"the driver gave no message while {step} ({type(e).__name__})"
 
 
 def scrub(values, text):

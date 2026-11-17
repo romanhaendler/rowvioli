@@ -17,8 +17,14 @@ def test_a_setting_one_or_two_edits_off_fails_apply_check_and_names_the_setting(
     assert f"did you mean {setting}" in r.stderr
 
 
-def test_a_plural_or_singular_of_a_setting_is_no_typo(rv):
-    r = check(rv, {"erp.toml": ERP.replace('"dbo.Notes"     = {}', '"dbo.Notes"     = { types = ["a"], table = "x", keys = 1 }')})
+@pytest.mark.parametrize("typo", ['keys = ["id"]', "logs = false", 'max_ages = "5m"'])
+def test_a_plural_of_a_setting_is_a_typo(rv, typo):
+    r = check(rv, {"erp.toml": ERP.replace('"dbo.Notes"     = {}', f'"dbo.Notes"     = {{ {typo} }}')})
+    assert r.returncode != 0 and "did you mean" in r.stderr, r.stderr
+
+
+def test_a_short_option_is_no_typo(rv):
+    r = check(rv, {"erp.toml": ERP.replace('"dbo.Notes"     = {}', '"dbo.Notes"     = { sep = ";" }')})
     assert r.returncode == 0, r.stderr
 
 

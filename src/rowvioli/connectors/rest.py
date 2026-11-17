@@ -36,6 +36,8 @@ def read(connection, table, options):
         if type not in TYPES:
             raise Exception(f"{table}: column {name}: {type} is not a type, use {', '.join(TYPES)}")
     schema = pa.schema([(name, TYPES[type]) for name, type in columns.items()])
+    if not connection.get("token", "").isascii():  # httpx's own error would show the character
+        raise Exception(f"{table}: the token holds a character outside ASCII")
     headers = {"Authorization": f"Bearer {connection['token']}"} if connection.get("token") else {}
     path, paged, page, previous = options["path"], "page" in options, 1, None
     address = connection["url"] + path
