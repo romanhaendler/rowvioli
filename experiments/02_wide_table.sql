@@ -5,24 +5,24 @@ VACUUM ANALYZE t;
 CREATE UNLOGGED TABLE s (LIKE t);
 INSERT INTO s SELECT * FROM t;
 ANALYZE s;
-SELECT pg_size_pretty(pg_total_relation_size('t')) AS groesse_spiegel;
+SELECT pg_size_pretty(pg_total_relation_size('t')) AS size_mirror;
 \timing on
-\echo == Grundlast: nur Join auf dem Schluessel, kein Vergleich
+\echo == baseline: only the join on the key, no comparison
 SELECT count(*) FROM s LEFT JOIN t m ON m.id=s.id WHERE m.id IS NULL;
-\echo == unveraendert: ROW IS DISTINCT FROM ueber 900 Spalten
+\echo == unchanged: ROW IS DISTINCT FROM over 900 columns
 SELECT count(*) FROM s LEFT JOIN t m ON m.id=s.id WHERE m.id IS NULL OR ROW(s.*) IS DISTINCT FROM ROW(m.*);
 SELECT count(*) FROM s LEFT JOIN t m ON m.id=s.id WHERE m.id IS NULL OR ROW(s.*) IS DISTINCT FROM ROW(m.*);
-\echo == Alternative: Hash der Zeile als Text
+\echo == alternative: hash of the row as text
 SELECT count(*) FROM s LEFT JOIN t m ON m.id=s.id WHERE m.id IS NULL OR md5(s::text) <> md5(m::text);
-\echo == Alternative: EXCEPT
+\echo == alternative: EXCEPT
 SELECT count(*) FROM (SELECT * FROM s EXCEPT SELECT * FROM t) x;
 \timing off
-UPDATE s SET c899 = 'anders' WHERE id%100=0;
+UPDATE s SET c899 = 'different' WHERE id%100=0;
 ANALYZE s;
 \timing on
-\echo == 1 % geaendert in der letzten Spalte
+\echo == 1 % changed in the last column
 SELECT count(*) FROM s LEFT JOIN t m ON m.id=s.id WHERE m.id IS NULL OR ROW(s.*) IS DISTINCT FROM ROW(m.*);
-\echo == dasselbe mit work_mem 256MB
+\echo == the same with work_mem 256MB
 SET work_mem='256MB';
 SELECT count(*) FROM s LEFT JOIN t m ON m.id=s.id WHERE m.id IS NULL OR ROW(s.*) IS DISTINCT FROM ROW(m.*);
 EXPLAIN (ANALYZE, BUFFERS, COSTS OFF) SELECT count(*) FROM s LEFT JOIN t m ON m.id=s.id WHERE m.id IS NULL OR ROW(s.*) IS DISTINCT FROM ROW(m.*);

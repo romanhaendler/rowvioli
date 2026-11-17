@@ -8,24 +8,24 @@ VACUUM ANALYZE t;
 CREATE TABLE t__log (_run bigint, _op text, LIKE t);
 CREATE UNLOGGED TABLE s (LIKE t);
 INSERT INTO s SELECT id, linenr, part, supp, qty, price, disc, tax, flag, status, ship, commitd, receipt, instr, mode,
-  CASE WHEN id%100=0 THEN 'geaendert' ELSE comment END FROM t WHERE id%1000<>1;
-INSERT INTO s SELECT g, 1, 1, 1, 1, 1, 0, 0, 'N','O', current_date, current_date, current_date, 'x','y','neu' FROM generate_series(:n+1, :n+:n/1000) g;
+  CASE WHEN id%100=0 THEN 'changed' ELSE comment END FROM t WHERE id%1000<>1;
+INSERT INTO s SELECT g, 1, 1, 1, 1, 1, 0, 0, 'N','O', current_date, current_date, current_date, 'x','y','new' FROM generate_series(:n+1, :n+:n/1000) g;
 ANALYZE s;
 \timing on
-\echo == Unterschiede vorab berechnen, ohne parallele Worker
+\echo == compute the differences upfront, without parallel workers
 SET max_parallel_workers_per_gather=0;
 CREATE UNLOGGED TABLE d0 AS
   SELECT 'D' AS _op, m.* FROM t m WHERE NOT EXISTS (SELECT 1 FROM s WHERE s.id=m.id)
   UNION ALL
   SELECT CASE WHEN m.id IS NULL THEN 'I' ELSE 'U' END, s.* FROM s LEFT JOIN t m ON m.id=s.id WHERE m.id IS NULL OR ROW(s.*) IS DISTINCT FROM ROW(m.*);
-\echo == dasselbe mit 2 parallelen Workern
+\echo == the same with 2 parallel workers
 SET max_parallel_workers_per_gather=2;
 CREATE UNLOGGED TABLE d AS
   SELECT 'D' AS _op, m.* FROM t m WHERE NOT EXISTS (SELECT 1 FROM s WHERE s.id=m.id)
   UNION ALL
   SELECT CASE WHEN m.id IS NULL THEN 'I' ELSE 'U' END, s.* FROM s LEFT JOIN t m ON m.id=s.id WHERE m.id IS NULL OR ROW(s.*) IS DISTINCT FROM ROW(m.*);
 ANALYZE d;
-\echo == VEROEFFENTLICHEN: nur noch die Unterschiede anwenden
+\echo == PUBLISH: apply only the differences
 BEGIN;
 INSERT INTO t__log SELECT 42, d.* FROM d;
 DELETE FROM t m USING d WHERE d._op IN ('D','U') AND d.id=m.id;
@@ -33,4 +33,4 @@ INSERT INTO t SELECT id, linenr, part, supp, qty, price, disc, tax, flag, status
 COMMIT;
 \timing off
 SELECT _op, count(*) FROM d GROUP BY 1 ORDER BY 1;
-SELECT count(*) AS abweichung FROM s FULL JOIN t m ON m.id=s.id WHERE s.id IS NULL OR m.id IS NULL OR ROW(s.*) IS DISTINCT FROM ROW(m.*);
+SELECT count(*) AS deviation FROM s FULL JOIN t m ON m.id=s.id WHERE s.id IS NULL OR m.id IS NULL OR ROW(s.*) IS DISTINCT FROM ROW(m.*);

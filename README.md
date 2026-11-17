@@ -623,7 +623,7 @@ A server without TLS then fails the command with `server does not support SSL, b
 - **Swapping is detected.** The name of the source is encrypted together with its connection. A ciphertext copied to another source is rejected.
 - **Equal values look different.** Encrypting the same connection twice gives two different ciphertexts. `apply` therefore writes a new ciphertext every time, with the same content.
 
-All four were tried out in [experiments/07_geheimnisse.py](https://github.com/romanhaendler/rowvioli/blob/main/experiments/07_geheimnisse.py), with a single value in place of a block.
+All four were tried out in [experiments/07_secrets.py](https://github.com/romanhaendler/rowvioli/blob/main/experiments/07_secrets.py), with a single value in place of a block.
 
 ### Where the keys live
 

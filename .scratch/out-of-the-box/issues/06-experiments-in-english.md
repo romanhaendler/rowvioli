@@ -2,7 +2,7 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -26,3 +26,20 @@ file names (`01_veroeffentlichen.sql` ...), identifiers (`lauf`, `auftrag`, `que
 - [ ] The measurements' numbers in `docs/measurements.md` are untouched.
 
 ## Comments
+
+Resolved. Files (`git mv`): `01_veroeffentlichen.sql` to `01_publish.sql`, `02_breite_tabelle.sql` to `02_wide_table.sql`,
+`03_unterschiede_vorab.sql` to `03_diff_upfront.sql`, `04_harter_abbruch.sh` to `04_hard_kill.sh`, `05_vergabe.sql/.sh` to
+`05_claim.sql/.sh`, `07_geheimnisse.py` to `07_secrets.py`, `08_treiber.py` to `08_drivers.py`. Identifiers: `_etl` to
+`_rowvioli`, `lauf` to `run`, `auftrag` to `order_id`, `quelle_id` to `source_id`, `tabelle_id` to `table_id`, `versuch` to
+`attempt`, `zieltabelle` to `target_table`, `ende` to `finished`, `grund` to `reason`, `opfer` to `victim`; the 08 function
+`lauf` to `one_run`. Status values: `wartet`, `läuft`, `gestorben` to `waiting`, `running`, `dead`; the reason
+`Worker ausgefallen` to `worker lost`. Comments, `\echo` and output translated. Also fixed: `README.md`,
+`docs/measurements.md` (names only, no number touched), `experiments/README.md` (table and German sentence dropped).
+`docs/decisions.md` line 672 keeps `_etl`: it is the old-to-new row of the rename table.
+
+Runs (Postgres 16 container `rowvioli-exp-06`, removed with `docker rm -fv`; one extra `rowvioli-exp-06b` for 08, also removed):
+01, 03, 06 with `n=10000`: end without error (06 ends with the expected `integer = text` error). 02 at its fixed size:
+ends without error. 04: lock gone at once, held after 2 s, gone after 17 s, gone after 4 s with the check interval.
+05: erp 4 / crm 2, no sample over the limit, one dead run retried with attempt 2. 07: all six checks pass (check 3 reports a
+`TypeError`, not a decrypt error; logic untouched). 08 with 10000 rows: all ok except the streaming check, which needs more
+than one 10,000-row chunk; with 300000 rows it passes. Each of 01, 02, 03, 06 ran in a database of its own inside one container.
