@@ -27,7 +27,7 @@ Unchanged from the first round:
 - **Machine failure.** Nobody closes the connection then. With a container's network cut, Postgres freed the lock after 62 s through the keepalive the session asks for (`target.SESSION`); without it the lock was still held after 240 s. A real machine or a real network was not tried.
 - **`client_connection_check_interval`** was measured on Linux. Postgres supports it only on some operating systems.
 - **The connectors themselves**: arrow-odbc for MSSQL and Informix, DuckDB for files. The `postgres`, `file`, `odbc` and `rest` connectors are tested; `odbc` only against PostgreSQL through psqlODBC, SQL Server and Informix not at all.
-- **Wide tables with many rows.** 900 columns were measured with 100,000 rows only.
+- **Wide tables with many rows.** A whole run was measured on 300 columns with 100,000 rows (about 11 s) and 300,000 rows (about 40 s), roughly linear, most of it the read from the source (section 15, ticket 16). Not measured: 900 columns in a whole run, a million rows of this width, the other connectors.
 - **The history view on a log some hundred times larger** than the 48 MB measured, or one that does not fit in memory (section 13).
 - **The COPY from a client over a real network.** Experiment 8 filled the staging table from a client on the same machine.
 

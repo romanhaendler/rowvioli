@@ -49,7 +49,7 @@ What the numbers say:
 - The hash table of the join holds the complete rows of the mirror, 590 MB here. With 4 MB of `work_mem` Postgres spills it to disk. That works, and it is why wide tables cost more per row than narrow ones.
 - A hash over the row is slower than the direct comparison, because every row has to be turned into text first. `EXCEPT` is out of the question.
 
-Not measured: a million rows of this width. Linear growth would mean about a minute.
+Not measured: a million rows of this width. Linear growth would mean about a minute for the comparison alone. A whole run costs more; see section 15.
 
 ## 3. Computing the diff before the transaction
 
@@ -267,6 +267,48 @@ Recommendation: the documentation (now `docs/target.md`, "History") names an ind
 
 Limitations: one pooler version, one pool size, a synthetic load. A pass is no proof that no pooler is in front; the check catches the case it is built for, a pooler whose server connections are shared between clients, with a chance that grows with their number. Session mode was found to work in the shakedown (`install-target.md`).
 
+## 15. A whole run on a wide table
+
+2026-11-17, the program at commit 4705418 (`uv sync --locked`, then `uv run rowvioli run <source> <table> --slots 1` from the worktree), a real process per run, the seconds as the program reports them; the scripts are not in `experiments/`. Apple M2, 8 cores, 16 GB, macOS; Docker 29.3.1. Source and target are two containers of `postgres:16-alpine` (PostgreSQL 16.16), each `--cpus 2 --memory 4g --shm-size 1g -c work_mem=256MB`, so the numbers stand beside sections 1 to 3. Client and both servers on the same machine, no network between them. Beside the runs, one other agent's two idle-to-light containers ran (a PgBouncer experiment); the host's load average was 3 to 5 at the start. Docker's disk was at 36 to 63 % during the runs.
+
+The wide table: 300 columns, 100 each of `bigint`/`int`, `numeric(12,2)` and 8-character text, the first column the key, 100,000 rows (198 MB in the source); the same at 300,000 rows. The narrow table: 8 columns (`bigint` key, `int`, three `numeric(12,2)`, three texts), 1,000,000 rows (102 MB). The change is 1 % of the rows in the last column. A second first load is a second source on the same table (a fresh mirror). Each case twice, in this order: first load, first load, unchanged, unchanged, changed, changed.
+
+Seconds as the program reports them, the two runs side by side; in brackets million cells a second of the better one:
+
+| Case | wide, 100,000 rows (30 M cells) | wide, 300,000 rows (90 M cells) | narrow, 10⁶ rows (8 M cells) |
+|---|---|---|---|
+| First load | 14.0 / 16.0 (2.1) | 44.3 / 43.2 (2.1) | 6.4 / 8.3 (1.25) |
+| Unchanged | 11.8 / 10.9 (2.8) | 38.0 / 38.4 (2.4) | 4.4 / 4.2 (1.9) |
+| 1 % changed in the last column | 11.8 / 10.9 (2.8) | 40.8 / 45.5 (2.2) | 4.8 / 4.1 (1.95) |
+
+Where the time goes. `pg_stat_activity` of the target once a second during each run, counting the statement that is active (out of about 11 samples for a wide unchanged run, 38 at 300,000 rows, 4 for a narrow one; the rest is start-up, claim and the client's own work between statements):
+
+| Run | `COPY ... _stage FROM STDIN` | diff | publishing (inserts into mirror and log) |
+|---|---|---|---|
+| wide 100,000, unchanged | 8 to 9 | 1 to 2 | 0 |
+| wide 100,000, first load | 9 | 1 | 3 to 4 |
+| wide 300,000, unchanged | 26 to 27 | 8 | 0 |
+| wide 300,000, first load | 25 to 26 | 4 to 5 | 9 to 12 |
+| narrow 10⁶, unchanged | 3 | 1 | 0 |
+
+The read alone, with every batch thrown away, three runs each:
+
+| Read | wide, 100,000 rows | narrow, 10⁶ rows |
+|---|---|---|
+| ADBC `fetch_record_batch`, what the connector does | 6.6 to 6.8 s (4.5 M cells/s) | 1.1 s (7.3 M cells/s) |
+| `psql` `COPY ... TO STDOUT` (text), inside the source container | 1.5 to 2.0 s | 0.5 to 0.65 s |
+| `psql` `COPY ... TO STDOUT (FORMAT binary)`, the same | 5.6 s | 0.6 to 0.9 s |
+
+What the numbers say:
+
+- **A whole run on a wide table does not cost more per cell than on a narrow one; it costs less.** 2.4 to 2.8 million cells a second when unchanged against 1.9 on the narrow table, because the narrow table pays per row (4 µs a row against 110 µs). The shakedown's 83 to 139 s for 100,000 rows of 300 columns could not be reproduced: 11 s here, a tenth. That run was on a loaded machine with a full disk, and the staging step has changed since (typed numerics); which of the two made the difference was not tried.
+- **The time is the read from the source.** The `COPY` into the staging table is the active statement for three quarters of a wide run, but it mostly waits for the client, and the client waits for the driver's read: 6.7 of the 11 s. The diff is 1 to 2 s at 100,000 rows. Publishing is about 3 s of a first load and nothing when nothing changed. The server's text `COPY` of the same table takes 1.5 s; the binary one, which the driver speaks, 5.6 s. The program's part of that is the ticket `.scratch/out-of-the-box/issues/16-wide-tables.md`.
+- **Unchanged costs 80 to 90 % of a first load, and a change of 1 % in the last column costs about the same as no change.** A run reads and compares everything every time; the diff of 100,000 wide rows is a small part.
+- **Growth is about linear in rows.** Three times the rows took 3.5 times as long when unchanged (38 against 11 s), 3.1 times for a first load. The diff grows a little faster than the rest (8 samples against 1 to 2), but it stays below a quarter of the run.
+- **Compared with section 2**, the comparison of 900 columns takes 5.7 s for 100,000 rows; a whole run of a third of that width takes 11 s, so the comparison is not what a whole run costs.
+
+Limitations: two runs per case, spread of the two up to 15 % (up to 30 % for the first load of the narrow table and the changed runs at 300,000 rows). The samples are one-second ones: a statement shorter than a second is counted by chance. Everything on one machine, no network, the source and the target competing for the same 8 cores. Not measured: 900 columns in a whole run, a million rows of this width (extrapolated about 2 minutes, not measured), the other connectors, a table that does not fit in the container's memory, a source on a real network, and the earlier staging step for comparison with the shakedown. The read alone at 300,000 rows was not timed.
+
 ## Summary
 
 | Claim | Evidence |
@@ -283,3 +325,4 @@ Limitations: one pooler version, one pool size, a synthetic load. A pass is no p
 | A killed process cannot publish | prototype: killed while filling, at the diff and while publishing, the mirror stayed unchanged |
 | A process per run costs 0.1 to 0.2 s | prototype |
 | A transaction-mode pooler shared with other clients is caught by two `pg_backend_pid()` reads; an idle one is not | experiment 14 |
+| A whole run on 300 columns costs no more per cell than on 8; 100,000 rows take about 11 s, three times the rows 3.5 times as long, and the read from the source is most of it | experiment 15 |
