@@ -92,7 +92,7 @@ The prototype's code is on branch `prototype-impl`.
 
 ## Not examined
 
-- Whether Sling or ingestr already cover most of this. A persona's answer, a lead and not a fact: they cover the loading (more sources, incremental, CDC; their documentation checked on 2026-11-18), not the freshness model. The second half is from memory and unchecked.
+- Whether Sling or ingestr already cover most of this. A persona's answer, a lead and not a fact: they cover the loading (more sources, incremental, CDC; their documentation checked on 2026-11-17), not the freshness model. The second half is from memory and unchecked.
 - DuckDB as the engine of the whole program instead of only the `file` connector.
 - Whether another small tool for mirroring into Postgres already works with a maximum age per table.
 - The domains `rowvioli.com`, `.de`, `.io`, `.dev` and a GitHub account or organisation named `rowvioli` are not reserved; they were free on 2026-11-11.

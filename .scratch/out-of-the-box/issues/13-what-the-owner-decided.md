@@ -6,7 +6,7 @@
 
 **Model:** Sonnet
 
-From the shakedown of 2026-11-18 (P22, P16, P3, P20, H4), decided by the owner on 2026-11-18. The project is
+From the shakedown of 2026-11-17 (P22, P16, P3, P20, H4), decided by the owner on 2026-11-17. The project is
 in version 0: behaviour may change where it is better afterwards, and so may the schema `_rowvioli` (raise
 `SCHEMA_VERSION` in `target.py` and the number in `sql/schema.sql` and its tests together; there is no
 migration yet, which is accepted).

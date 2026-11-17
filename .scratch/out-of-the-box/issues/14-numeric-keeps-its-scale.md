@@ -6,14 +6,14 @@
 
 **Model:** Opus
 
-From the shakedown of 2026-11-18. P16 (a team moving existing mirrors to rowvioli): four of eight existing
+From the shakedown of 2026-11-17. P16 (a team moving existing mirrors to rowvioli): four of eight existing
 target tables failed their first run with `column price has changed its type from numeric(10,2) to
 numeric`, a change nobody made; the way out, `ALTER TABLE ... TYPE numeric`, is blocked when a view reads
 the table. P3: a source value `137.00` in a `numeric(12,2)` column stands in the mirror as `137`. Decision 28
 and the README ("Types", "Decimals from Postgres") describe the cause: the driver decides the types,
 `numeric(p,s)` arrives as `numeric`.
 
-The owner, 2026-11-18: the project is in version 0; anything may change if it is better afterwards.
+The owner, 2026-11-17: the project is in version 0; anything may change if it is better afterwards.
 
 ## What to find out and build
 
