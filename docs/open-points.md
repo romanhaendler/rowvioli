@@ -77,6 +77,8 @@ Unchanged from the first round:
 - **An idle worker keeps one connection to the target open**, with which it asks whether something is claimable.
 - **A process per run costs about 0.18 s.** It matters only for hundreds of tiny tables per minute on one machine.
 - **A worker's restart can take up to `max_seconds`**, because it lets its runs finish (decision 33).
+- **A source can keep computing the read of a run that was ended** (after `max_seconds`, a lost target or a hard kill) until it notices the closed connection. A Postgres source notices when it next sends rows, so a query that computes long before its rows arrive runs to its end, beside the retry.
+- **A full disk on the target can read as `connection to the target lost`**, and the status as `worker lost`. When the write-ahead log cannot grow, Postgres stops with a PANIC and restarts: the run has the message but can no longer store it. Elsewhere a full disk fails the run with Postgres's message, `could not extend file ...: No space left on device`.
 - **The ADBC driver cannot run `SHOW`** and other statements that return rows but cannot be wrapped into `COPY`.
 - **The driver decides the types in the target** (decision 28). `varchar(n)` arrives as `text` and `numeric(p,s)` as `numeric`, so a change between such types passes the schema check. An unconstrained `numeric` beyond 38 digits fails the run.
 

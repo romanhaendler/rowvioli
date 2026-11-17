@@ -41,8 +41,8 @@ def main():
         p.error("--slots must be at least 1")
     try:
         command(a)
-    except adbc.Error as e:  # the target refused or is unreachable: its message, not a traceback
-        raise SystemExit(load.scrub(load.target_secrets(), str(e)))
+    except adbc.Error as e:  # the target refused or is unreachable: its message in one line, not a traceback
+        raise SystemExit(load.reason_line(load.target_secrets(), e, "asking the target"))
 
 
 def command(a):

@@ -23,6 +23,8 @@ Fixed:
 - A ragged CSV fails instead of losing its header or arriving as one column.
 - A file name with `[`, `*` or `?` is no longer expanded a second time by DuckDB, which could read another file than the one named.
 - A table whose target schema or table changes is new again: due at the next run, without the age, attempts and reason of the old name, since no mirror exists under the new name.
+- A run whose connection to the target is lost ends within seconds of its worker reaching the target again, with `connection to the target lost`; before, it read its source to the end, and the retry could read it at the same time.
+- `work` and `run` say an error of the target in one line, without the query that was sent.
 
 ## 0.1.0 (2026-11-17)
 

@@ -158,6 +158,21 @@ def test_a_run_whose_server_process_is_killed_fails_and_run_says_so(slow):
     assert mirror(slow) == before
 
 
+def test_run_whose_own_connection_the_target_drops_says_so_in_one_line(slow):
+    """Ticket 11: the target's message without the query that was sent."""
+    with psycopg.connect(slow.target_url) as holder:
+        holder.execute("lock table raw_erp.slow in access exclusive mode")
+        worker = slow.start("run")
+        run = until(lambda: waiting_on(slow, "raw_erp.slow"))
+        slow.target("""select pg_terminate_backend(pid) from pg_stat_activity
+                        where datname = current_database() and pid not in (pg_backend_pid(), %s, %s)""",
+                    [run, holder.info.backend_pid])
+        out, err = worker.communicate(timeout=20)
+        holder.rollback()
+    assert worker.returncode == 1 and out == ""
+    assert "SELECT" not in err and "terminating connection" in err.splitlines()[-1], err
+
+
 def test_a_reader_never_sees_an_empty_or_half_loaded_mirror(slow):
     """With and without a key: every count a reader sees is the old or the new state, never anything between."""
     apply(slow, definition(slow, '"public.customers" = { key = ["customer_no"] }\n"public.notes" = {}\n'))
