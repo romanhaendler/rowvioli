@@ -1,6 +1,5 @@
 """The `file` connector: CSV, Excel, Parquet and JSON files and patterns from a directory (spec test 15)."""
 import json
-import subprocess
 from datetime import date
 from decimal import Decimal
 
@@ -8,7 +7,6 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from conftest import ROWVIOLI
 
 CUSTOMERS = [(1, "Anna", 2.5), (2, "Ben", None), (3, "Cleo", 10.0)]
 
@@ -43,9 +41,10 @@ path = "{rv.dir / 'files'}"
 {tables}"""})
     r = rv.run("apply", "sources")
     assert r.returncode == 0, r.stderr
-    r = rv.run("run")
-    assert r.stdout, r.stderr
-    return r.returncode, json.loads(r.stdout)["tables"]
+    r = rv.run("run", "files")  # naming the source requests every table, so one that is not due loads too
+    tables = json.loads(r.stdout)["tables"] if r.stdout else {}
+    assert tables, f"no run happened: {r.stderr}"
+    return r.returncode, tables
 
 
 def types(rv, table):
@@ -193,8 +192,7 @@ path = "{files.dir / 'files'}"
 """})
     assert files.run("apply", "sources").returncode == 0
     # the run's process inherits the limit: a file held open per match would exceed it
-    r = subprocess.run(["sh", "-c", 'ulimit -n 128 && exec "$0" run', ROWVIOLI], cwd=files.dir,
-                       env=files._env(None), capture_output=True, text=True, timeout=120)
+    r = files.run("run", timeout=120, open_files=128)
     assert json.loads(r.stdout)["tables"]["raw_files.orders"] == {"status": "ok", "inserted": 1000, "updated": 0,
                                                                   "deleted": 0}, r.stderr
 
