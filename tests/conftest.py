@@ -2,7 +2,8 @@
 
 Tests never import the program. They use the `rv` fixture:
   rv.run(*args, env={...})   runs `rowvioli` in rv.dir with ROWVIOLI_TARGET_URL and
-                             ROWVIOLI_KEY_FILE (rv.dir/worker.key, from `key new`) set
+                             ROWVIOLI_KEY_FILE (rv.dir/worker.key, from `key new`) set;
+                             open_files=N limits the open files of the process, which its run processes inherit
   rv.target(sql, params)     queries the target, returns rows (or None)
   rv.source(sql, params)     the same for the source
   rv.definition({"erp.toml": "..."})  writes rv.dir/sources/, returns its path
@@ -13,6 +14,7 @@ Each test gets a fresh database in each container, so tests and worktrees do not
 """
 import contextlib
 import os
+import resource
 import shutil
 import signal
 import subprocess
@@ -98,9 +100,11 @@ class Rv:
         return {**os.environ, "ROWVIOLI_TARGET_URL": self.target_url,
                 "ROWVIOLI_KEY_FILE": str(self.dir / "worker.key"), **(env or {})}
 
-    def run(self, *args, env=None, timeout=60):
+    def run(self, *args, env=None, timeout=60, open_files=None):
+        limit = (lambda: resource.setrlimit(resource.RLIMIT_NOFILE, (open_files, resource.getrlimit(
+            resource.RLIMIT_NOFILE)[1]))) if open_files else None  # soft limit, set in the child before exec
         return subprocess.run([ROWVIOLI, *args], cwd=self.dir, env=self._env(env), capture_output=True,
-                              text=True, timeout=timeout)
+                              text=True, timeout=timeout, preexec_fn=limit)
 
     def start(self, *args, env=None):
         p = subprocess.Popen([ROWVIOLI, *args], cwd=self.dir, env=self._env(env), stdout=subprocess.PIPE,
