@@ -70,12 +70,12 @@ def test_apply_from_the_parent_finds_the_key_next_to_the_directory(rv):
     assert r.returncode == 0, r.stderr
 
 
-def test_a_missing_default_key_names_the_path_tried(rv):
-    rv.run("init")
+@pytest.mark.parametrize("args", [[], ["--init"], ["--key", "nope.pub"]])
+def test_a_missing_public_key_names_the_path_tried_and_the_command_that_creates_it(rv, args):
     rv.definition({"erp.toml": ERP})
-    r = rv.run("apply", "sources", env=ENV)
-    assert r.returncode != 0
-    assert str((rv.dir / "worker.pub").resolve()) in r.stderr
+    r = rv.run("apply", "sources", *args, env=ENV)
+    path = "nope.pub" if args[:1] == ["--key"] else str((rv.dir / "worker.pub").resolve())
+    assert r.returncode != 0 and path in r.stderr and "rowvioli key new" in r.stderr, r.stderr
 
 
 def test_key_names_a_key_kept_elsewhere(rv):

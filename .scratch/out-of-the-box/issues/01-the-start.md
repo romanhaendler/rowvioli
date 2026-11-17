@@ -57,3 +57,13 @@ Documents need:
   the old tables stay); this is the one worker-written column `apply` resets (`attempted_at`).
 - decisions: 14 (apply does not know the connectors) gets the exception of near misses of the four built-in names.
 - open-points: strike "no key file / mistyped type shown only at the run", the `{"tables": {}}` lead and the libodbc message.
+
+Follow-up (same branch):
+- odbc on Linux: checked in `python:3.12-slim` with the built wheel and `[odbc]`, no libodbc. `import arrow_odbc` raises `OSError:
+  cannot load library '.../libarrow_odbc.so': libodbc.so.2: cannot open shared object file`, the same type as on macOS, so the wrapper
+  needed no change. `ModuleNotFoundError` (extra missing) is not an `OSError` and keeps its own text. What a user sees on Linux:
+  `connector "odbc" cannot be loaded on worker w: the ODBC driver manager is missing; install unixodbc (libodbc)`; without the extra:
+  `connector "odbc" cannot be loaded on worker w: No module named 'arrow_odbc'`.
+- `apply` (also `--init`, and `--key <file>`) with a missing public key now says `public key <path>: No such file or directory;
+  `rowvioli key new` creates it`. Test: `test_a_missing_public_key_names_the_path_tried_and_the_command_that_creates_it`.
+- Documents: README, in the first-mirror steps: "`apply` without `worker.pub` stops and says that `rowvioli key new` creates it."
