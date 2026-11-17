@@ -49,6 +49,9 @@ def claim(conn, worker, source, table):
         sql(conn, "SELECT pg_advisory_lock($1::int, $2::int)", [source_id, id])  # the table lock outlives COMMIT
         sql(conn, "UPDATE _rowvioli.tables SET attempted_at = now(), attempts = attempts + 1, reason = NULL"
                   " WHERE id = $1", [id])
+        # the lock was free, so a run of this table that still says `running` is dead (the status shows `worker lost`)
+        sql(conn, """UPDATE _rowvioli.runs SET status = 'failed', finished_at = clock_timestamp(), reason = 'worker lost'
+                      WHERE "table" = $1 AND status = 'running'""", [id])
         [(run,)] = sql(conn, """INSERT INTO _rowvioli.runs ("table", worker, definition)
                                 SELECT $1, $2, definition FROM _rowvioli.meta RETURNING run""", [id, worker])
         with conn.cursor() as c:
@@ -136,7 +139,8 @@ def stage(conn, t):
         connection = seal.unseal(os.environ["ROWVIOLI_KEY_FILE"], t["key_id"], t["source"], t["connection"])
     except Exception as e:
         raise Exception(f"the connection of source {t['source']} cannot be decrypted on worker {t['worker']}: {e}")
-    t["values"] = connection_values(connection)
+    # a directory is no secret, and a reason without it is not readable (decision 47)
+    t["values"] = connection_values(connection, ("path",) if t["type"] == "file" else ())
     options = dict(t["options"])
     if isinstance(c := options.get("columns"), list) and all(isinstance(p, list) and len(p) == 2 for p in c):
         options["columns"] = dict(c)  # a dict is stored as pairs (definition.ordered), any other value as written
@@ -149,9 +153,9 @@ def stage(conn, t):
     with conn.cursor() as c:
         rows_read = c.adbc_ingest("_stage", batches, mode="create", temporary=True)
     # zero rows protect a mirror that has rows; a first load or an empty mirror publishes them
-    if rows_read == 0 and sql(conn, "SELECT to_regclass($1)", [t["mirror"]])[0][0] and \
+    if rows_read == 0 and t["max_delete_share"] < 1 and sql(conn, "SELECT to_regclass($1)", [t["mirror"]])[0][0] and \
             sql(conn, f"SELECT 1 FROM {t['mirror']} LIMIT 1"):
-        raise Exception("the source delivered zero rows")
+        raise Exception("the source delivered zero rows; max_delete_share = 1.0 allows an empty table")
     # json has no equality, so the comparison could not run; the driver writes Arrow's json only as json
     jsonb = {"json": "jsonb", "json[]": "jsonb[]"}
     to_jsonb = [f"ALTER {quote(n)} TYPE {jsonb[type]} USING {quote(n)}::{jsonb[type]}"
@@ -275,11 +279,11 @@ def widen(conn, table, staged, existing):
 ODBC_PASSWORD = re.compile(r"(?:^|;)\s*(?:PWD|Password)\s*=\s*(\{(?:[^}]|\}\})*\}|[^;]*)", re.I)
 
 
-def connection_values(value):
+def connection_values(value, readable=()):
     """Every text of a connection, and the password of a URL or an ODBC string in it as written and decoded, since a
     driver may quote either (README "What happens to the decrypted connection")."""
     if isinstance(value, dict):
-        return [s for v in value.values() for s in connection_values(v)]
+        return [s for k, v in value.items() for s in connection_values(v) if k not in readable or s != v]
     if isinstance(value, list):
         return [s for v in value for s in connection_values(v)]
     if not isinstance(value, str):

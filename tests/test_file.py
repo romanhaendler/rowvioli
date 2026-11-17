@@ -313,3 +313,24 @@ def test_a_csv_with_only_a_header_is_mirrored_as_an_empty_table(files):
     code, answer = load(files, '"empty.csv" = { key = ["id"], sep = ";" }\n')
     assert code == 0, answer
     assert files.target("select count(*) from raw_files.empty") == [(0,)]
+
+
+def test_a_missing_files_reason_shows_the_directory(files):
+    code, answer = load(files, '"gone.csv" = {}\n')
+    assert code == 1
+    assert [a["reason"] for a in answer.values()] == [f"gone.csv: no such file in {files.dir / 'files'}"]
+
+
+def test_the_password_of_a_url_in_the_path_is_hidden_but_the_rest_of_it_is_not(files):
+    files.definition({"files.toml": """
+[files]
+type = "file"
+max_age = "1h"
+[files.connection]
+path = "https://anna:hunter2pw@host/dir"
+[files.tables]
+"gone.csv" = {}
+"""})
+    assert files.run("apply", "sources").returncode == 0
+    r = files.run("run")
+    assert "no such file in https://anna:***@host/dir" in r.stdout and "hunter2pw" not in r.stdout

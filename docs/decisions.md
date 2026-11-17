@@ -2,7 +2,7 @@
 
 Every decision of the concept with its reason, its price and what was rejected. The order follows the discussion of 2026-11-11, so the document also shows how the design got to where it is.
 
-There were two rounds on that day. Decisions 1 to 19 are the first round. The second round (decisions 20 to 30) replaced the model of orders, a jobs repo and an external scheduler with a maximum age per table, definitions in the target and stateless workers. Decisions of the first round that no longer hold are marked and kept, with their text unchanged. A third round (decisions 32 to 35) followed on 2026-11-12, after a throwaway prototype had tried out the model of the second round. A fourth round (decision 36) added load times, a fifth (decision 37) the lines of a worker, a sixth (decision 38) the rule for licences, a seventh (decisions 39 and 40) target names and history. An eighth (decisions 41 to 43) followed on 2026-11-15, after the shakedown of the built wheel, and a ninth (decisions 44 to 46) on 2026-11-18, after the first mirror out of the box.
+There were two rounds on that day. Decisions 1 to 19 are the first round. The second round (decisions 20 to 30) replaced the model of orders, a jobs repo and an external scheduler with a maximum age per table, definitions in the target and stateless workers. Decisions of the first round that no longer hold are marked and kept, with their text unchanged. A third round (decisions 32 to 35) followed on 2026-11-12, after a throwaway prototype had tried out the model of the second round. A fourth round (decision 36) added load times, a fifth (decision 37) the lines of a worker, a sixth (decision 38) the rule for licences, a seventh (decisions 39 and 40) target names and history. An eighth (decisions 41 to 43) followed on 2026-11-15, after the shakedown of the built wheel, a ninth (decisions 44 to 46) on 2026-11-18, after the first mirror out of the box, and a tenth (decisions 47 and 48) on 2026-11-18, after the shakedown of the second wave.
 
 Evidence refers to `docs/measurements.md`.
 
@@ -659,6 +659,29 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 
 **Rejected.**
 - *Leaving the table alone and asking the person to request a load.* Nothing says so, and the first load under a new name is not a request but a first load.
+
+## 47. A connector refuses an option it does not know
+
+**Decision.** `postgres`, `odbc` and `rest` fail the run when a table has an option they do not read, with `<table>: the option <name> is not one of the <type> connector's; it knows <options>` (`it knows no option` for `postgres` and `odbc`). `file` already did, since its options are DuckDB's. A connector of one's own decides for itself; the guide says that it should do the same. The `path` of a `file` connection stays readable in reasons, since a directory is no secret and a reason without it is no use; every other value of a connection, and a password inside a URL in any value, is scrubbed as before.
+
+**Why.** `incremental = "updated"` or `query = "select ..."` on a `postgres` table loaded the whole table without a word, and a misspelt option of `rest` was ignored. A setting that does nothing looks like one that works.
+
+**Price.** A definition that carried a stray option runs again only without it. `apply` does not know the options of a connector (decision 22), so the failure shows at the run.
+
+**Rejected.**
+- *Refusing in `apply`.* It does not know the connectors.
+- *Ignoring with a warning.* A warning on stderr of a worker is not read.
+
+## 48. Zero rows publish where every row may be deleted
+
+**Decision.** Refines decision 42: zero rows fail a mirror that has rows unless the table's `max_delete_share` is 1.0. Who allows every row to be deleted allows an empty table, so no setting is added. Without a key the table is replaced as a whole and has no change log; its mirror counts as empty when it has no rows, as with a key. The reason says `max_delete_share = 1.0` allows an empty table.
+
+**Why.** A source that really was emptied could not be mirrored, short of taking the table out of the definition.
+
+**Price.** With 1.0 a broken source that delivers nothing empties the mirror (the change log keeps the rows).
+
+**Rejected.**
+- *A setting of its own for empty loads* (see 42).
 
 ## Corrections after the prototype
 

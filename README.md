@@ -289,10 +289,10 @@ Data passes through the program only in the lines `read` and `copy_into_staging`
 |---|---|
 | Schema | a column is missing or has changed its type, as far as the driver tells types apart (see [Types](#types)). A new column is added to the target. |
 | Key | a key combination occurs twice in the staging table, a key column is null, or the key in the definition differs from the primary key of the mirror. |
-| Safety limits | the source delivers zero rows while the mirror has rows, or more than `max_delete_share` of the rows would disappear. |
+| Safety limits | the source delivers zero rows while the mirror has rows and `max_delete_share` is below 1, or more than `max_delete_share` of the rows would disappear. |
 | Change log | a change log exists and this run would not write to it (`log = false`, or the key was taken away), or it exists and its mirror does not. |
 
-The share of deletions is known only from the diff, so it is checked after step 5. The safety limits keep a broken source from emptying the mirror in a perfectly consistent way. Zero rows protects a mirror that has rows. A table on its first load, or a mirror that is empty, publishes zero rows: a new empty table in the source is mirrored as an empty table.
+The share of deletions is known only from the diff, so it is checked after step 5. The safety limits keep a broken source from emptying the mirror in a perfectly consistent way. Zero rows protects a mirror that has rows. A table on its first load, or a mirror that is empty, publishes zero rows: a new empty table in the source is mirrored as an empty table. `max_delete_share = 1.0` on a table (or its source) says that every row may go, so an emptied source then gives an empty mirror (with a key, a `D` row in the change log for each row; without one, an empty table, since a table without a key is replaced as a whole and its mirror is empty when it has no rows). The reason for zero rows names this way out (decision 48).
 
 A table with a key cannot have a column `_op`, and with a change log neither `_run`, `_loaded_at`, `_valid_from` nor `_valid_to`: the diff, the change log and the history view use these names.
 
@@ -410,7 +410,7 @@ meta      schema_version, max_running, definition (hash of the definition last a
 - `sources` and the first line of `tables` are the definition. Only `apply` writes them. A table row carries the settings a table may override, with the source's filled in.
 - The second line of `tables` is what the workers experienced, plus `requested_at`.
 - `runs` is a log: one row per run. Nothing reads it to decide anything.
-- `status` is what people look at. It shows a table as `new`, `loading`, `ok` or `failed`, with the `reason` of a failure in a column of its own. A reason is one line: the driver's own message without its wrapper (`IO:`, `NOT_FOUND:`), traceback or the paths of a traceback. When the driver gave none, it says so and names the step. A table whose run died shows as `failed` with the reason `worker lost`.
+- `status` is what people look at. It shows a table as `new`, `loading`, `ok` or `failed`, with the `reason` of a failure in a column of its own. A reason is one line: the driver's own message without its wrapper (`IO:`, `NOT_FOUND:`), traceback or the paths of a traceback. When the driver gave none, it says so and names the step. A table whose run died shows as `failed` with the reason `worker lost`: the view finds that nobody holds the table lock any more and no reason was written. The run that next claims the table sets the dead run's row in `runs` to `failed`, reason `worker lost`, with a `finished_at`.
 - Progress is computed there too, for example `loading, 485,000 of about 1,000,000 rows`: while a table is loading, `rows_written` shows its rows so far and `rows_last_run` the rows read by its last successful run. The holder of the table lock is in `pg_locks`, its rows so far are in Postgres' own `pg_stat_progress_copy`. A worker writes nothing for it. `rows_written` is empty for a role that is neither the workers' role nor a member of `pg_read_all_stats`.
 
 Today's state is read from the mirror. What changed when is in the change log, and every row of it says when: `_loaded_at` is the moment its run published, the same `now()` that goes into `loaded_at`. Next to the log stands the view `<target table>__history`, which reads nothing but the log and gives every version of a row with the time it was valid.
@@ -537,7 +537,7 @@ COMMIT;  -- releases only the counting lock from step 1, the table lock stays
 
 - **Step 1 prevents overtaking.** Without it, two workers could read "three of four" at the same time and both take a table.
 - **The count cannot drift.** If a worker dies, its lock disappears from `pg_locks` and no longer counts. Nobody has to book anything back.
-- **The same view detects dead runs.** A run recorded as `running` whose table lock is missing is dead. Nobody has to act on that: the table becomes due again when its pause is over.
+- **The same view detects dead runs.** A run recorded as `running` whose table lock is missing is dead. Nobody has to act on that: the table becomes due again when its pause is over, and the run that claims it then closes the dead run's row in `runs` as `failed` with the reason `worker lost`.
 - **Order when finishing.** A run first records its result and then releases the lock. The other way round, a finished run would briefly look like a dead one. The one exception is a run ended after `max_seconds`: the worker kills it first and writes the reason afterwards, so it briefly shows as `worker lost`.
 - **Number 0 is reserved.** It marks the counting lock. Sources get numbers from 1.
 
@@ -823,7 +823,7 @@ Rights in the target:
 | The pipeline that runs `apply` | to write the definition |
 | The workers | to read the definition, to write what they experienced, to create and write the mirrors |
 | Whoever may request a load, for example an application of your own | to read the status view, to write `requested_at` and nothing else; to see progress, membership in `pg_read_all_stats` |
-| Consumers | to read the mirrors and, for history, the views `<target table>__history`. A view is a plain view and runs with its owner's rights, so the right to read it is enough; the change log needs none. Default privileges on tables cover views. |
+| Consumers | to read the mirrors and, for history, the views `<target table>__history`. A view is a plain view and runs with its owner's rights, so the right to read it is enough; the change log needs none. Default privileges on tables cover views. To tell a quiet source from a worker that is gone, `USAGE` on `_rowvioli` and `SELECT` on `_rowvioli.status`: that gives the view and nothing else in the schema (`tables`, `runs` and the connections stay closed). |
 
 The same as SQL, for the roles `pipeline`, `worker`, `requester` and `consumer` and a target database `dwh`. It was tried out with exactly these statements:
 
@@ -851,6 +851,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE worker GRANT USAGE ON SCHEMAS TO consumer;
 ALTER DEFAULT PRIVILEGES FOR ROLE worker GRANT SELECT ON TABLES TO consumer;
 GRANT USAGE ON SCHEMA raw_erp TO consumer;                  -- for a schema that exists already
 GRANT SELECT ON ALL TABLES IN SCHEMA raw_erp TO consumer;   -- and its tables
+GRANT USAGE ON SCHEMA _rowvioli TO consumer;                -- optional: to read the status
+GRANT SELECT ON _rowvioli.status TO consumer;
 ```
 
 A worker needs `CREATE` on the database only to create the schemas of the target tables. With the schemas created beforehand, `GRANT ALL ON SCHEMA raw_erp TO worker` replaces it. Default privileges apply to objects the role named in `FOR ROLE` creates, so name the worker's role there.
@@ -896,6 +898,8 @@ A connector may offer a second function, `tables(connection)`, that lists the ta
 | `odbc` | any ODBC source; tested against PostgreSQL only | arrow-odbc | an ODBC driver manager and the vendor's driver |
 | `file` | CSV, Excel, Parquet, JSON | DuckDB | access to the files |
 | `rest` | flat JSON objects over HTTP, page by page | Python generator | nothing |
+
+`postgres` and `odbc` read the whole table and know no option; `rest` knows `path`, `columns`, `page` and `rows`; `file` knows those of DuckDB's readers. An option a connector does not know fails the run, naming the table, the option and the options the connector knows (`public.customers: the option incremental is not one of the postgres connector's; it knows no option`), so `incremental = "updated"` is never taken for a load that is not incremental. A connector of your own decides for itself (decision 47).
 
 **`odbc`** reads the whole table with `SELECT * FROM <table>`. The connection has one field, `string`, an ODBC connection string. The table name is dotted parts of letters, digits and underscores and is not quoted. The column types follow the driver's description of the columns. Without the driver manager the connector fails and says to install `unixodbc` (libodbc). `rowvioli list` reads the tables and their primary keys from `INFORMATION_SCHEMA`, so a source without it needs its tables block written by hand. It is tested against PostgreSQL through the open psqlODBC driver; SQL Server and Informix are not tested, so check the types of decimals, dates, timestamps and unbounded text on them first. A text value longer than the size the driver reports for its column (psqlODBC: 8190 bytes for `text`, raised with `MaxLongVarcharSize=<bytes>` in the connection string) fails the run instead of being cut; for columns the driver reports as unbounded, such as `varchar(max)`, rowvioli allows 1 MiB per value (untested). The tests need a driver manager and the driver `PostgreSQL Unicode`; where there is none, they skip and name `tests/odbc/run.sh`, which runs them in a container.
 
