@@ -23,6 +23,8 @@ Changed (a working set-up can notice these):
 - A CSV skips no line before its header unless `skip` says so. A CSV with lines before its header needs `skip`.
 - A CSV that splits into a single column fails unless `sep` is given. A CSV of one column needs `sep`.
 
+Lower dependency floors, each tried with the whole suite (CI now runs it on the floors): `pyarrow>=19` (was 26), `pynacl>=1.5` (was 1.6), `duckdb>=1.5` (was 2), `arrow-odbc>=9.3.0` (was 10.7). `adbc-driver-postgresql>=1.13` and `httpx>=0.28` stay.
+
 Fixed:
 
 - The next run of a table closes the row of a run that died: `failed`, reason `worker lost`, with a finish time, instead of `running` for ever.
