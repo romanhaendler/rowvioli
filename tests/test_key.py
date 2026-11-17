@@ -31,3 +31,8 @@ def test_version_prints_the_installed_version(rv):
     r = rv.run("--version")
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == version("rowvioli")
+
+
+def test_key_new_help_names_new_and_what_it_writes(rv):
+    r = rv.run("key", "new", "--help")
+    assert r.returncode == 0 and "new" in r.stdout and "worker.key" in r.stdout and "worker.pub" in r.stdout

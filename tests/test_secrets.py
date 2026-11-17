@@ -93,6 +93,7 @@ def test_the_lines_of_work_leak_no_connection_value(erp):
 
 @pytest.mark.parametrize("command", ["status", "run"])
 def test_an_error_of_the_target_shows_user_and_host_and_hides_only_the_password(rv, command):
+    assert rv.run("key", "new").returncode == 0  # `run` checks the key file before it connects
     url = rv.target_url.replace("postgres:x@", "postgres:zzzz@")
     r = rv.run(command, env={"ROWVIOLI_TARGET_URL": url}, timeout=20)
     assert r.returncode == 1

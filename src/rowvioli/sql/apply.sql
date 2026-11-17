@@ -24,6 +24,9 @@ SELECT source, source_table, target_schema, target_table, key, max_age::interval
                                                      timezone text, log boolean, max_delete_share numeric,
                                                      max_seconds int, options jsonb)
     ON CONFLICT (source, source_table) DO UPDATE SET target_schema = excluded.target_schema,
+       -- the one thing a worker wrote that apply resets: a table under a new name is new, so it is due at once
+       attempted_at = CASE WHEN (t.target_schema, t.target_table) IS DISTINCT FROM
+                                (excluded.target_schema, excluded.target_table) THEN NULL ELSE t.attempted_at END,
        target_table = excluded.target_table, key = excluded.key,
        max_age = excluded.max_age, at = excluded.at, timezone = excluded.timezone, log = excluded.log,
        max_delete_share = excluded.max_delete_share, max_seconds = excluded.max_seconds, options = excluded.options,

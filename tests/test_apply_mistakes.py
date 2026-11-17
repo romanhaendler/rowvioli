@@ -90,3 +90,19 @@ def test_init_and_key_new_print_one_line_each(rv):
     for args in (["init"], ["key", "new"]):
         r = rv.run(*args)
         assert r.returncode == 0 and len(r.stdout.strip().splitlines()) == 1, r.stdout
+
+
+def test_a_type_one_or_two_edits_off_a_built_in_connector_fails_apply_check(rv):
+    r = check(rv, {"erp.toml": ERP.replace('type = "postgres"', 'type = "postgress"')})
+    assert r.returncode != 0 and "did you mean postgres" in r.stderr, r.stderr
+
+
+@pytest.mark.parametrize("custom", ["sqlite", "weather"])
+def test_a_custom_type_passes_apply_check(rv, custom):
+    assert check(rv, {"erp.toml": ERP.replace('type = "postgres"', f'type = "{custom}"')}).returncode == 0
+
+
+def test_apply_without_a_directory_takes_sources(rv):
+    rv.definition({"erp.toml": ERP})
+    r = rv.run("apply", "--check", env=NO_TARGET)
+    assert r.returncode == 0 and "the definition is valid" in r.stdout, r.stderr
