@@ -12,7 +12,7 @@ All numbers were taken on 2026-11-11 with the scripts in `experiments/`, except 
 
 ## 1. Compare and publish in one transaction
 
-Experiment `01_veroeffentlichen.sql`. This is the first variant of the design: both comparison queries run inside the publishing transaction. Staging table is unlogged.
+Experiment `01_publish.sql`. This is the first variant of the design: both comparison queries run inside the publishing transaction. Staging table is unlogged.
 
 | Step | 10⁶ rows | 10⁷ rows |
 |---|---|---|
@@ -30,7 +30,7 @@ Applying the diff took a conspicuous 16 s for the delete step alone at 10⁷ row
 
 ## 2. Row comparison on a wide table
 
-Experiment `02_breite_tabelle.sql`. 900 columns (300 each of integer, `numeric(12,2)` and 8-character text), 100,000 rows, 784 MB per table. The change is placed in the last column, the worst case for a column-by-column comparison.
+Experiment `02_wide_table.sql`. 900 columns (300 each of integer, `numeric(12,2)` and 8-character text), 100,000 rows, 784 MB per table. The change is placed in the last column, the worst case for a column-by-column comparison.
 
 | Query | Duration |
 |---|---|
@@ -53,7 +53,7 @@ Not measured: a million rows of this width. Linear growth would mean about a min
 
 ## 3. Computing the diff before the transaction
 
-Experiment `03_unterschiede_vorab.sql`, 10⁷ rows, `work_mem` 256 MB, unlogged staging table. The diff goes into a table of its own with `CREATE TABLE ... AS`, which allows Postgres to run the query in parallel.
+Experiment `03_diff_upfront.sql`, 10⁷ rows, `work_mem` 256 MB, unlogged staging table. The diff goes into a table of its own with `CREATE TABLE ... AS`, which allows Postgres to run the query in parallel.
 
 | Step | Duration |
 |---|---|
@@ -65,7 +65,7 @@ The publishing transaction shrinks from 59 s to 15 s and depends only on the num
 
 ## 4. Killing a client
 
-Experiment `04_harter_abbruch.sh`. A client holds an advisory lock and is ended with `kill -9`.
+Experiment `04_hard_kill.sh`. A client holds an advisory lock and is ended with `kill -9`.
 
 | Situation | Lock released after |
 |---|---|
@@ -77,7 +77,7 @@ Not measured: a machine or network failure, where nobody closes the connection. 
 
 ## 5. Claiming with several workers
 
-Experiment `05_vergabe.sql` and `05_vergabe.sh`. Two sources with `parallel` 4 and 2, 40 and 10 waiting runs, 12 workers that each claim, work for 0.15 to 0.35 s, record `ok` and release the lock. One additional worker claims a run and is ended with `kill -9`. A probe counts the held table locks per source every 20 ms.
+Experiment `05_claim.sql` and `05_claim.sh`. Two sources with `parallel` 4 and 2, 40 and 10 waiting runs, 12 workers that each claim, work for 0.15 to 0.35 s, record `ok` and release the lock. One additional worker claims a run and is ended with `kill -9`. A probe counts the held table locks per source every 20 ms.
 
 | Observation | Result |
 |---|---|
@@ -110,7 +110,7 @@ The same script shows how `ROW(...)` compares:
 
 ## 7. Encrypting secrets
 
-Experiment `07_geheimnisse.py`, PyNaCl 1.6.2. Not a timing but a check of the properties the encrypted connections rely on. The experiment encrypts a single named value. The design now encrypts a whole connection block under the name of its source (decision 26).
+Experiment `07_secrets.py`, PyNaCl 1.6.2. Not a timing but a check of the properties the encrypted connections rely on. The experiment encrypts a single named value. The design now encrypts a whole connection block under the name of its source (decision 26).
 
 | Property | Result |
 |---|---|
@@ -125,7 +125,7 @@ A 54-byte plaintext becomes a 102-byte ciphertext.
 
 ## 8. The driver of the control connection
 
-Experiment `08_treiber.py`, adbc-driver-postgresql 1.13.0, pyarrow 26.0.1, psycopg 3.3.8, Python client on macOS against `postgres:16-alpine` in Docker without limits. The question: can ADBC alone do everything a run needs on one connection, or is a second Postgres driver necessary?
+Experiment `08_drivers.py`, adbc-driver-postgresql 1.13.0, pyarrow 26.0.1, psycopg 3.3.8, Python client on macOS against `postgres:16-alpine` in Docker without limits. The question: can ADBC alone do everything a run needs on one connection, or is a second Postgres driver necessary?
 
 Each variant plays two complete runs on a single connection: take a session-level advisory lock, fill a TEMP staging table with 10⁶ rows of 8 columns (integer, text, decimal, timestamp with time zone, date, boolean, float, a column of nulls), compute the diff, publish in a transaction. The second run changes 1 % of the rows. A second connection watches.
 
