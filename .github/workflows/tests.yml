@@ -35,8 +35,8 @@ jobs:
       - uses: actions/checkout@v4
       # fails if the load fails; status starts only after a successful load
       - run: docker compose up -d
-      # fails if status cannot show the mirror
-      - run: docker compose wait status
+      # fails if status cannot show the mirror; not `docker compose wait`: it finds no container once status has exited
+      - run: test "$(docker wait "$(docker compose ps -aq status)")" = 0
       - if: always()
         run: docker compose logs rowvioli status
       - if: always()

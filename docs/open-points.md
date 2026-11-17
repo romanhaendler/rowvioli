@@ -21,7 +21,6 @@ These follow from the design or from documentation and were not tried out. The p
 From the second round:
 
 - **The behaviour during a failover.** A target address with several nodes and `target_session_attrs=read-write` works through ADBC: `init` and `status` went to the writable one of two local servers, the other read-only.
-- **The quickstart and CI on Linux.** The tests and the quickstart are set up to run on Linux in CI (`.github/workflows/tests.yml`), but the repo has no remote, so that has never run. The whole suite has passed in a Linux container on an arm64 Mac (`tests/odbc/run.sh tests`), so ADBC works from a Linux client. The quickstart has passed with Docker Desktop on the same Mac.
 - **Windows.** The stop through Ctrl+Break and the worker's threads were written for it; no test runs there.
 
 Unchanged from the first round:
