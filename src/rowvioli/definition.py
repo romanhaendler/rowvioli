@@ -69,6 +69,8 @@ def read(directory, env=None, only=None):
                 typos(t, spot)
                 for k in (SOURCE_SETTINGS.keys() - TABLE_SETTINGS.keys()) & t.keys():
                     raise SystemExit(f"{spot}: {k} belongs to the source, not to a table")
+                if s["type"] == "file" and ("*" in table or "?" in table) and "target_table" not in t:
+                    raise SystemExit(f"{spot}: a pattern needs target_table, since no table name follows from it")
                 key = t.get("key")
                 if key is not None and not (key and all(isinstance(c, str) and c for c in key)):
                     raise SystemExit(f"{spot}: key must be a list of column names")
