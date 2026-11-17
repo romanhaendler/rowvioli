@@ -106,3 +106,56 @@ def test_apply_without_a_directory_takes_sources(rv):
     rv.definition({"erp.toml": ERP})
     r = rv.run("apply", "--check", env=NO_TARGET)
     assert r.returncode == 0 and "the definition is valid" in r.stdout, r.stderr
+
+
+@pytest.mark.parametrize("old, new, setting", [
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { max_aeg = "5m" }', "max_age"),  # a swap of neighbours is one edit
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { kye = ["id"] }', "key"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { ky = ["id"] }', "key"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { kee = ["id"] }', "key"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { lgo = false }', "log"),
+])
+def test_a_short_or_swapped_setting_fails_apply_check(rv, old, new, setting):
+    r = check(rv, {"erp.toml": ERP.replace(old, new)})
+    assert r.returncode != 0 and f"did you mean {setting}" in r.stderr, r.stderr
+
+
+def test_the_connector_options_the_documents_use_are_no_typos(rv):
+    options = ('sep = ";", skip = 1, sheet = "a", page = "p", path = "/x", rows = "d", columns = { a = "text" }, '
+               'header = true, quote = "x"')
+    r = check(rv, {"erp.toml": ERP.replace('"dbo.Notes"     = {}', f'"dbo.Notes"     = {{ {options} }}')})
+    assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.parametrize("typo, built_in", [("fiel", "file"), ("rset", "rest"), ("postgresql", "postgres"),
+                                            ("odbd", "odbc"), ("postgre", "postgres")])
+def test_a_type_one_edit_from_a_built_in_name_fails_apply_check_and_says_how_to_pass(rv, typo, built_in):
+    r = check(rv, {"erp.toml": ERP.replace('type = "postgres"', f'type = "{typo}"')})
+    assert r.returncode != 0 and f"did you mean {built_in}" in r.stderr, r.stderr
+    assert "is not a connector" not in r.stderr and "installed" in r.stderr, r.stderr
+
+
+@pytest.mark.parametrize("passing", ["postgres", "odbc", "postgis", "weather", "testing"])
+def test_a_built_in_an_installed_and_a_far_type_pass_apply_check(rv, passing):
+    # `testing` is the connector of tests/connector, installed beside the program: an installed type always passes
+    assert check(rv, {"erp.toml": ERP.replace('type = "postgres"', f'type = "{passing}"')}).returncode == 0
+
+
+def test_apply_without_a_directory_and_without_sources_names_where_it_looked(rv):
+    r = rv.run("apply", "--check", env=NO_TARGET)
+    assert r.returncode != 0 and str((rv.dir / "sources").resolve()) in r.stderr
+    assert "rowvioli apply <directory>" in r.stderr
+
+
+@pytest.mark.parametrize("url", ["postgresql://u:pa@ss@127.0.0.1:1/db", "postgresql://u:p@a@b@127.0.0.1:1/db?x=1"])
+def test_a_target_address_with_a_second_at_fails_before_connecting_and_shows_no_part_of_it(rv, url):
+    for command in ("init", "status", "run"):
+        r = rv.run(command, env={"ROWVIOLI_TARGET_URL": url}, timeout=10)
+        assert r.returncode != 0 and "percent-encoded" in r.stderr, r.stderr
+        assert "127.0.0.1" not in r.stderr and "u:p" not in r.stderr, r.stderr
+
+
+def test_a_target_address_with_several_hosts_and_a_query_string_is_no_slip(rv):
+    url = "postgresql://postgres:x@127.0.0.1:1,127.0.0.1:2/db?connect_timeout=1&application_name=a"
+    r = rv.run("status", env={"ROWVIOLI_TARGET_URL": url}, timeout=20)
+    assert "percent-encoded" not in r.stderr

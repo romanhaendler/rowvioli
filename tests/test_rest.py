@@ -283,3 +283,9 @@ def test_a_missing_rows_field_fails_the_run_naming_rows_and_keeps_the_mirror(api
     assert api.run("run").returncode == 1
     assert "rows" in reason(api)
     assert api.target("select * from raw_weather.a") == before
+
+
+@pytest.mark.parametrize("rows", ['""', "5", "true"])
+def test_rows_that_is_no_field_name_fails_the_run_naming_the_option(api, rows):
+    r, _ = load(api, f'a = {{ key = ["station"], path = "/readings", rows = {rows}, columns = {COLUMNS} }}')
+    assert r.returncode == 1 and reason(api).endswith("a: the option rows must be a field name"), reason(api)
