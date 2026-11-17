@@ -1,17 +1,36 @@
 [project]
 name = "rowvioli"
-version = "0.2.0"
+version = "0.1.0"
 description = "Mirrors tables from source systems into PostgreSQL, as fresh as each table's maximum age"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
+authors = [{ name = "the rowvioli authors" }]
+keywords = ["postgresql", "etl", "mirror", "replication", "data-loading"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Topic :: Database",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+]
 requires-python = ">=3.11"
-dependencies = ["pyarrow", "adbc-driver-postgresql", "pynacl"]
+dependencies = ["pyarrow>=26", "adbc-driver-postgresql>=1.13", "pynacl>=1.6"]
+
+[project.urls]
+Homepage = "https://github.com/romanhaendler/rowvioli"
+Repository = "https://github.com/romanhaendler/rowvioli"
+Issues = "https://github.com/romanhaendler/rowvioli/issues"
+Changelog = "https://github.com/romanhaendler/rowvioli/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-file = ["duckdb"]
-odbc = ["arrow-odbc"]
-rest = ["httpx"]
+file = ["duckdb>=2"]
+odbc = ["arrow-odbc>=10.7"]
+rest = ["httpx>=0.28"]
 
 [project.scripts]
 rowvioli = "rowvioli.cli:main"

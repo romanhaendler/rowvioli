@@ -521,7 +521,7 @@ wheels = [
 
 [[package]]
 name = "rowvioli"
-version = "0.2.0"
+version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "adbc-driver-postgresql" },
@@ -550,12 +550,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "adbc-driver-postgresql" },
-    { name = "arrow-odbc", marker = "extra == 'odbc'" },
-    { name = "duckdb", marker = "extra == 'file'" },
-    { name = "httpx", marker = "extra == 'rest'" },
-    { name = "pyarrow" },
-    { name = "pynacl" },
+    { name = "adbc-driver-postgresql", specifier = ">=1.13" },
+    { name = "arrow-odbc", marker = "extra == 'odbc'", specifier = ">=10.7" },
+    { name = "duckdb", marker = "extra == 'file'", specifier = ">=2" },
+    { name = "httpx", marker = "extra == 'rest'", specifier = ">=0.28" },
+    { name = "pyarrow", specifier = ">=26" },
+    { name = "pynacl", specifier = ">=1.6" },
 ]
 provides-extras = ["file", "odbc", "rest"]
 

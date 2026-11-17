@@ -1,6 +1,6 @@
 # Shakedown 2026-11-15: source data
 
-Status: needs-triage (taken up in `spec.md`)
+Status: resolved (taken up in `spec.md`)
 
 From H2 (50 source tables, a file and a REST source, compared by md5 of the row text). Not covered: other
 Postgres versions, ODBC, more than 300 columns.

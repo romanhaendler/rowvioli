@@ -1,6 +1,6 @@
 # Shakedown 2026-11-15: install and target
 
-Status: needs-triage (taken up in `spec.md`)
+Status: resolved (taken up in `spec.md`)
 
 From H1. Wheel on Python 3.11 (`python:3.11-slim`) and 3.14; targets Postgres 15 and 18; pgbouncer.
 Not covered: Postgres 17, ODBC and REST in use.

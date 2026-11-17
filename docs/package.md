@@ -1,6 +1,6 @@
 # Package and first version
 
-The package as built in version 0.2, not yet published (`.scratch/v0.1/spec.md`, `.scratch/connectors/spec.md`).
+The package as released in version 0.1.0. The specs under `.scratch/` call the two steps of building it 0.1 and 0.2; both are in release 0.1.0.
 
 ## What the package is
 
@@ -9,9 +9,9 @@ The package as built in version 0.2, not yet published (`.scratch/v0.1/spec.md`,
 - **Python 3.11 or newer**, because TOML is then read without an extra package.
 - **No official Docker image.** The repo carries an example Dockerfile into which users put the vendor drivers themselves (see decision 16).
 
-## What goes into 0.2
+## What goes into 0.1.0
 
-| Part | In 0.2 | Later |
+| Part | In 0.1.0 | Later |
 |---|---|---|
 | Commands | `init`, `key new`, `list`, `apply` with `--check`, `run`, `work`, `status` | `request` as a shortcut for setting `requested_at` |
 | Connectors | `postgres`, `file` (CSV, Excel, Parquet), `odbc`, `rest` | JSON files in `file` |
@@ -21,7 +21,7 @@ The package as built in version 0.2, not yet published (`.scratch/v0.1/spec.md`,
 Two points:
 
 - **`work` is part of the package.** It is the loop of `run` without the end. Several workers on several machines need nothing more.
-- **`odbc` and `rest` came with 0.2.** `odbc` is tested in CI against PostgreSQL through psqlODBC, a free source; SQL Server and Informix are untested. `rest` is tested against an HTTP server inside the test. Run the odbc tests on a machine without a driver manager with `tests/odbc/run.sh`.
+- **`odbc` and `rest` are part of it.** `odbc` is tested in CI against PostgreSQL through psqlODBC, a free source; SQL Server and Informix are untested. `rest` is tested against an HTTP server inside the test. Run the odbc tests on a machine without a driver manager with `tests/odbc/run.sh`.
 
 ## Modularity
 
@@ -69,4 +69,4 @@ The first screen of the README shows the whole usage: one source file, the targe
 
 ## Name
 
-The project is called `rowvioli`: ravioli made of rows. It loads in small parcels. The search in the trademark registers is an open point (`docs/open-points.md`).
+The project is called `rowvioli`: ravioli made of rows. It loads in small parcels. The owner searched the trademark registers (DPMAregister, EUIPO TMview, USPTO) on 2026-11-17 and found no conflict.

@@ -12,7 +12,7 @@ decides whether the program can do better.
 - The program under test is the wheel `<scratch>/dist/rowvioli-<version>-py3-none-any.whl`. Install it
   into a virtual environment inside your directory (`uv venv && uv pip install '<wheel>[file,odbc,rest]'`)
   or into a container. Never install the repository's source, never edit anything under
-  `/Users/romanhaendler/cc/rowvioli` - it is read-only for you. You may read it: `README.md`,
+  the repository - it is read-only for you. You may read it: `README.md`,
   `docs/connector-guide.md`, `docs/decisions.md` (settled decisions), `docs/open-points.md` (known limits),
   `GLOSSARY.md`, `src/rowvioli/` (the source), `examples/`.
 - Work only inside your directory, given in your task.
@@ -29,7 +29,7 @@ decides whether the program can do better.
 ## Already known
 
 `docs/open-points.md` lists what is known, unverified or not built, and earlier runs stand in
-`/Users/romanhaendler/cc/rowvioli/.scratch/shakedown/` if that exists. Report a known limit again only
+`.scratch/shakedown/` in the repository if that exists. Report a known limit again only
 where your host makes it worse or different than written.
 
 ## What counts as a finding
@@ -100,7 +100,7 @@ would give up. Say what they reached for first and were surprised not to find.
 If your task names a reviewer (P23 and up), these replace the ground rules on the wheel above:
 
 - Work on an export of the repository at `<scratch>/<your directory>/repo`
-  (`git -C /Users/romanhaendler/cc/rowvioli archive HEAD | tar -x -C …`, then `uv sync`). Change, break
+  (`git -C <repository> archive HEAD | tar -x -C …`, then `uv sync`). Change, break
   and measure there freely; never edit the workspace itself. Tests that need Docker start their own
   containers; run only the files you need, not the whole suite more than once.
 - Install review tools (mutmut, hypothesis, vulture, radon) into the export's environment, never globally.

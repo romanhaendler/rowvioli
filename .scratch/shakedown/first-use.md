@@ -1,6 +1,6 @@
 # Shakedown 2026-11-15: first use
 
-Status: needs-triage (taken up in `spec.md`)
+Status: resolved (taken up in `spec.md`)
 
 From P1 (Lena, beginner: 25 s from install to the first mirror) and P4 (Jonas, a coding agent on README,
 connector guide and `--help` only: four of five requests worked).

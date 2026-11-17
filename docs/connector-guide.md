@@ -113,7 +113,7 @@ rowvioli status
 
 Until rowvioli is on PyPI, put the path of a checkout in place of `rowvioli` in the first line.
 
-**Beside a wheel that is installed already**, install the wheel again with the connector, by the same command: `uv tool install --reinstall ./rowvioli-0.2.0-py3-none-any.whl --with ./rowvioli-testing`. `uv tool install` replaces what a tool had, so name every `--with` the worker needs. With `pip`, `pip install ./rowvioli-testing` into the environment of the wheel does the same. Either way the connector is found by its entry point at the next start, and `rowvioli run` lists the installed types when one is missing. The status shows `demo numbers ok`, and `select * from raw_demo.numbers` in the target returns 1, 2, 3.
+**Beside a wheel that is installed already**, install the wheel again with the connector, by the same command: `uv tool install --reinstall ./rowvioli-0.1.0-py3-none-any.whl --with ./rowvioli-testing`. `uv tool install` replaces what a tool had, so name every `--with` the worker needs. With `pip`, `pip install ./rowvioli-testing` into the environment of the wheel does the same. Either way the connector is found by its entry point at the next start, and `rowvioli run` lists the installed types when one is missing. The status shows `demo numbers ok`, and `select * from raw_demo.numbers` in the target returns 1, 2, 3.
 
 Now make it yours:
 

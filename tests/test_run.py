@@ -197,7 +197,7 @@ def test_a_mirror_with_a_json_column_from_before_fails_naming_the_column_and_sta
     erp.source("""create table docs (id int primary key, j json); insert into docs values (1, '{"a": 1}')""")
     apply(erp, definition(erp, '"public.docs" = { key = ["id"] }\n'))
     ok(erp)
-    erp.target("alter table raw_erp.docs alter j type json")  # as the wheel 0.2.0 left it
+    erp.target("alter table raw_erp.docs alter j type json")  # as an earlier build left it
     assert run(erp, "erp")[0] == 1
     assert erp.target("select reason from _rowvioli.status") == [
         ("column j has changed its type from json to jsonb",)]

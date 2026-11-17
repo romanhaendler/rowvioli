@@ -1,6 +1,6 @@
 # Open points
 
-What is undecided, unverified or unbuilt as of 2026-11-15, after versions 0.1 and 0.2, load times, visibility, target names, history and the first shakedown.
+What is undecided, unverified or unbuilt as of 2026-11-17, before the release of 0.1.0, after load times, visibility, target names, history and the first shakedown.
 
 ## Decisions for the owner
 
@@ -22,6 +22,7 @@ From the second round:
 
 - **The behaviour during a failover.** A target address with several nodes and `target_session_attrs=read-write` works through ADBC: `init` and `status` went to the writable one of two local servers, the other read-only.
 - **The quickstart and CI on Linux.** The tests and the quickstart are set up to run on Linux in CI (`.github/workflows/tests.yml`), but the repo has no remote, so that has never run. The whole suite has passed in a Linux container on an arm64 Mac (`tests/odbc/run.sh tests`), so ADBC works from a Linux client. The quickstart has passed with Docker Desktop on the same Mac.
+- **Windows.** The stop through Ctrl+Break and the worker's threads were written for it; no test runs there.
 
 Unchanged from the first round:
 
@@ -76,7 +77,7 @@ Unchanged from the first round:
 - The web UI.
 - The command `request`, reading only rows from a timestamp on, patterns for table names, and workers that serve only some sources.
 - Migrating the schema from one version to the next.
-- Publishing to PyPI. Nothing is released or tagged.
+- Publishing 0.1.0: the tag `v0.1.0` and trusted publishing on PyPI are the owner's steps.
 
 The prototype's code is on branch `prototype-impl`.
 
@@ -85,4 +86,4 @@ The prototype's code is on branch `prototype-impl`.
 - Whether Sling or ingestr already cover most of this.
 - DuckDB as the engine of the whole program instead of only the `file` connector.
 - Whether another small tool for mirroring into Postgres already works with a maximum age per table.
-- A formal trademark search for the name `rowvioli`: DPMAregister, EUIPO TMview and USPTO, by the owner, before publishing. Checked on 2026-11-11 and free: the PyPI project, the domains `rowvioli.com`, `.de`, `.io`, `.dev`, GitHub repositories and the account, a web search. None is reserved yet; registering them is the owner's step.
+- The PyPI project, the domains `rowvioli.com`, `.de`, `.io`, `.dev` and the GitHub account are not reserved yet; registering them is the owner's step. They were free on 2026-11-11.

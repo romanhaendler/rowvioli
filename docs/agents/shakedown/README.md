@@ -5,7 +5,7 @@ fresh machine, against targets and sources that are not the test suite's, and in
 are not the maintainer (a beginner, a coding agent, a security reviewer). The test suite runs against the
 checkout; this runs against the wheel, in the user's set-up, and finds what the suite cannot see.
 
-Taken over from umriss (`~/cc/umriss/docs/agents/shakedown/`), cut down to what fits a program that
+Taken over from the project umriss, cut down to what fits a program that
 mirrors tables: no browsers, no design, no touch.
 
 Run it before a release, before a change to a dependency floor or the target's schema, and otherwise every

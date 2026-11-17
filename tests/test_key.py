@@ -24,3 +24,10 @@ def test_key_new_twice_gives_different_pairs(rv):
     (rv.dir / "worker.pub").unlink()
     assert rv.run("key", "new").returncode == 0
     assert (rv.dir / "worker.pub").read_text() != first
+
+
+def test_version_prints_the_installed_version(rv):
+    from importlib.metadata import version
+    r = rv.run("--version")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == version("rowvioli")

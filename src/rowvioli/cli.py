@@ -1,5 +1,6 @@
 """The commands: arguments, the answer on stdout, the exit code."""
 import argparse
+import importlib.metadata
 import json
 import os
 import sys
@@ -13,6 +14,7 @@ from . import apply, contract, definition, load, seal, target, work
 
 def main():
     p = argparse.ArgumentParser(prog="rowvioli")
+    p.add_argument("--version", action="version", version=importlib.metadata.version("rowvioli"))
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("init", help="create the schema _rowvioli in the target")
     sub.add_parser("key", help="create a key pair").add_argument("action", choices=["new"])

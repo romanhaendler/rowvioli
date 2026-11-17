@@ -1,6 +1,6 @@
 # Shakedown 2026-11-15
 
-Status: needs-triage (taken up in `spec.md`)
+Status: resolved (taken up in `spec.md`)
 
 The first run (procedure: `docs/agents/shakedown/`). Wheel 0.2.0, one wave of six Sonnet agents: H1 install
 and target, H2 hostile source data, P1 Lena, P4 Jonas, P18 security, P27 the deleter. Not run: H4, P3, P16,

@@ -1,6 +1,6 @@
 # Shakedown 2026-11-15: code
 
-Status: needs-triage (taken up in `spec.md`)
+Status: resolved (taken up in `spec.md`)
 
 From P27 (the deleter): vulture finds nothing dead in `src` (1142 lines). The fat is in the docs.
 
