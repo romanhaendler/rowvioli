@@ -6,6 +6,12 @@ Added:
 
 - `rowvioli list` reads the source from the target where there is no `sources/` in the current directory and no `--definition`: it decrypts the stored connection with the worker key, so it runs on a worker's machine, which has the connector, the route to the source and no checkout. A new source is applied with an empty `tables` block, listed on a worker's machine and applied again. With `sources/` here or `--definition`, `list` works as before.
 
+## 0.2.2 (2026-11-18)
+
+Changed:
+
+- `apply`, `apply --check` and `list` read the source files in the subfolders of the definition directory too; an error in one of them names it with its subfolder (`crm/crm.toml: ...`). A source file that was kept in a subfolder, a hidden one too, is therefore applied now: move it out of the directory to keep it disabled.
+
 ## 0.2.1 (2026-11-18)
 
 Fixed:
