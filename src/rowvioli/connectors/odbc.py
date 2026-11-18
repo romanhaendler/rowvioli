@@ -1,4 +1,4 @@
-"""The odbc connector: expects `string`, an ODBC connection string; reads the whole table through arrow-odbc as a
+"""The odbc connector: expects `string`, an ODBC connection string, and knows no option; reads the whole table through arrow-odbc as a
 stream of batches whose schema follows the driver's column descriptions. The driver is installed by the operator."""
 import re
 
@@ -7,11 +7,14 @@ try:
 except OSError as e:  # no driver manager: arrow-odbc's own message is a dlopen path
     raise ImportError("the ODBC driver manager is missing; install unixodbc (libodbc)") from e
 
+from ..contract import known_options
+
 # not quoted, since quoting differs between sources, and a plain name needs none on any of them
 PLAIN = re.compile(r"\w+(\.\w+)*")
 
 
 def read(connection, table, options):
+    known_options("odbc", table, options)
     if not PLAIN.fullmatch(table):
         raise Exception(f"{table}: an odbc table name is dotted parts of letters, digits and underscores")
     # shortcut: 1 MiB per text value, a longer one fails the run; when sources hold more, add an option

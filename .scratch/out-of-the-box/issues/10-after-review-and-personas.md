@@ -6,7 +6,7 @@
 
 **Model:** Sonnet
 
-From the review of 2026-11-18 (findings 2 to 7, 9) and the personas P1 and P4 on the wheel.
+From the review of 2026-11-17 (findings 2 to 7, 9) and the personas P1 and P4 on the wheel.
 
 ## What to build
 

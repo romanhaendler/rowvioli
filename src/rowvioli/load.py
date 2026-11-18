@@ -1,4 +1,4 @@
-"""One run, in a process of its own (README "A run"): claim, stage, diff, publish, or fail.
+"""One run, in a process of its own (docs/loading.md "A run"): claim, stage, diff, publish, or fail.
 
 Started by the worker loop as `python -m rowvioli.load <worker> <source> <table>`, with a pipe on stdin that
 ends with the worker. It tells the worker on stdout,
@@ -34,7 +34,7 @@ PRIMARY_KEY = """SELECT a.attname FROM pg_index i, unnest(i.indkey) WITH ORDINAL
 
 
 def claim(conn, worker, source, table):
-    """In one transaction under the counting lock (README "How Postgres counts"): takes the table lock of the
+    """In one transaction under the counting lock (docs/target.md "How Postgres counts"): takes the table lock of the
     most overdue claimable table in scope, counts the attempt and opens the run's row with the hash of the
     definition. Returns the run's facts, as the definition says at this moment, or None."""
     sql(conn, "BEGIN")
@@ -49,6 +49,10 @@ def claim(conn, worker, source, table):
         sql(conn, "SELECT pg_advisory_lock($1::int, $2::int)", [source_id, id])  # the table lock outlives COMMIT
         sql(conn, "UPDATE _rowvioli.tables SET attempted_at = now(), attempts = attempts + 1, reason = NULL"
                   " WHERE id = $1", [id])
+        # the lock was free, so a run of this table that still says `running` is dead (the status shows `worker lost`)
+        sql(conn, """UPDATE _rowvioli.runs SET status = 'failed', finished_at = clock_timestamp(), reason = 'worker lost'
+                      WHERE run = (SELECT max(run) FROM _rowvioli.runs WHERE "table" = $1) AND status = 'running'""",
+            [id])  # only its newest can be: the one row, not all of runs, under the lock all claims share
         [(run,)] = sql(conn, """INSERT INTO _rowvioli.runs ("table", worker, definition)
                                 SELECT $1, $2, definition FROM _rowvioli.meta RETURNING run""", [id, worker])
         with conn.cursor() as c:
@@ -74,6 +78,7 @@ def load(conn, t):
     staged = sql(conn, COLUMNS, ["pg_temp._stage"])
     mirror = sql(conn, COLUMNS, [t["mirror"]])  # empty before the first run
     log_columns = sql(conn, COLUMNS, [t["log_table"]])
+    staged = fit(conn, t, staged, mirror, log_columns)
     check(conn, t, staged, mirror, log_columns)
     t["step"] = "comparing with the mirror"
     counts = diff(conn, t, staged, mirror) if t["key"] else None
@@ -84,7 +89,7 @@ def load(conn, t):
 
 
 def check(conn, t, staged, mirror, log_columns):
-    """Step 4 (README "Checks before publishing"). A new column passes, publish adds it (decision 17)."""
+    """Step 4 (docs/loading.md "Checks before publishing"). A new column passes, publish adds it (decision 17)."""
     types = dict(staged)
     for name, type in mirror:
         if name not in types:
@@ -119,6 +124,44 @@ def check(conn, t, staged, mirror, log_columns):
             raise Exception(f"a key combination of ({names}) occurs twice")
 
 
+def fit(conn, t, staged, mirror, log_columns):
+    """A staged column whose type differs from the target's only in its precision or scale (numeric and
+    numeric(10,2)) counts as the mirror's, so that the comparison happens in the target type, when every value
+    passes unchanged into the mirror and the change log (decision 49). Returns the staged columns with the types
+    they are checked and published in."""
+    pairs = [(table, name, into) for table, columns in ((t["name"], mirror), (t["name"] + "__log", log_columns))
+             for name, type in staged if (into := dict(columns).get(name, type)) != type]
+    if not pairs:
+        return staged
+    # in one query: which differ only in their modifier, and which target has none, so that a cast changes no value
+    kinds = sql(conn, """SELECT (v->>0)::regtype = (v->>1)::regtype, (v->>1)::regtype::text = v->>1
+                           FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY e(v, n) ORDER BY n""",
+                [json.dumps([[dict(staged)[name], into] for _, name, into in pairs])])
+    misfit(conn, [p for p, (same, plain) in zip(pairs, kinds) if same and not plain])
+    # the others are a real change, which check() catches. The staging table is not altered: numbers compare equal
+    # whatever their modifier, and the mirror's type applies on insert, where it now changes no value
+    taken = {name: into for (table, name, into), (same, _) in zip(pairs, kinds) if same and table == t["name"]}
+    return [(name, taken.get(name, type)) for name, type in staged]
+
+
+def misfit(conn, columns):
+    """Fails on the first value of the (table, column, type) `columns` that its type would change, in one scan."""
+    if not columns:
+        return
+    changed = [f"{quote(name)}::{type} IS DISTINCT FROM {quote(name)}" for _, name, type in columns]
+    values = ", ".join(f"CASE WHEN {c} THEN {quote(name)}::text END" for c, (_, name, _) in zip(changed, columns))
+    try:
+        row = sql(conn, f"SELECT {values} FROM _stage WHERE {' OR '.join(changed)} LIMIT 1")
+    except Exception as e:  # a value too large for the precision raises instead; column by column finds which
+        if len(columns) > 1:
+            for column in columns:
+                misfit(conn, [column])
+        row = [[reason_line([], e, "checking the data")]]
+    for (table, name, type), value in zip(columns, row[0] if row else []):
+        if value is not None:
+            raise Exception(f"column {name} holds a value that its type {type} in {table} does not hold ({value})")
+
+
 def check_delete_share(conn, t, rows_read, counts):
     """After step 5: a broken source must not empty the mirror in a perfectly consistent way (decision 18).
     Without a key the shrinkage counts."""
@@ -136,7 +179,8 @@ def stage(conn, t):
         connection = seal.unseal(os.environ["ROWVIOLI_KEY_FILE"], t["key_id"], t["source"], t["connection"])
     except Exception as e:
         raise Exception(f"the connection of source {t['source']} cannot be decrypted on worker {t['worker']}: {e}")
-    t["values"] = connection_values(connection)
+    # a directory is no secret, and a reason without it is not readable (decision 47)
+    t["values"] = connection_values(connection, ("path",) if t["type"] == "file" else ())
     options = dict(t["options"])
     if isinstance(c := options.get("columns"), list) and all(isinstance(p, list) and len(p) == 2 for p in c):
         options["columns"] = dict(c)  # a dict is stored as pairs (definition.ordered), any other value as written
@@ -147,11 +191,23 @@ def stage(conn, t):
         raise Exception(f"table {t['source_table']} has no column {', '.join(gone)}; it has: "
                         + ", ".join(batches.schema.names))
     with conn.cursor() as c:
-        rows_read = c.adbc_ingest("_stage", batches, mode="create", temporary=True)
+        # the driver creates every decimal as numeric; Arrow's decimal128 keeps its precision and scale (decision 49).
+        # A scale below 0 or above the precision needs Postgres 15 in the target: such a column stays numeric.
+        exact = {f.name: f"numeric({f.type.precision}, {f.type.scale})" for f in batches.schema
+                 if pa.types.is_decimal128(f.type) and 0 <= f.type.scale <= f.type.precision}
+        # a reader without batches: Arrow cannot make an empty array of a list of an extension type
+        empty = pa.RecordBatchReader.from_batches(batches.schema, [])
+        c.adbc_ingest("_driver" if exact else "_stage", empty, mode="create", temporary=True)
+        if exact:  # a table made AS SELECT takes milliseconds, an ALTER of 300 columns seconds
+            sql(conn, "CREATE TEMP TABLE _stage AS SELECT " + ", ".join(
+                f"{quote(n)}::{exact[n]} AS {quote(n)}" if n in exact else quote(n) for n in batches.schema.names)
+                + " FROM _driver")
+            sql(conn, "DROP TABLE _driver")
+        rows_read = c.adbc_ingest("_stage", batches, mode="append", temporary=True)
     # zero rows protect a mirror that has rows; a first load or an empty mirror publishes them
-    if rows_read == 0 and sql(conn, "SELECT to_regclass($1)", [t["mirror"]])[0][0] and \
+    if rows_read == 0 and t["max_delete_share"] < 1 and sql(conn, "SELECT to_regclass($1)", [t["mirror"]])[0][0] and \
             sql(conn, f"SELECT 1 FROM {t['mirror']} LIMIT 1"):
-        raise Exception("the source delivered zero rows")
+        raise Exception("the source delivered zero rows; max_delete_share = 1.0 allows an empty table")
     # json has no equality, so the comparison could not run; the driver writes Arrow's json only as json
     jsonb = {"json": "jsonb", "json[]": "jsonb[]"}
     to_jsonb = [f"ALTER {quote(n)} TYPE {jsonb[type]} USING {quote(n)}::{jsonb[type]}"
@@ -174,7 +230,7 @@ def stream(batches):
 
 
 def diff(conn, t, staged, mirror):
-    """Step 5: the rows that differ into the TEMP table _diff (README "Comparing in the target"), every column
+    """Step 5: the rows that differ into the TEMP table _diff (docs/target.md "Comparing in the target"), every column
     list by name. Returns the counts."""
     had = dict(mirror)
     s = ", ".join("s." + quote(c) for c, _ in staged)
@@ -275,11 +331,11 @@ def widen(conn, table, staged, existing):
 ODBC_PASSWORD = re.compile(r"(?:^|;)\s*(?:PWD|Password)\s*=\s*(\{(?:[^}]|\}\})*\}|[^;]*)", re.I)
 
 
-def connection_values(value):
+def connection_values(value, readable=()):
     """Every text of a connection, and the password of a URL or an ODBC string in it as written and decoded, since a
-    driver may quote either (README "What happens to the decrypted connection")."""
+    driver may quote either (docs/connections.md "What happens to the decrypted connection")."""
     if isinstance(value, dict):
-        return [s for v in value.values() for s in connection_values(v)]
+        return [s for k, v in value.items() for s in connection_values(v) if k not in readable or s != v]
     if isinstance(value, list):
         return [s for v in value for s in connection_values(v)]
     if not isinstance(value, str):

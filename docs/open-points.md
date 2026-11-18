@@ -1,6 +1,6 @@
 # Open points
 
-What is undecided, unverified or unbuilt at the release of 0.1.0 on 2026-11-17, after load times, visibility, target names, history and the first shakedown.
+What is undecided, unverified or unbuilt at the release of 0.2.0 on 2026-11-18, after load times, visibility, target names, history, three shakedowns and the first mirror out of the box.
 
 ## Decisions for the owner
 
@@ -12,7 +12,6 @@ Decided in the second round and no longer open: new tables of the source do not 
 
 ## Left open
 
-- **Seeing dead runs** (A5, `.scratch/prototype/findings.md`). A dead run's row in `runs` stays `running` without `finished_at`, and only its table shows `failed: worker lost`. If people should see dead runs as such, a second small view over `runs` is needed.
 
 ## Not verified
 
@@ -50,7 +49,7 @@ Unchanged from the first round:
 - **The place where `apply` runs holds every secret** in its environment.
 - **An older ciphertext can be put back** by someone with write access to the target.
 - **A wrongly built connection shows only when a table is loaded.** `apply` does not know the connector; it catches only a `type` near a built-in one (decision 45).
-- **Removing secrets from error texts is best effort.** The program removes every value of a connection as written, stripped of surrounding whitespace and as Python quotes it, and a password in a URL or ODBC string as written and decoded; from the target's errors only the password of its address. A driver can still reformat a connection string or quote part of a value in another way. A secret of one or two characters may also be removed from inside other words of a reason, which makes it unreadable and hides nothing else; a rule for it is not worth its cost. Every value of a connection is removed, also a harmless one: with `path = "csv"` on a `file` source, reasons read `a table must be a file inside ***`.
+- **Removing secrets from error texts is best effort.** The program removes every value of a connection as written, stripped of surrounding whitespace and as Python quotes it, and a password in a URL or ODBC string as written and decoded; from the target's errors only the password of its address. A driver can still reformat a connection string or quote part of a value in another way. A secret of one or two characters may also be removed from inside other words of a reason, which makes it unreadable and hides nothing else; a rule for it is not worth its cost. Every value of a connection is removed, also a harmless one, except the `path` of a `file` connection (decision 47).
 - **The private key file has to reach every worker** once, by whatever the organisation uses for that.
 - **No common point in time in the source.** Two tables are not read at the same moment.
 - **A table with a key cannot have a column `_op`**, nor `_run`, `_loaded_at`, `_valid_from` or `_valid_to` with a change log. The diff, the change log and the history view use these names.
@@ -77,8 +76,11 @@ Unchanged from the first round:
 - **An idle worker keeps one connection to the target open**, with which it asks whether something is claimable.
 - **A process per run costs about 0.18 s.** It matters only for hundreds of tiny tables per minute on one machine.
 - **A worker's restart can take up to `max_seconds`**, because it lets its runs finish (decision 33).
+- **A source can keep computing the read of a run that was ended** (after `max_seconds`, a lost target or a hard kill) until it notices the closed connection. A Postgres source notices when it next sends rows, so a query that computes long before its rows arrive runs to its end, beside the retry.
+- **A full disk on the target can read as `connection to the target lost`**. When the write-ahead log cannot grow, Postgres stops with a PANIC and restarts: the run has the message but can no longer store it. Elsewhere a full disk fails the run with Postgres's message, `could not extend file ...: No space left on device`.
+- **A claim finds a dead run by walking `runs` back from the newest row** to the table's own newest, under the lock all claims share: 1.3 ms when 24,000 runs came since, 11 ms at 200,000 (the whole table scanned took 8 ms). An index on the table and the run would bound it; it needs a migration of the schema, which is not built.
 - **The ADBC driver cannot run `SHOW`** and other statements that return rows but cannot be wrapped into `COPY`.
-- **The driver decides the types in the target** (decision 28). `varchar(n)` arrives as `text` and `numeric(p,s)` as `numeric`, so a change between such types passes the schema check. An unconstrained `numeric` beyond 38 digits fails the run.
+- **The driver decides the types in the target** (decisions 28 and 49). `varchar(n)` arrives as `text`, so a change from `text` to `varchar(n)` passes the schema check and an existing `varchar(n)` target column fails it. A `numeric(p,s)` beyond 38 digits arrives as `numeric` in a new mirror. An unconstrained `numeric` beyond 38 digits, or `NaN`, fails the run. Through ODBC, psqlODBC describes an unconstrained `numeric` as `numeric(28,6)`, and the value arrives cut to six decimals.
 
 ## Not built
 
@@ -90,7 +92,7 @@ The prototype's code is on branch `prototype-impl`.
 
 ## Not examined
 
-- Whether Sling or ingestr already cover most of this.
+- Whether Sling or ingestr already cover most of this. A persona's answer, a lead and not a fact: they cover the loading (more sources, incremental, CDC; their documentation checked on 2026-11-17), not the freshness model. The second half is from memory and unchecked.
 - DuckDB as the engine of the whole program instead of only the `file` connector.
 - Whether another small tool for mirroring into Postgres already works with a maximum age per table.
 - The domains `rowvioli.com`, `.de`, `.io`, `.dev` and a GitHub account or organisation named `rowvioli` are not reserved; they were free on 2026-11-11.

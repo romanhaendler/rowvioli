@@ -6,9 +6,9 @@ import adbc_driver_postgresql.dbapi as adbc
 
 SCHEMA_VERSION = 3
 
-# README "Failures": a dead client or network is noticed by Postgres within seconds to a minute. The URL's keepalive
-# is libpq's, so the worker notices a dead server; SESSION is the server's, so Postgres notices a dead worker and
-# frees its locks (measured: 62 s after the network was cut, without it still held after 240 s)
+# docs/target.md "Failures": a dead client or network is noticed by Postgres within seconds to a minute. The URL's
+# keepalive is libpq's, so the worker notices a dead server; SESSION is the server's, so Postgres notices a dead worker
+# and frees its locks (measured: 62 s after the network was cut, without it still held after 240 s)
 KEEPALIVE = "keepalives_idle=30&keepalives_interval=10&keepalives_count=3&tcp_user_timeout=60000"
 SESSION = {"client_connection_check_interval": "2s", "tcp_keepalives_idle": "30", "tcp_keepalives_interval": "10",
            "tcp_keepalives_count": "3", "tcp_user_timeout": "60000"}
@@ -30,7 +30,7 @@ def check_address(url):
 def connect(init=False, versioned=True):
     """Opens the control connection and refuses a target without `_rowvioli` or with another schema version.
     With init=True a missing `_rowvioli` is created instead. With versioned=False only the status view must
-    exist: a role that may only read it cannot read `meta` (README "The target")."""
+    exist: a role that may only read it cannot read `meta` (docs/operation.md "The target")."""
     url = os.environ.get("ROWVIOLI_TARGET_URL")
     if not url:
         raise SystemExit("ROWVIOLI_TARGET_URL is not set")

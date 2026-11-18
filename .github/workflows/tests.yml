@@ -12,6 +12,11 @@ jobs:
       fail-fast: false
       matrix:
         python: ["3.11", "3.12", "3.13"]
+        # floors: the lowest versions pyproject.toml allows, so that they stay true
+        lowest: [false]
+        include:
+          - { python: "3.11", lowest: true }
+          - { python: "3.13", lowest: true }
     env:
       # overrides .python-version
       UV_PYTHON: ${{ matrix.python }}
@@ -19,12 +24,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: uv sync --locked
+      # --upgrade makes uv replace the locked versions; lowest-direct takes the lowest each direct dependency allows
+      - if: matrix.lowest
+        run: |
+          uv pip install --upgrade --resolution lowest-direct -e ".[file,odbc,rest]"
+          uv pip list
       # the odbc tests reach the Postgres source through psqlODBC; neither is a dependency of rowvioli
       - run: sudo apt-get update && sudo apt-get install -y unixodbc odbc-postgresql
       # without the driver the odbc tests would skip silently
       - run: odbcinst -q -d | grep -q "PostgreSQL Unicode"
       # the harness starts its own Postgres containers with the runner's Docker
-      - run: uv run pytest
+      # --no-sync: uv run would put the locked versions back
+      - run: uv run ${{ matrix.lowest && '--no-sync' || '' }} pytest
 
   quickstart:
     runs-on: ubuntu-24.04

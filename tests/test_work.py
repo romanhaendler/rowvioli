@@ -5,11 +5,14 @@ import pty
 import re
 import select
 import signal
+import socket
 import subprocess
 import time
+import uuid
 
+import psycopg
 import pytest
-from conftest import ROWVIOLI, _query, until
+from conftest import HOST, IMAGE, ROWVIOLI, _query, _wait, until
 from test_run import apply, ok, run
 
 
@@ -56,6 +59,17 @@ def test_a_run_that_exceeds_max_seconds_is_ended_and_the_status_shows_why(ready)
     assert ready.target("select status, reason = %s, finished_at is not null from _rowvioli.runs",
                         [failed["reason"]]) == [("failed", True, True)]
     assert ready.target("select to_regclass('raw_erp.hanging')") == [(None,)]
+
+
+def test_a_run_ended_after_max_seconds_keeps_its_reason_when_a_claim_closed_its_row_first(ready):
+    slow(ready, "hanging", 30, 1)
+    apply(ready, source(ready, "erp", "max_seconds = 2", '"public.hanging" = { key = ["id"] }'))
+    p = ready.start("run")
+    until(lambda: ready.target("select status from _rowvioli.status") == [("loading",)])
+    # what another worker's claim does to a run whose lock it finds free, between the kill and the reason
+    ready.target("update _rowvioli.runs set status = 'failed', finished_at = now(), reason = 'worker lost'")
+    assert p.wait(timeout=15) == 1
+    assert ready.target("select reason from _rowvioli.runs") == [("ended after max_seconds = 2",)]
 
 
 def test_one_slot_loads_the_tables_in_the_order_of_how_far_they_miss_their_maximum_age(ready):
@@ -144,17 +158,22 @@ def test_with_the_limits_full_the_targets_connections_stay_at_the_running_tables
                       where datname = current_database() and pid <> pg_backend_pid()"""
     # the start-up is over when the count has stayed at 2 + 3 for 2 s: run processes started before the first
     # claims committed find nothing and end, and a slow worker may connect late
-    stable, deadline, values = time.monotonic(), time.monotonic() + 30, []
-    while time.monotonic() - stable < 2:
-        values.append(ready.target(connections)[0][0])
-        if values[-1] != 2 + 3:
-            stable = time.monotonic()
-        assert time.monotonic() < deadline, f"the connections never settled at 5, seen {sorted(set(values))}"
-        time.sleep(0.05)
-    seen, end = set(), time.monotonic() + 8  # four polling intervals
-    while time.monotonic() < end:
-        seen.add(ready.target(connections)[0][0])
-        time.sleep(0.02)
+    # one connection for all the counting: ready.target opens one per query, and on a busy machine the backend of
+    # the query before is still closing when the next one counts, which reads as a sixth connection
+    with psycopg.connect(ready.target_url, autocommit=True) as counting:
+        def count():
+            return counting.execute(connections).fetchone()[0]
+        stable, deadline, values = time.monotonic(), time.monotonic() + 30, []
+        while time.monotonic() - stable < 2:
+            values.append(count())
+            if values[-1] != 2 + 3:
+                stable = time.monotonic()
+            assert time.monotonic() < deadline, f"the connections never settled at 5, seen {sorted(set(values))}"
+            time.sleep(0.05)
+        seen, end = set(), time.monotonic() + 8  # four polling intervals
+        while time.monotonic() < end:
+            seen.add(count())
+            time.sleep(0.02)
     assert seen == {2 + 3}
 
 
@@ -173,6 +192,53 @@ def test_a_worker_survives_an_unreachable_target_and_loads_again_once_it_accepts
     _query(other, f"alter database {db} allow_connections true")
     ready.target("update _rowvioli.tables set requested_at = now()")
     until(lambda: ready.target("select count(*) from _rowvioli.runs where status = 'ok'") == [(2,)])
+
+
+def test_a_run_whose_target_restarts_ends_within_seconds_and_the_table_loads_again(ready):
+    """Ticket 11: the run's process waits on its source, not on its dead connection; its worker ends it."""
+    name = f"rowvioli-test-{uuid.uuid4().hex[:8]}-restarted"  # the suite's target must not restart
+    with socket.socket() as s:  # a fixed port, so that the address survives the restart
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    try:
+        subprocess.run(["docker", "run", "-d", "--name", name, "--label", "rowvioli-test", "-e", "POSTGRES_PASSWORD=x",
+                        "-p", f"127.0.0.1:{port}:5432", IMAGE], check=True, capture_output=True)
+        url = f"postgresql://postgres:x@{HOST}:{port}/postgres"
+        _wait(url)
+        env = {"ROWVIOLI_TARGET_URL": url}
+        assert ready.run("init", env=env).returncode == 0
+        ready.source("create table pace (seconds float); insert into pace values (1)")
+        ready.source("create view hanging as select slow(g, (select seconds from pace)) as id from generate_series(1, 60) g")
+        ready.definition({"erp.toml": source(ready, "erp", "", '"public.hanging" = { key = ["id"] }')})
+        assert ready.run("apply", "sources", env=env).returncode == 0
+        worker = ready.start("work", env=env)
+        until(lambda: _query(url, "select status from _rowvioli.status") == [("loading",)])
+        [run] = [int(x) for x in subprocess.run(["pgrep", "-P", str(worker.pid)], capture_output=True,
+                                                 text=True).stdout.split()]
+        subprocess.run(["docker", "restart", name], check=True, capture_output=True)
+        until(lambda: not alive(run), timeout=10)  # the source would hold it for a minute
+        _wait(url)
+        # the log, runs and the status give the same reason
+        lost = "connection to the target lost"
+        until(lambda: _query(url, "select status, reason from _rowvioli.runs") == [("failed", lost)])
+        assert _query(url, "select status, reason from _rowvioli.status") == [("failed", lost)]
+        ready.source("update pace set seconds = 0")  # replacing the view would wait: the source still reads for it
+        _query(url, "update _rowvioli.tables set requested_at = now()")  # instead of waiting out the pause
+        until(lambda: _query(url, "select status from _rowvioli.status") == [("ok",)], timeout=30)
+        assert sorted(_query(url, "select * from raw_erp.hanging")) == sorted(ready.source("select * from hanging"))
+        err = said_after_sigterm(worker)
+        assert "raw_erp.hanging failed after" in err and "connection to the target lost" in err, err
+        assert "the target is unreachable" in err and "SELECT" not in err, err  # a reason is one line
+    finally:
+        subprocess.run(["docker", "rm", "-fv", name], capture_output=True)
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
 
 
 def said_after_sigterm(worker):

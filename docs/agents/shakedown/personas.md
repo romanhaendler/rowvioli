@@ -11,7 +11,7 @@ drop one that stops finding anything.
 The wheel with `[file,odbc,rest]` into a fresh `python:3.11-slim` container (the floor) and with the
 newest Python on the Mac; `rowvioli --help` and every subcommand's help; the quickstart flow of the README
 step by step. Targets: the oldest Postgres still supported upstream and the newest; a target user with only
-the rights the README's table names (no superuser, no `CREATE` on the database beyond what `init` needs);
+the rights the table in `docs/operation.md` names (no superuser, no `CREATE` on the database beyond what `init` needs);
 pgbouncer in session mode in front, and transaction mode to see that it fails with a clear message. Run: 2026-11-15.
 
 ### H2 Hostile source data
@@ -31,9 +31,9 @@ forward and back, two definitions applied from two places at once, a full disk o
 ## Personas
 
 ### P1 Lena, total beginner
-Has written SQL for reports, never run an ETL tool. Reads only the README and the quickstart, copies the
-examples. Makes the beginner's mistakes on purpose - a typo in a TOML key, `max_age = "1 hour"`, a table
-without `key`, a key that is not unique, `apply` forgotten after a change, `run` before `init`, the
+Has written SQL for reports, never run an ETL tool. Reads only the README, the pages under `docs/` it
+links to and the quickstart, copies the examples. Makes the beginner's mistakes on purpose - a typo in a
+TOML key, `max_age = "1 hour"`, a table without `key`, a key that is not unique, `apply` forgotten after a change, `run` before `init`, the
 environment variable missing or misspelt, the wrong directory to `apply`, a source password with `@` and
 `/` in it - and judges whether each one gets a message that tells her what to do. Time to the first
 mirrored table. Run: 2026-11-15.
@@ -44,7 +44,8 @@ Evaluates for a five-year commitment and trusts no README claim until measured: 
 hatches for month 3 (a table that needs a `WHERE`, a source the connectors do not cover).
 
 ### P4 Jonas, vibe coder
-A product owner whose coding agent may read only the README, `docs/connector-guide.md` and `--help`. Five
+A product owner whose coding agent may read only the README, the pages under `docs/` it links to
+(`docs/connector-guide.md` among them) and `--help`. Five
 plain-word requests: mirror our shop database every 15 minutes, add a CSV that lands in a folder daily, add
 a REST API with paging, write a connector for a source rowvioli does not have (SQLite), show me the state
 of every order as of last Monday. For each, where the docs were wrong, missing or misleading. Run: 2026-11-15.
@@ -61,8 +62,8 @@ README says, what a connector or an `options` value can reach, supply chain (dep
 
 ### P20 Consumer
 An analyst who only reads the target: the mirrors, `<table>__log` and `<table>__history`. Can she answer
-"what changed yesterday", "the state as of a moment", "when was this loaded" from the README alone, and
-are the answers right? Does a reader ever see a half state while workers run?
+"what changed yesterday", "the state as of a moment", "when was this loaded" from the README and the
+pages it links to alone, and are the answers right? Does a reader ever see a half state while workers run?
 
 ### P22 ELT specialist
 Ten years of Fivetran, Airbyte, dlt, Sling and ingestr in production; judges rowvioli on its feature set

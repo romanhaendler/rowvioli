@@ -2,7 +2,7 @@
 
 Every decision of the concept with its reason, its price and what was rejected. The order follows the discussion of 2026-11-11, so the document also shows how the design got to where it is.
 
-There were two rounds on that day. Decisions 1 to 19 are the first round. The second round (decisions 20 to 30) replaced the model of orders, a jobs repo and an external scheduler with a maximum age per table, definitions in the target and stateless workers. Decisions of the first round that no longer hold are marked and kept, with their text unchanged. A third round (decisions 32 to 35) followed on 2026-11-12, after a throwaway prototype had tried out the model of the second round. A fourth round (decision 36) added load times, a fifth (decision 37) the lines of a worker, a sixth (decision 38) the rule for licences, a seventh (decisions 39 and 40) target names and history. An eighth (decisions 41 to 43) followed on 2026-11-15, after the shakedown of the built wheel, and a ninth (decisions 44 to 46) on 2026-11-18, after the first mirror out of the box.
+There were two rounds on that day. Decisions 1 to 19 are the first round. The second round (decisions 20 to 30) replaced the model of orders, a jobs repo and an external scheduler with a maximum age per table, definitions in the target and stateless workers. Decisions of the first round that no longer hold are marked and kept, with their text unchanged. A third round (decisions 32 to 35) followed on 2026-11-12, after a throwaway prototype had tried out the model of the second round. A fourth round (decision 36) added load times, a fifth (decision 37) the lines of a worker, a sixth (decision 38) the rule for licences, a seventh (decisions 39 and 40) target names and history. An eighth (decisions 41 to 43) followed on 2026-11-15, after the shakedown of the built wheel, a ninth (decisions 44 to 46) on 2026-11-17, after the first mirror out of the box, and a tenth (decisions 47 to 49) on 2026-11-17, after the shakedown of the second wave.
 
 Evidence refers to `docs/measurements.md`.
 
@@ -381,7 +381,7 @@ If network zones are needed later, `rowvioli work --sources erp,crm` is the smal
 
 **Why.** Lock, TEMP tables and transaction have to be on the same connection, so two drivers side by side are not possible: it is one or the other. Experiment 8 played a complete run through ADBC: the session lock survives COMMIT and ROLLBACK and ends with the connection, the staging table is a TEMP table on that connection, the driver streams, nothing is visible before COMMIT, and errors arrive with their SQLSTATE.
 
-**Price.** The driver wraps every query that returns rows into `COPY`. `SHOW` fails because of that and has to be written as `current_setting(...)`. The driver decides the column types of the staging table, and the mirror inherits them. The prototype named the losses: `varchar(n)` becomes `text` and `numeric(p,s)` becomes `numeric`, so the schema check cannot see a change between such types, and an unconstrained `numeric` beyond 38 digits fails the run. The driver also decides the chunk size, about 16 MB, and with it the memory of a run. These are stated, not fought.
+**Price.** The driver wraps every query that returns rows into `COPY`. `SHOW` fails because of that and has to be written as `current_setting(...)`. The driver decides the column types of the staging table, and the mirror inherits them. The prototype named the losses: `varchar(n)` becomes `text` and `numeric(p,s)` becomes `numeric`, so the schema check cannot see a change between such types, and an unconstrained `numeric` beyond 38 digits fails the run. Decision 49 gives `numeric(p,s)` back up to 38 digits. The driver also decides the chunk size, about 16 MB, and with it the memory of a run. These are stated, not fought.
 
 **Rejected.**
 - *psycopg 3, row by row.* Passes every row through Python objects and takes eight times as long to fill the staging table.
@@ -426,7 +426,7 @@ Decided by the owner on the proposals in `docs/open-points.md`:
 - **`max_age` is required** at source level.
 - **A changed key stops the run.** If the key in the definition differs from the primary key of the mirror, the run fails and says so. A person drops or renames the old mirror, and the next run builds it anew. This follows decision 17: only additions happen automatically.
 - **Progress is computed, not written.** The status view finds the holder of the table lock in `pg_locks` and its rows so far in `pg_stat_progress_copy`. The row count of the last run serves as the expected number. This is the pattern of decisions 11 and 23. It covers filling the staging table, not the steps after it.
-- **The program creates no database roles.** The README lists the rights each party needs. The operator sets them up.
+- **The program creates no database roles.** `docs/operation.md` ("The target") lists the rights each party needs. The operator sets them up.
 
 ## Changes of the second round
 
@@ -563,7 +563,7 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 
 **Why.** Two tables of one source with the same last name part could not both be loaded, a source could not spread over schemas and two sources could not share one, though no mirror would have collided. Checking names instead of schemas allows all three and still stops the one real danger. A table that left the definition is disabled and holds nothing: a user who renames a table in the source expects one edit in the definition, and a name that stayed taken would have asked for a hand-deleted row in the bookkeeping, for which no command exists. If another table takes the name over, the checks before publishing decide on the first run. The line of `apply` is there because the alternative is a stale table under the old name that consumers keep reading without a failure.
 
-**Price.** A changed name leaves the old tables where they are, and a person renames or drops them (README, "What a person does by hand"). One number, 54, now holds for every table, though only a table with a log needs the room.
+**Price.** A changed name leaves the old tables where they are, and a person renames or drops them (`docs/loading.md`, "What a person does by hand"). One number, 54, now holds for every table, though only a table with a log needs the room.
 
 **Rejected.**
 - *A fixed layout* such as one `staging` schema, a prefix or a name pattern. The two settings express each of them.
@@ -575,7 +575,7 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 
 **Decision.** Every row of a change log carries `_loaded_at`, the `now()` of the publishing transaction, the same value as `tables.loaded_at`. A change log that exists is complete: a log that is created begins with every row of the mirror as `I`, and a run that would publish without writing to a log that exists, or build a new mirror beside it, fails and names the log. The view `<target table>__history` reads nothing but the log: `_valid_from` is a row's `_loaded_at`, `_valid_to` that of the next row with the same key, ordered by `_loaded_at`, rows with `D` left out afterwards; an open period is null. The table at a moment is one condition on the view. A run creates the view when it is missing and replaces it when the log got a column, and touches it never otherwise. No index is built.
 
-**Why.** The time was in `_rowvioli.runs`, which is bookkeeping, may be cleaned up and needs rights on `_rowvioli`; with it in the log, the history needs nothing in `_rowvioli`. The view is a plain view, so the right to read the view is enough: the reader needs no right on the log and none in `_rowvioli`. A history that is silently wrong is worse than none: a log switched on late misses every unchanged row, one switched off shows outdated versions as current. Failing is the project's own answer, and a changed key already asks for a person. The view orders by `_loaded_at` and not by `_run` because run numbers start again when `_rowvioli` is built anew. Null for an open period is what readers of validity columns know, where drivers and BI tools disagree about `infinity`. A plain view lets a consumer read history with one right and takes no lock in an ordinary run. The measurement (section 13) shows what it costs: fast for one key with an index a person may create, as slow as the whole view for one moment, where the same moment asked of the log directly is 2.6 times faster. The README names both as advice.
+**Why.** The time was in `_rowvioli.runs`, which is bookkeeping, may be cleaned up and needs rights on `_rowvioli`; with it in the log, the history needs nothing in `_rowvioli`. The view is a plain view, so the right to read the view is enough: the reader needs no right on the log and none in `_rowvioli`. A history that is silently wrong is worse than none: a log switched on late misses every unchanged row, one switched off shows outdated versions as current. Failing is the project's own answer, and a changed key already asks for a person. The view orders by `_loaded_at` and not by `_run` because run numbers start again when `_rowvioli` is built anew. Null for an open period is what readers of validity columns know, where drivers and BI tools disagree about `infinity`. A plain view lets a consumer read history with one right and takes no lock in an ordinary run. The measurement (section 13) shows what it costs: fast for one key with an index a person may create, as slow as the whole view for one moment, where the same moment asked of the log directly is 2.6 times faster. `docs/target.md` names both as advice.
 
 **Price.** A table whose log is dropped or renamed needs a person to drop or rename the view with it. The view for a moment reads the whole log. A clock set back between two runs of one table would put their rows in the wrong order. A target built before this decision has no `_loaded_at`, and nothing converts it (schema version 3, nothing was published).
 
@@ -659,6 +659,47 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 
 **Rejected.**
 - *Leaving the table alone and asking the person to request a load.* Nothing says so, and the first load under a new name is not a request but a first load.
+
+## 47. A connector refuses an option it does not know
+
+**Decision.** `postgres`, `odbc` and `rest` fail the run when a table has an option they do not read, with `<table>: the option <name> is not one of the <type> connector's; it knows <options>` (`it knows no option` for `postgres` and `odbc`). `file` already did, since its options are DuckDB's. A connector of one's own decides for itself; the guide says that it should do the same. The `path` of a `file` connection stays readable in reasons, since a directory is no secret and a reason without it is no use; every other value of a connection, and a password inside a URL in any value, is scrubbed as before.
+
+**Why.** `incremental = "updated"` or `query = "select ..."` on a `postgres` table loaded the whole table without a word, and a misspelt option of `rest` was ignored. A setting that does nothing looks like one that works.
+
+**Price.** A definition that carried a stray option runs again only without it. `apply` does not know the options of a connector (decision 22), so the failure shows at the run.
+
+**Rejected.**
+- *Refusing in `apply`.* It does not know the connectors.
+- *Ignoring with a warning.* A warning on stderr of a worker is not read.
+
+## 48. Zero rows publish where every row may be deleted
+
+**Decision.** Refines decision 42: zero rows fail a mirror that has rows unless the table's `max_delete_share` is 1.0. Who allows every row to be deleted allows an empty table, so no setting is added. Without a key the table is replaced as a whole and has no change log; its mirror counts as empty when it has no rows, as with a key. The reason says `max_delete_share = 1.0` allows an empty table.
+
+**Why.** A source that really was emptied could not be mirrored, short of taking the table out of the definition.
+
+**Price.** With 1.0 a broken source that delivers nothing empties the mirror (the change log keeps the rows).
+
+**Rejected.**
+- *A setting of its own for empty loads* (see 42).
+
+## 49. A numeric keeps its precision and scale, and the target's type counts
+
+**Decision.** The staging table gives an Arrow `decimal128(p,s)` with a scale from 0 to its precision the type `numeric(p,s)`, from every connector; the driver would create `numeric`. A staged column whose type differs from the mirror's or the change log's only in precision or scale (`numeric` and `numeric(10,2)`) counts as the mirror's type, when every value passes into it unchanged; a value that does not fails the run and names the column, the type, the table and the value. The program never alters a mirror or a change log. The `postgres` connector delivers `numeric(p,s)` up to 38 digits as `decimal128(p,s)`, and an unconstrained `numeric` and one beyond 38 digits as `decimal256`, which arrives as `numeric`.
+
+**Why.** The shakedown: a source value `137.00` in `numeric(12,2)` stood in the mirror as `137` (P3), and four of eight existing target tables with `numeric(10,2)` failed their first run with a change of type nobody made, whose way out, an `ALTER TABLE`, a view on the table blocked (P16). With the staged columns counted in the target's type the comparison happens in the target type (decision 2), so a second unchanged run finds nothing, and Postgres's own cast decides whether a value fits: no type table of our own. One idea carries it: a new mirror gets the source's type, an existing one keeps its own.
+
+**Price.** A new mirror of a `numeric(p,s)` beyond 38 digits gets `numeric`, as before. A change of precision or scale in the source is not carried: the mirror keeps its type and loads while the values fit, and the first value that does not fails the run; widening is a few statements by hand, and a consumer's view on the mirror has to be dropped and created again by its owner. A mirror made by 0.1.0 keeps `numeric`, and workers of 0.1.0 fail on a mirror with `numeric(p,s)`, so every worker is updated before new tables are applied. The staging table is created empty, as `CREATE TABLE AS` with the casts from the driver's empty table, before it is filled: one round trip more per run. Checking that values fit a target's precision and scale is one scan of the staging table; a target `numeric` without them needs none, and the staging table is never altered. A negative scale or one above the precision (Postgres 15) arrives as `numeric`, since an older target cannot hold the type. `varchar(n)` still arrives as `text`: to Postgres they are two types, not one type with a length, so an existing `varchar(n)` column stays a change of type. The driver writes a decimal without its trailing zeros, so an unconstrained `numeric` `1.10` arrives as `1.1`, an equal value.
+
+**Rejected.**
+- *The program altering the mirror to the source's type.* It fails behind a view (P16), and it changes a type that consumers build on without anyone asking.
+- *A schema check that ignores precision and scale.* The insert would round `1.005` into `numeric(10,2)` without a word.
+- *Creating the staging table from a type table of our own.* What decision 28 rejected in pgpq.
+- *Naming an unconstrained `numeric` in the field's metadata.* A second agreement between connector and core, for what `decimal256` already says.
+- *Altering the staging table after filling it.* A rewrite: 0.6 to 1.0 s per 10⁶ rows measured, against 0.03 s for altering it empty.
+- *Altering it at all.* Even empty, `ALTER TABLE` of 300 columns took 3.5 s, against 5 ms for `CREATE TABLE AS` with casts (ticket 15); a 0.1.0 mirror of 300 `numeric(12,2)` columns took 32 s per unchanged run with an ALTER and a scan per column, 5 s without.
+
+**Evidence.** `tests/test_numeric.py`; the measurement in ticket 14.
 
 ## Corrections after the prototype
 

@@ -31,7 +31,7 @@ def test_the_history_view_gives_every_version_with_the_time_it_was_valid(erp):
 
 
 def at(rv, moment):
-    """The table as it was at a moment: the one condition of the README."""
+    """The table as it was at a moment: the one condition of docs/target.md "History"."""
     return rows(lambda q: rv.target(q, [moment, moment]), "select customer_no, name, city from "
                 "raw_erp.customers__history where _valid_from <= %s and (_valid_to > %s or _valid_to is null)")
 

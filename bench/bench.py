@@ -1,4 +1,4 @@
-"""Reproduces the measurement table of the README at 10⁶ rows: `uv run bench/bench.py [rows]`.
+"""Reproduces the measurement table of docs/measurements.md at 10⁶ rows: `uv run bench/bench.py [rows]`.
 
 One throwaway Postgres container (2 CPUs, 4 GB, as in docs/measurements.md) holds a source database with the
 16-column table of the experiments and the target. The program runs as a real process, run by run. Postgres

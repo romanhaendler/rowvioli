@@ -21,6 +21,9 @@ SCOPE = "($1::text = '' OR source = $1::text) AND ($2::text = '' OR source_table
 CLAIMABLE_AND_BUSY = f"""SELECT (SELECT count(*) FROM ({CLAIMABLE}) c),
                                 count(*) FILTER (WHERE status = 'loading' OR due_at <= now())
                            FROM _rowvioli.status WHERE {SCOPE}"""
+# of the given runs, those whose table is no longer loading: their lock went with their connection (decision 7)
+LOST = """SELECT r.run FROM _rowvioli.runs r JOIN _rowvioli.status s ON s.id = r."table"
+           WHERE r.run = ANY(string_to_array($1, ',')::bigint[]) AND s.status <> 'loading'"""
 
 MASCOT = """\
   .~~~~~~~.   .~~~~~~~.
@@ -63,12 +66,13 @@ def loop(slots, source="", table="", once=False):
                 record(conn, ended[0])
                 ended.pop(0)
             claimable, busy = sql(conn, CLAIMABLE_AND_BUSY, [source, table])[0]
+            end_lost(conn, runs)
         except adbc.Error as e:  # the target is unreachable: try again in two seconds (open point E11)
             if once:
                 raise
             if conn:
                 say("the target is unreachable, connecting again every two seconds: "
-                + load.scrub(load.target_secrets(), str(e)))
+                    + load.reason_line(load.target_secrets(), e, "asking the target"))
             conn, claimable = None, 0
         if stopping and not stopped:
             stopped = True
@@ -107,7 +111,7 @@ def listen(runs, answers, ended, seconds, lines):
     while (now := time.monotonic()) < end:
         for p, claim in runs.items():
             if claim and claim["deadline"] <= now:
-                p.kill()  # README "Order when finishing": kill first, write the reason afterwards
+                p.kill()  # docs/target.md "Order when finishing": kill first, write the reason afterwards
                 claim["deadline"], claim["reason"] = math.inf, f"ended after max_seconds = {claim['max_seconds']}"
                 say_end(claim, "failed", claim["reason"])
                 answers[claim["claimed"]] = claim["answer"] = {"status": "failed", "reason": claim["reason"]}
@@ -124,6 +128,8 @@ def listen(runs, answers, ended, seconds, lines):
                 say(f"{said['claimed']} started, run {said['run']}")
             elif "answer" not in runs[p]:  # a run killed after max_seconds may still have answered
                 answers[said.pop("table")] = runs[p]["answer"] = said
+                if said.get("reason") == "connection to the target lost":  # the run could not record it itself
+                    ended.append(runs[p] | {"reason": said["reason"]})
                 if said["status"] == "ok":
                     say_end(runs[p], "ok", f"{said['inserted']} inserted, {said['updated']} updated, "
                                            f"{said['deleted']} deleted")
@@ -133,20 +139,35 @@ def listen(runs, answers, ended, seconds, lines):
             continue
         p.wait()  # end of its output: the process has ended
         claim = runs.pop(p)
-        if claim and "answer" not in claim:  # it died after its claim, e.g. kill -9
-            answers[claim["claimed"]] = {"status": "failed", "reason": "worker lost"}
-            say_end(claim, "failed", "worker lost")
+        if claim and "answer" not in claim:  # it died after its claim, e.g. kill -9, or end_lost killed it
+            answers[claim["claimed"]] = {"status": "failed", "reason": claim.get("reason", "worker lost")}
+            say_end(claim, "failed", answers[claim["claimed"]]["reason"])
         if claim is None and p.returncode != 0:
             say(f"a run process ended with exit code {p.returncode} before it claimed anything")
         return claim is None and p.returncode != 0
     return False
 
 
+def end_lost(conn, runs):
+    """Kills a run whose connection to the target is gone: it notices only at its next statement, which may come
+    after a long read of its source, and it can never publish. One that already answered is left to end."""
+    waiting = {c["run"]: p for p, c in runs.items() if c and "answer" not in c}
+    for (run,) in sql(conn, LOST, [",".join(map(str, waiting))]) if waiting else []:
+        runs[waiting[run]]["reason"] = "connection to the target lost"  # said once its output ends
+        record(conn, runs[waiting[run]])  # its lock is gone, so it cannot publish any more
+        waiting[run].kill()
+
+
 def record(conn, claim):
-    """The reason of a run killed after max_seconds, on the run and its table, if the run is still running."""
-    sql(conn, """WITH r AS (UPDATE _rowvioli.runs SET status = 'failed', finished_at = clock_timestamp(), reason = $2
-                             WHERE run = $1 AND status = 'running' RETURNING "table")
-                 UPDATE _rowvioli.tables SET reason = $2 WHERE id IN (SELECT "table" FROM r)""",
+    """The reason of a run the worker ended (after max_seconds, or with its target connection lost), on the run and
+    its table, if the run is still running. A claim may have closed the row first as `worker lost` once the lock was
+    free: the reason the worker knows replaces it, but not on the table, which belongs to that claim's run now."""
+    sql(conn, """WITH old AS (SELECT "table", status FROM _rowvioli.runs WHERE run = $1),
+                      r AS (UPDATE _rowvioli.runs SET status = 'failed', reason = $2,
+                                   finished_at = coalesce(finished_at, clock_timestamp())
+                             WHERE run = $1 AND (status = 'running' OR reason = 'worker lost'))
+                 UPDATE _rowvioli.tables SET reason = $2
+                  WHERE id IN (SELECT "table" FROM old WHERE status = 'running')""",
         [claim["run"], claim["reason"]])
 
 

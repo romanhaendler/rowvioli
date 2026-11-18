@@ -1,6 +1,6 @@
 # Glossary
 
-The binding vocabulary of the concept. If a term changes, it changes here and in `README.md`.
+The binding vocabulary of the concept. If a term changes, it changes here, in `README.md` and in the pages under `docs/`.
 
 | Term | Meaning |
 |---|---|
