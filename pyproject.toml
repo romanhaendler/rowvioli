@@ -1,6 +1,6 @@
 [project]
 name = "rowvioli"
-version = "0.2.1"
+version = "0.2.2"
 description = "Mirrors tables from source systems into PostgreSQL, as fresh as each table's maximum age"
 readme = "README.md"
 license = "MIT"
