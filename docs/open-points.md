@@ -1,6 +1,6 @@
 # Open points
 
-What is undecided, unverified or unbuilt at the release of 0.1.0 on 2026-11-17, after load times, visibility, target names, history and the first shakedown.
+What is undecided, unverified or unbuilt at the release of 0.2.0 on 2026-11-18, after load times, visibility, target names, history, three shakedowns and the first mirror out of the box.
 
 ## Decisions for the owner
 
