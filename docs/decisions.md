@@ -714,6 +714,18 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 - *Putting the drivers where the definition is.* The machine that applies would need every vendor driver and a route to every source.
 - *An explicit `--from-target` flag.* A second way to say what the directory already says: a definition here wins, and where there is none the target is the only place left.
 
+## 51. NUL bytes in text are removed while staging
+
+**Decision.** `stage()` removes every NUL byte (0x00) from the top-level text columns (`string`, `large_string`) of each batch before it is ingested, for every connector. Text nested in a list or a struct is not cleaned, and neither is a `\u0000` escape inside a JSON value.
+
+**Why.** Postgres `text` cannot hold 0x00, so the load failed with `invalid byte sequence for encoding "UTF8": 0x00` and the table could never be loaded. The first report came from an Informix source read through `odbc`.
+
+**Price.** Two source values that differ only by NUL bytes become equal; in a key column that fails the run with the existing duplicate-key reason. A NUL inside a nested text still fails the run, and so does `\u0000` in a JSON value, at the change to `jsonb`. A value of NUL bytes only becomes the empty text, not null.
+
+**Rejected.**
+- *Failing with a clearer reason.* The table would still never load.
+- *An option per table.* A rule to carry for one byte.
+
 ## Corrections after the prototype
 
 | Point | Before | Now |

@@ -344,3 +344,12 @@ path = "https://anna:hunter2pw@host/dir"
     assert files.run("apply", "sources").returncode == 0
     r = files.run("run")
     assert "no such file in https://anna:***@host/dir" in r.stdout and "hunter2pw" not in r.stdout
+
+
+def test_a_nul_byte_in_a_text_value_is_removed_and_a_second_run_changes_nothing(files):
+    pq.write_table(pa.table({"id": [1, 2], "name": ["a\x00b", "c"]}), files.dir / "files" / "nul.parquet")
+    code, answer = load(files, '"nul.parquet" = { key = ["id"] }\n')
+    assert code == 0, answer
+    assert files.target("select * from raw_files.nul order by 1") == [(1, "ab"), (2, "c")]
+    code, answer = load(files, '"nul.parquet" = { key = ["id"] }\n')
+    assert answer["raw_files.nul"] == {"status": "ok", "inserted": 0, "updated": 0, "deleted": 0}
