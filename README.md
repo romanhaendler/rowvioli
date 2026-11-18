@@ -143,7 +143,7 @@ The machine that runs `apply` needs the core only, with no driver and no route t
 
 ## Defining a source
 
-One file per source under `sources/` names the connector, its connection and every table with its key, as in the example above. A table without its own `max_age` takes the source's. Secrets appear in the connection only as placeholders such as `$ERP_PASSWORD`, filled in from the environment when `apply` runs. Nobody has to type 200 table names: `rowvioli list erp` asks the source and prints them ready to paste.
+One file per source under `sources/` names the connector, its connection and every table with its key, as in the example above. A table without its own `max_age` takes the source's. Secrets appear in the connection only as placeholders such as `$ERP_PASSWORD`, filled in from the environment when `apply` runs. Nobody has to type 200 table names: `rowvioli list erp` asks the source and prints them ready to paste. A new source is applied with an empty `tables` block first; `list` then runs on a worker, which reads the connection from the target.
 
 [docs/definition.md](https://github.com/romanhaendler/rowvioli/blob/main/docs/definition.md) has every setting (load times, target names, change logs, safety limits, connector options) and what `apply` refuses.
 
@@ -175,7 +175,7 @@ There is no web UI; everything a UI needs is in `_rowvioli`: the view `status`, 
 
 ## Commands
 
-`key new`, `apply`, `work` and `status` above are most of it. `init` creates the schema `_rowvioli` on its own, `list` prints the tables of a source, `apply --check` checks a definition without a target, and `run` loads what is due once and ends, or loads a named source or table now. `rowvioli --version` prints the version.
+`key new`, `apply`, `work` and `status` above are most of it. `init` creates the schema `_rowvioli` on its own, `list` prints the tables of a source (from `sources/` here, else from the target), `apply --check` checks a definition without a target, and `run` loads what is due once and ends, or loads a named source or table now. `rowvioli --version` prints the version.
 
 [docs/commands.md](https://github.com/romanhaendler/rowvioli/blob/main/docs/commands.md) has every command with what it needs, `apply` in detail, the answer of `run` and its exit codes.
 

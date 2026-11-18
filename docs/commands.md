@@ -6,10 +6,12 @@ Every command, what it needs, and what it says and returns.
 |---|---|---|
 | `rowvioli init` | Creates the schema `_rowvioli` in the target and says so: `the schema _rowvioli is ready in the target`. | target |
 | `rowvioli key new` | Creates a key pair in the current directory: `worker.key` for the workers and `worker.pub` for the definition, and says so: `created worker.key (keep it secret) and worker.pub`. Overwrites neither. | nothing |
-| `rowvioli list erp` | Prints the tables of a source with their keys, ready to paste into its `tables` block. Reads the definition from `sources/` (or `--definition <dir>`). | definition, environment, connector, source |
+| `rowvioli list erp` | Prints the tables of a source with their keys, ready to paste into its `tables` block. Reads the source from the definition (`--definition <dir>`, or `sources/` here); where there is no `sources/`, from the target, as a worker would. | definition, environment, connector, source; or target, private key (`ROWVIOLI_KEY_FILE`, else `worker.key` here), connector, source applied |
 | `rowvioli apply --check` | Reads the definition and checks it. Writes nothing. Meant for a laptop and for the pipeline of a merge request. | definition |
 | `rowvioli apply` | Writes the definition into the target: one row per source and table, connections encrypted. Without a directory it takes `sources`, as `list` does. With `--init` it creates the schema `_rowvioli` first when it is missing. | definition, environment, `worker.pub` next to the directory (or `--key <file>`), target |
 | `rowvioli status [erp [dbo.Customers]]` | Prints the enabled tables with their target name, age, due time, status and reason or progress, from the view `_rowvioli.status`. Names narrow it the way `run` takes them. Exits 0 whenever it could print the state. | target |
+
+`list` takes the source from the definition when `--definition` is given or `sources/` is here, and from the target otherwise. In the target the connection is the one `apply` stored, decrypted with the private key, so the machine needs the connector and a route to the source but no checkout and no secrets in its environment. A source is there once it has been applied, even with an empty `tables` block. A source removed from the definition keeps its row, so `list` still answers for it.
 | `rowvioli work --slots 4` | Runs permanently and loads whatever is due, up to four tables at a time. | connectors, private key (`worker.key`), target |
 | `rowvioli run` | Loads everything that is due, once, and ends. | connectors, private key (`worker.key`), target |
 | `rowvioli run erp` | Requests all tables of `erp` and loads until nothing of `erp` is due. | connectors, private key (`worker.key`), target |

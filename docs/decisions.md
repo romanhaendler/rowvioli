@@ -358,7 +358,7 @@ Patterns can be added later as a second job of the worker without changing the m
 def read(connection: dict, table: str, options: dict) -> Iterator[pyarrow.RecordBatch]:
 ```
 
-Nothing else goes in or out. A connector may offer `tables(connection)` for `rowvioli list`. A worker never calls it. Connectors are installed on the workers by the operator, as an optional extra of the core package or as a package of their own. A worker takes any due table. If its connector is missing or the connection cannot be decrypted, the run fails with a reason that names the worker.
+Nothing else goes in or out. A connector may offer `tables(connection)` for `rowvioli list`. The worker process never calls it (decision 50: a person on a worker's machine does). Connectors are installed on the workers by the operator, as an optional extra of the core package or as a package of their own. A worker takes any due table. If its connector is missing or the connection cannot be decrypted, the run fails with a reason that names the worker.
 
 **Why.**
 - All data enters through one fixed interface. The connector sees no target, no lock and no other table.
@@ -700,6 +700,19 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 - *Altering it at all.* Even empty, `ALTER TABLE` of 300 columns took 3.5 s, against 5 ms for `CREATE TABLE AS` with casts (ticket 15); a 0.1.0 mirror of 300 `numeric(12,2)` columns took 32 s per unchanged run with an ALTER and a scan per column, 5 s without.
 
 **Evidence.** `tests/test_numeric.py`; the measurement in ticket 14.
+
+## 50. `list` reads the source from the target where there is no definition
+
+**Decision.** `rowvioli list <source>` reads the source from the definition when `--definition <dir>` is given or `sources/` is in the current directory, and otherwise from the target: the type, the sealed connection and the key id in `_rowvioli.sources`, decrypted with the private key (`ROWVIOLI_KEY_FILE`, else `worker.key`), as a run does. Nothing else changes: the connector's `tables` is called as before, the output is the same, the connection's values are scrubbed from a driver error. A new source is applied with an empty `tables` block, listed on a worker, pasted, applied again. A source removed from the definition keeps its row (`enabled = false`) and `list` still answers for it.
+
+**Why.** The definition lives in its own repository whose pipeline runs `apply`, and that machine has no driver and no route to the source. The workers have both but, by decision 22, no checkout. `list` could run nowhere. The target holds the one thing that joins the two, and the worker holds the key.
+
+**Price.** The source must be applied before it can be listed, which is why the empty `tables` block is allowed. The machine that lists needs the private key, so it is a worker in all but name.
+
+**Rejected.**
+- *Shipping the definition to the workers.* The checkout of decision 14, which decision 22 removed.
+- *Putting the drivers where the definition is.* The machine that applies would need every vendor driver and a route to every source.
+- *An explicit `--from-target` flag.* A second way to say what the directory already says: a definition here wins, and where there is none the target is the only place left.
 
 ## Corrections after the prototype
 

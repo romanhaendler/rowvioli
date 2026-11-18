@@ -22,7 +22,7 @@ def main():
         "action", choices=["new"], help="new: write worker.key (private, keep it secret) and worker.pub here")
     lp = sub.add_parser("list", help="print the tables of a source")
     lp.add_argument("source")
-    lp.add_argument("--definition", default="sources", help="directory of the definition")
+    lp.add_argument("--definition", help="directory of the definition (default: sources here; without it, the target)")
     ap = sub.add_parser("apply", help="write the definition into the target")
     ap.add_argument("directory", nargs="?", default="sources", help="directory of the definition (default: sources)")
     ap.add_argument("--check", action="store_true", help="only read and check the definition")
@@ -46,14 +46,19 @@ def main():
 
 
 def command(a):
+    from_target = a.command == "list" and a.definition is None and not Path("sources").is_dir()
+    if from_target and not os.environ.get("ROWVIOLI_TARGET_URL"):
+        raise SystemExit("list reads the source from a definition directory (sources/ here, or --definition <dir>) "
+                         "or from the target (ROWVIOLI_TARGET_URL and the key file); neither is here")
     needs = {"init": ["ROWVIOLI_TARGET_URL"], "status": ["ROWVIOLI_TARGET_URL"],
-             "run": ["ROWVIOLI_TARGET_URL"], "work": ["ROWVIOLI_TARGET_URL"]}
+             "run": ["ROWVIOLI_TARGET_URL"], "work": ["ROWVIOLI_TARGET_URL"],
+             "list": ["ROWVIOLI_TARGET_URL"] * from_target}
     missing = [v for v in needs.get(a.command, []) if not os.environ.get(v)]
     if missing:
         raise SystemExit(f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} not set")
     if a.command in needs:
         target.check_address(os.environ["ROWVIOLI_TARGET_URL"])  # before the key file: it is the first slip to fix
-    if a.command in ("run", "work"):  # one place for the default; the run processes inherit the absolute path
+    if a.command in ("run", "work") or from_target:  # one place for the default; the run processes inherit the absolute path
         key = os.path.abspath(os.environ.get("ROWVIOLI_KEY_FILE") or "worker.key")
         try:
             open(key, "rb").close()  # opened, not just looked for: a directory or an unreadable file stops here too
@@ -76,7 +81,7 @@ def command(a):
     elif a.command == "apply":
         apply.apply(a.directory, a.key or str(Path(a.directory).resolve().parent / "worker.pub"), a.init)
     elif a.command == "list":
-        print_tables(a.definition, a.source)
+        print_tables(None if from_target else a.definition or "sources", a.source)
     elif a.command == "status":
         print_status(a.source or "", a.table or "")
     elif a.command in ("run", "work"):
@@ -118,10 +123,21 @@ def print_status(source, table):
 
 def print_tables(directory, name):
     """The tables of a source from its connector's `tables`, as lines for the source's tables block."""
-    sources, _, _ = definition.read(directory, os.environ, only=name)
-    s = next((s for s in sources if s["name"] == name), None)
-    if s is None:
-        raise SystemExit(f"{directory} has no source {name}")
+    if directory is None:  # no definition here: the connection `apply` stored in the target, opened with the worker key
+        row = target.sql(target.connect(versioned=False), "SELECT type, connection, key_id FROM _rowvioli.sources "
+                         "WHERE name = $1", [name])
+        if not row:
+            raise SystemExit(f"the target has no source {name}; `rowvioli apply` puts it there "
+                             "(a source may be applied with an empty tables block first)")
+        try:
+            s = {"type": row[0][0], "connection": seal.unseal(os.environ["ROWVIOLI_KEY_FILE"], row[0][2], name, row[0][1])}
+        except Exception as e:
+            raise SystemExit(f"the connection of source {name} cannot be decrypted: {e}")
+    else:
+        sources, _, _ = definition.read(directory, os.environ, only=name)
+        s = next((s for s in sources if s["name"] == name), None)
+        if s is None:
+            raise SystemExit(f"{directory} has no source {name}")
     connector = contract.connector(s["type"])
     if not hasattr(connector, "tables"):
         raise SystemExit(f"connector {s['type']} of source {name} cannot list tables")
