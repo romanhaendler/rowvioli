@@ -2,7 +2,7 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet (each test is named; the one fix is a few lines)
 

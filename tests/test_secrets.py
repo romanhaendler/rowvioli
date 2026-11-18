@@ -58,6 +58,27 @@ def test_the_password_inside_an_odbc_connection_string_leaks_nowhere(erp, pwd):
     assert leaks(erp, "Odbc-geheim-77", *out) == []
 
 
+def test_a_password_with_quote_backslash_and_newline_does_not_show_in_the_reason_of_a_failed_run(erp):
+    odd = "Ge'he\\im\nZeile2-4711"  # written plainly in the definition, so repr shows it in the connector's message
+    toml = odd.replace("\\", "\\\\").replace("\n", "\\n")
+    erp.definition({"lab.toml": f"""
+[lab]
+type = "testing"
+max_age = "1h"
+fail = "at_once"
+[lab.connection]
+url = "testing://reader:{toml}@nowhere/lab"
+token = "Marke-0815-geheim"
+[lab.tables]
+"numbers" = {{ key = ["n"] }}
+"""})
+    out = [erp.run("apply", "sources"), erp.run("run", "lab")]
+    assert out[-1].returncode == 1
+    assert "cannot connect" in erp.target("select reason from _rowvioli.runs")[0][0]
+    for value in (odd, repr(odd)[1:-1], "Ge'he", "Zeile2-4711"):
+        assert leaks(erp, value, *out) == [], value
+
+
 def test_a_connector_printing_to_stderr_and_stdout_leaks_nothing_and_disturbs_no_run(erp):
     out = [lab(erp, "print = true"), erp.run("run", "lab")]
     assert out[-1].returncode == 0, out[-1].stdout
