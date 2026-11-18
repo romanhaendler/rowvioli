@@ -12,7 +12,7 @@ The wheel with `[file,odbc,rest]` into a fresh `python:3.11-slim` container (the
 newest Python on the Mac; `rowvioli --help` and every subcommand's help; the quickstart flow of the README
 step by step. Targets: the oldest Postgres still supported upstream and the newest; a target user with only
 the rights the table in `docs/operation.md` names (no superuser, no `CREATE` on the database beyond what `init` needs);
-pgbouncer in session mode in front, and transaction mode to see that it fails with a clear message. Run: 2026-11-15.
+pgbouncer in session mode in front, and transaction mode to see that it fails with a clear message. Run: 2026-11-18.
 
 ### H2 Hostile source data
 A Postgres source with what real systems hold: a table that is empty, one with a NULL or a duplicate in
@@ -48,7 +48,7 @@ A product owner whose coding agent may read only the README, the pages under `do
 (`docs/connector-guide.md` among them) and `--help`. Five
 plain-word requests: mirror our shop database every 15 minutes, add a CSV that lands in a folder daily, add
 a REST API with paging, write a connector for a source rowvioli does not have (SQLite), show me the state
-of every order as of last Monday. For each, where the docs were wrong, missing or misleading. Run: 2026-11-15.
+of every order as of last Monday. For each, where the docs were wrong, missing or misleading. Run: 2026-11-18.
 
 ### P16 Migrating team
 Moves a working mirror from cron and hand-written scripts to rowvioli: builds the
@@ -58,7 +58,7 @@ Moves a working mirror from cron and hand-written scripts to rowvioli: builds th
 Secrets in output, logs, error texts and `_rowvioli` tables (source passwords, the target password, the
 private key), the encryption of connections, SQL injection through table and column names that come from
 a source or the definition, the rights a worker and the `apply` pipeline really need against what the
-README says, what a connector or an `options` value can reach, supply chain (dependencies, licences). Run: 2026-11-15.
+README says, what a connector or an `options` value can reach, supply chain (dependencies, licences). Run: 2026-11-18.
 
 ### P20 Consumer
 An analyst who only reads the target: the mirrors, `<table>__log` and `<table>__history`. Can she answer
