@@ -2,7 +2,7 @@
 
 <p align="center"><img src="https://raw.githubusercontent.com/romanhaendler/rowvioli/main/docs/mascot.svg" width="360" alt="Two identical ravioli mirroring each other and holding hands"></p>
 
-> **Version 0.2.0.** What is proven and what is not is listed in [docs/measurements.md](https://github.com/romanhaendler/rowvioli/blob/main/docs/measurements.md) and [docs/open-points.md](https://github.com/romanhaendler/rowvioli/blob/main/docs/open-points.md).
+> **Version 0.2.1.** What is proven and what is not is listed in [docs/measurements.md](https://github.com/romanhaendler/rowvioli/blob/main/docs/measurements.md) and [docs/open-points.md](https://github.com/romanhaendler/rowvioli/blob/main/docs/open-points.md).
 
 A program that mirrors tables from source systems into a PostgreSQL target. You say how old each table may be. Workers keep it that fresh, and consumers always see a complete state.
 
