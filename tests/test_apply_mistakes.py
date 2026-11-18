@@ -1,7 +1,7 @@
 """Mistakes named by `apply`, `init` and `key new` (shakedown ticket 04)."""
 import pytest
 
-from test_apply import ENV, ERP, NO_TARGET, check
+from test_apply import CRM, ENV, ERP, NO_TARGET, check
 
 
 @pytest.mark.parametrize("old, new, setting", [
@@ -159,3 +159,15 @@ def test_a_target_address_with_several_hosts_and_a_query_string_is_no_slip(rv):
     url = "postgresql://postgres:x@127.0.0.1:1,127.0.0.1:2/db?connect_timeout=1&application_name=a"
     r = rv.run("status", env={"ROWVIOLI_TARGET_URL": url}, timeout=20)
     assert "percent-encoded" not in r.stderr
+
+
+def test_source_files_in_subfolders_belong_to_the_definition_and_errors_name_the_subfolder(tmp_path):
+    from rowvioli import definition
+    for folder, text in (("crm", CRM), ("erp", ERP)):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / f"{folder}.toml").write_text(text)
+    sources, _, _ = definition.read(tmp_path)
+    assert [s["name"] for s in sources] == ["crm", "erp"]
+    (tmp_path / "crm" / "crm.toml").write_text(CRM.replace("max_age", "max_agee"))
+    with pytest.raises(SystemExit, match=r"crm/crm\.toml: "):
+        definition.read(tmp_path)

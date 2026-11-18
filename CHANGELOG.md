@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+Changed:
+
+- `apply`, `apply --check` and `list` read the source files in the subfolders of the definition directory too; an error in one of them names it with its subfolder (`crm/crm.toml: ...`). A source file that was kept in a subfolder, a hidden one too, is therefore applied now: move it out of the directory to keep it disabled.
+
 ## 0.2.1 (2026-11-18)
 
 Fixed:
