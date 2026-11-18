@@ -75,7 +75,8 @@ def test_apply_with_a_missing_variable_fails_and_changes_nothing(ready):
     before = everything(ready)
     changed = ERP.replace('max_age = "1h"', 'max_age = "2h"') + '"dbo.Items" = { key = ["item_no"] }\n'
     r = apply(ready, {"erp.toml": changed, "crm.toml": CRM}, env={})
-    assert r.returncode != 0 and "ERP_PASSWORD" in r.stderr
+    assert r.returncode != 0 and "variable ERP_PASSWORD is not set" in r.stderr
+    assert "Traceback" not in r.stderr
     assert everything(ready) == before
 
 
@@ -328,6 +329,9 @@ def test_check_passes_load_times_a_time_zone_without_them_and_a_source_whose_tab
     ('"dbo.Notes"     = {}', '"dbo.Notes" = { log = "no" }', "log"),
     ('"dbo.Notes"     = {}', '"dbo.Notes" = { key = "id" }', "key"),            # keys
     ('"dbo.Notes"     = {}', '"dbo.Notes" = { key = [] }', "key"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { key = [""] }', "key must be a list of column names"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { log = 1 }', "log must be true or false"),   # bool is not int, nor int bool
+    ("parallel = 4", "parallel = true", "parallel must be a whole number"),
     ("parallel = 4", 'parallel = 4\nkey = ["id"]', "erp: key belongs to a table"),  # a setting at the wrong level
     ('"dbo.Notes"     = {}', '"dbo.Notes" = { parallel = 1 }', "dbo.Notes: parallel belongs to the source"),
     ('"dbo.Notes"     = {}', '"dbo.Notes" = {}\n"sales.NOTES" = {}', "notes"),  # duplicate target table
@@ -348,6 +352,8 @@ def test_check_passes_load_times_a_time_zone_without_them_and_a_source_whose_tab
     ('1/erp"', '1/erp"\nssl = { cert = ["pa$"] }', "connection.ssl"),           # also nested in the connection
     ('[erp.connection]\nurl = "postgresql://reader:$ERP_PASSWORD@nowhere.invalid:1/erp"\n', "", "connection"),
     ('[erp.tables]', "[erp.other]", "tables"),
+    ('max_age = "1h"', 'max_age = "0m"', "max_age"),                           # an interval of nothing
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { max_age = "0h" }', "max_age"),
     ("parallel = 4", "parallel = 0", "parallel"),                               # ranges
     ("parallel = 4", "parallel = 4\nmax_delete_share = 1.5", "max_delete_share"),
     ('"dbo.Notes"     = {}', '"dbo.Notes" = { max_delete_share = -0.1 }', "max_delete_share"),

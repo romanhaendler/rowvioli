@@ -25,7 +25,7 @@ leads from one agent, and a ticket that starts from one reproduces it first.
 | P22 | The `postgres` connector ignores every option: `incremental = "updated"`, `query = "..."` load the whole table ✓ | ticket 13 |
 | P22 | An emptied source can never publish, also with `max_delete_share = 1.0` | ticket 13 |
 | P3, H4 | A killed run stays `running` in `_rowvioli.runs` | ticket 13 |
-| P3 | 100,000 rows of 300 columns: 271 s the first time, 83 to 139 s unchanged, most of it filling the staging table. Measured on a loaded machine with Docker's disk nearly full: the direction holds, the numbers do not | open: measure a whole run on a wide table on a quiet machine and put it beside section 2 of `docs/measurements.md` |
+| P3 | 100,000 rows of 300 columns: 271 s the first time, 83 to 139 s unchanged, most of it filling the staging table. Measured on a loaded machine with Docker's disk nearly full: the direction holds, the numbers do not | measured on a quiet machine since: `docs/measurements.md` section 15, ticket 16 |
 | H4 | A run whose target connection is lost reads the source to its end (89 s more) while a retry starts | ticket 11 |
 | H4 | The whole claim query in the worker's log when the target drops a connection; a full disk on the target reads as `connection lost` the first time | ticket 11 |
 | P23 | A new column in the status view touches seven files and ten places, and every target must be initialised anew | `.scratch/migration/spec.md`: views are replaced by every `init` |
@@ -65,3 +65,34 @@ documentation read on 2026-11-17), not the freshness model; the second half is f
   by the agent's own directory or pid.
 - A persona left its worker running because its own kill was refused (P20); the coordinator ended it.
 - Cost: eight agents on Sonnet, about 660k subagent tokens, 27 minutes wall clock for the slowest (H4).
+
+## Test quality (P24, 2026-11-18, branch `part-2`, Opus)
+
+68 hand-made mutants in `definition.py`, `target.py`, `load.py`, `rest.py`, `file.py` and `seal.py`, each
+run against the test files that cover it; property-based checks with hypothesis on the unchanged program.
+18 mutants survived, 5 of them equivalent. Every survivor is a missing test, the program itself is right in
+each place; the one wrong behaviour came from the property-based checks. All of it went to ticket 17.
+
+| Survivor | What a user would see if the line broke |
+|---|---|
+| `seal.py`: the comparison of the sealed source name removed | a connection sealed for one source is accepted under another |
+| `target.py` `quote()` no longer doubles `"` | broken SQL for a column or table with `"` in its name |
+| `definition.py`: percent-encoding of a password from a variable removed | a password with `@`, `/` or `:` breaks the URL |
+| `definition.py`: interval accepts `0` | `max_age = "0m"` passes `apply`, the table is always due |
+| `definition.py`: check for an unset variable removed | a traceback instead of "variable X is not set" |
+| `load.py` `scrub`: the `repr()` forms removed | a password with `'`, `\` or a newline could show in an error |
+| `load.py` `target_secrets` returns nothing | the target password is no longer scrubbed (libpq does not echo it) |
+| `definition.py`: bool versus int, `key = [""]`, the edit thresholds at their boundary, `duration` with three parts | small |
+
+Wrong, small: a literal password with `[` in a URL in the definition fails the run with `Invalid IPv6 URL`
+(`urlsplit` in `connection_values`), before any connection is tried.
+
+Held: the confinement and checks of `file.py` (5 of 5), every check before publishing, the delete share and
+zero-rows boundaries, `claim` and `worker lost`, `scrub` over 14 text forms without a leak, `quote` round
+trip through Postgres, `interval` and `duration` against Postgres.
+
+Not covered: the `odbc` connector, `work.py`, `cli.py`.
+
+Cost of the suite: five tests take 58 of 208 s (target restart 14 s, connection limits 14 s, the 10 s lock
+wait 12 s, parallel limits 10 s, unreachable target 9 s). The typo cases in `test_apply_mistakes.py` take
+about 3 s each and mostly assert one rule in different spellings.

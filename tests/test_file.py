@@ -209,6 +209,15 @@ def test_a_pattern_keeps_equal_rows_of_two_files_and_reads_columns_by_name(files
     assert files.target("select a, b from raw_files.parts order by a") == [("1", "x"), ("1", "x"), ("2", "y")]
 
 
+def test_a_column_name_with_a_double_quote_arrives_under_that_name(files):
+    (files.dir / "files" / "quoted.csv").write_text('id,"a""b"\n1,x\n')
+    code, answer = load(files, '"quoted.csv" = { key = ["id"] }\n')
+    assert code == 0, answer
+    assert files.target("select column_name from information_schema.columns where table_schema = 'raw_files'"
+                        " and table_name = 'quoted' order by ordinal_position") == [("id",), ('a"b',)]
+    assert files.target('select "a""b" from raw_files.quoted') == [("x",)]
+
+
 def test_an_empty_csv_fails_saying_it_is_empty(files):
     (files.dir / "files" / "empty.csv").write_text("")
     code, answer = load(files, '"empty.csv" = {}\n')
