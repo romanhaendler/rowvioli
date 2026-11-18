@@ -19,7 +19,7 @@ Every command, what it needs, and what it says and returns.
 
 `rowvioli --version` prints the version of the installed package.
 
-`list` takes the source from the definition when `--definition` is given or `sources/` is here, and from the target otherwise. In the target the connection is the one `apply` stored, decrypted with the private key, so the machine needs the connector and a route to the source but no checkout and no secrets in its environment. A source is there once it has been applied, even with an empty `tables` block. A source removed from the definition keeps its row, so `list` still answers for it.
+`list` takes the source from the definition when `--definition` is given or a `sources/` directory is here (an empty one too), and from the target otherwise. From a definition, this machine needs the connector, the source's secrets in the environment and a route to the source; where one is missing, run `list` on a worker's machine. From the target the connection is the one `apply` stored, decrypted with the private key, so the machine needs the connector and a route to the source but no checkout and no source secrets (the target address is there). A source is there once it has been applied, even with an empty `tables` block. A source removed from the definition keeps its row, so `list` still answers for it.
 
 Naming something means "this, now". `run` without a name means "whatever is due". `run` takes `--slots` too.
 

@@ -81,7 +81,7 @@ Rights in the target:
 | Who | Needs |
 |---|---|
 | The pipeline that runs `apply` | to write the definition |
-| The workers | to read the definition, to write what they experienced, to create and write the mirrors |
+| The workers | to read the definition (`rowvioli list` run there without `sources/` reads `_rowvioli.sources` and `_rowvioli.meta` with the worker's role), to write what they experienced, to create and write the mirrors |
 | Whoever may request a load, for example an application of your own | to read the status view, to write `requested_at` and nothing else; to see progress, membership in `pg_read_all_stats` |
 | Consumers | to read the mirrors and, for history, the views `<target table>__history`. A view is a plain view and runs with its owner's rights, so the right to read it is enough; the change log needs none. Default privileges on tables cover views. To tell a quiet source from a worker that is gone, `USAGE` on `_rowvioli` and `SELECT` on `_rowvioli.status`: that gives the view and nothing else in the schema (`tables`, `runs` and the connections stay closed). |
 

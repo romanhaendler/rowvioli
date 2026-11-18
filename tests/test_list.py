@@ -133,3 +133,33 @@ def test_list_from_the_target_scrubs_the_connection_from_a_driver_error(ready):
     worker.mkdir()
     r = ready.run("list", "erp", cwd=worker)
     assert r.returncode == 1 and "\n" not in r.stderr.strip() and "hunter2pw" not in r.stderr
+
+
+def test_run_of_a_source_without_tables_says_so_and_of_a_removed_one_says_that(ready):
+    source(ready, "erp", "postgres", 'url = "postgresql://u:p@nowhere.invalid/x"')
+    assert ready.run("apply", "sources").returncode == 0
+    r = ready.run("run", "erp")
+    assert r.returncode == 1 and "no source" not in r.stderr and r.stderr.count("\n") == 1
+    assert "erp has no tables yet" in r.stderr and "rowvioli list erp" in r.stderr
+    (ready.dir / "sources" / "erp.toml").unlink()
+    source(ready, "crm", "postgres", 'url = "postgresql://u:p@nowhere.invalid/x"')
+    assert ready.run("apply", "sources").returncode == 0
+    r = ready.run("run", "erp")
+    assert r.returncode == 1 and "erp is not in the definition any more" in r.stderr and r.stderr.count("\n") == 1
+    assert "nothing is no source" in ready.run("run", "nothing").stderr
+
+
+def test_list_of_a_file_source_with_a_missing_directory_names_the_directory(ready):
+    source(ready, "files", "file", 'path = "/nowhere/files"')
+    r = ready.run("list", "files")
+    assert r.returncode == 1 and "/nowhere/files" in r.stderr and "***" not in r.stderr
+
+
+def test_list_of_a_source_whose_connection_lacks_a_field_names_the_field(ready):
+    source(ready, "erp", "postgres", 'host = "x"')
+    for cwd in (None, ready.dir / "worker"):
+        if cwd:  # the target path: no sources/ here
+            assert ready.run("apply", "sources").returncode == 0
+            cwd.mkdir()
+        r = ready.run("list", "erp", cwd=cwd)
+        assert r.returncode == 1 and r.stderr.strip() == "the connection of source erp has no url", r.stderr
