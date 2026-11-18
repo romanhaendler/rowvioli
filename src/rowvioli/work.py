@@ -190,7 +190,7 @@ def run(source, table, slots):
         row = [] if is_source else sql(conn, "SELECT enabled FROM _rowvioli.sources WHERE name = $1", [source])
         conn.close()
         if row:  # a source of the definition's past or without tables yet: not a mistake in the name
-            raise SystemExit(f"{source} has no tables yet; `rowvioli list {source}` prints them" if row[0][0]
+            raise SystemExit(f"{source} has no tables; `rowvioli list {source}` prints them" if row[0][0]
                              else f"{source} is not in the definition any more")
         if not is_source:
             raise SystemExit((f"{source} {table}: " if table else "") + f"{source} is no source: the first name of `run` is a source, the second a table"

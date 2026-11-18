@@ -143,10 +143,11 @@ def print_tables(directory, name):
     try:
         tables = connector.tables(s["connection"])
     except Exception as e:  # a driver may quote the connection in its message
-        if isinstance(e, KeyError):  # the connector read a field the connection does not have
-            raise SystemExit(f"the connection of source {name} has no {e.args[0]}")
         readable = ("path",) if s["type"] == "file" else ()  # a directory is no secret (as in a run)
-        raise SystemExit(load.scrub(load.connection_values(s["connection"], readable), str(e) or type(e).__name__))
+        values = load.connection_values(s["connection"], readable)
+        if isinstance(e, KeyError) and e.args and isinstance(e.args[0], str) and e.args[0] not in s["connection"]:
+            raise SystemExit(load.scrub(values, f"the connection of source {name} has no {e.args[0]}"))
+        raise SystemExit(load.scrub(values, str(e) or type(e).__name__))
     for table, key in tables.items():
         # a JSON string and a JSON list of strings are TOML as well
         print(f"{json.dumps(table)} = {{ key = {json.dumps(key)} }}" if key else f"{json.dumps(table)} = {{}}")

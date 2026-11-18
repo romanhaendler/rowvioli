@@ -140,7 +140,7 @@ def test_run_of_a_source_without_tables_says_so_and_of_a_removed_one_says_that(r
     assert ready.run("apply", "sources").returncode == 0
     r = ready.run("run", "erp")
     assert r.returncode == 1 and "no source" not in r.stderr and r.stderr.count("\n") == 1
-    assert "erp has no tables yet" in r.stderr and "rowvioli list erp" in r.stderr
+    assert "erp has no tables;" in r.stderr and "rowvioli list erp" in r.stderr
     (ready.dir / "sources" / "erp.toml").unlink()
     source(ready, "crm", "postgres", 'url = "postgresql://u:p@nowhere.invalid/x"')
     assert ready.run("apply", "sources").returncode == 0

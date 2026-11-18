@@ -8,7 +8,7 @@ Added:
 
 Fixed:
 
-- `rowvioli run <source>` for a source applied with an empty `tables` block says `erp has no tables yet; `rowvioli list erp` prints them`, and for a source no longer in the definition `erp is not in the definition any more`, instead of `erp is no source`.
+- `rowvioli run <source>` for a source applied with an empty `tables` block says ``erp has no tables; `rowvioli list erp` prints them``, and for a source no longer in the definition `erp is not in the definition any more`, instead of `erp is no source`.
 - `rowvioli list` of a `file` source with a missing directory names the directory instead of `***`.
 - `rowvioli list` of a source whose connection lacks a field says `the connection of source erp has no url` instead of `'url'`.
 
