@@ -26,11 +26,11 @@ LOST = """SELECT r.run FROM _rowvioli.runs r JOIN _rowvioli.status s ON s.id = r
            WHERE r.run = ANY(string_to_array($1, ',')::bigint[]) AND s.status <> 'loading'"""
 
 MASCOT = """\
-  .~~~~~~~.   .~~~~~~~.
-  { o   o }   { o   o }
-  {   v   }---{   v   }
-  '~~~~~~~'   '~~~~~~~'
-    |   |       |   |"""
+.----.     .~~~~~~~.     .~~~~~~~.     .~~~~~~~.     .----.
+|####|     { o   o }     { o   o }     { o   o }     |    |
+|####|-[#]-{   v   }-[#]-{   v   }-[#]-{   v   }-[#]-|    |
+|####|     '~~~~~~~'     '~~~~~~~'     '~~~~~~~'     |####|
+'----'       |   |         |   |         |   |       '----'"""
 
 
 def say(text):
