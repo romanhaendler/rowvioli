@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 (2026-11-18)
+
+Added:
+
+- `rowvioli list` reads the source from the target where there is no `sources/` in the current directory and no `--definition`: it decrypts the stored connection with the worker key, so it runs on a worker's machine, which has the connector, the route to the source and no checkout. A new source is applied with an empty `tables` block, listed on a worker's machine and applied again. With `sources/` here or `--definition`, `list` works as before.
+
+Fixed:
+
+- `rowvioli run <source>` for a source applied with an empty `tables` block says ``erp has no tables; `rowvioli list erp` prints them``, and for a source no longer in the definition `erp is not in the definition any more`, instead of `erp is no source`.
+- `rowvioli list` of a `file` source with a missing directory names the directory instead of `***`.
+- `rowvioli list` of a source whose connection lacks a field says `the connection of source erp has no url` instead of `'url'`.
+
 ## 0.2.2 (2026-11-18)
 
 Changed:

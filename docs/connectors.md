@@ -17,7 +17,7 @@ def read(connection: dict, table: str, options: dict) -> Iterator[pyarrow.Record
 
 Out come Arrow batches with a schema that stays the same, and nothing else. A connector never sees the target, a lock or another table. It has to keep two promises: deliver in chunks instead of all at once, and keep column types stable.
 
-A connector may offer a second function, `tables(connection)`, that lists the tables of the source with their keys. Only `rowvioli list` uses it. A worker never calls it.
+A connector may offer a second function, `tables(connection)`, that lists the tables of the source with their keys. Only `rowvioli list` uses it, run by a person on a machine that has the connector. The worker process never calls it.
 
 | Connector | Covers | Built on | Needed on the worker |
 |---|---|---|---|

@@ -36,7 +36,7 @@ export ROWVIOLI_TARGET_URL=postgresql://etl@pg01/dwh
 export ERP_PASSWORD=...
 rowvioli init
 rowvioli key new
-rowvioli list erp >> sources/erp.toml      # one line per table, with its primary key
+rowvioli list erp >> sources/erp.toml      # one line per table, with its primary key (here: from sources/, else from the target)
 rowvioli apply sources/
 ROWVIOLI_KEY_FILE=worker.key rowvioli run erp
 rowvioli status

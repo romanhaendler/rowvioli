@@ -2,7 +2,7 @@
 
 <p align="center"><img src="https://raw.githubusercontent.com/romanhaendler/rowvioli/main/docs/mascot.svg" width="360" alt="Three ravioli in a chain hand little gift parcels from a source database to a sink database"></p>
 
-> **Version 0.2.2.** What is proven and what is not is listed in [docs/measurements.md](https://github.com/romanhaendler/rowvioli/blob/main/docs/measurements.md) and [docs/open-points.md](https://github.com/romanhaendler/rowvioli/blob/main/docs/open-points.md).
+> **Version 0.3.0.** What is proven and what is not is listed in [docs/measurements.md](https://github.com/romanhaendler/rowvioli/blob/main/docs/measurements.md) and [docs/open-points.md](https://github.com/romanhaendler/rowvioli/blob/main/docs/open-points.md).
 
 A program that mirrors tables from source systems into a PostgreSQL target. You say how old each table may be. Workers keep it that fresh, and consumers always see a complete state.
 
@@ -143,7 +143,7 @@ The machine that runs `apply` needs the core only, with no driver and no route t
 
 ## Defining a source
 
-One file per source under `sources/` names the connector, its connection and every table with its key, as in the example above. A table without its own `max_age` takes the source's. Secrets appear in the connection only as placeholders such as `$ERP_PASSWORD`, filled in from the environment when `apply` runs. Nobody has to type 200 table names: `rowvioli list erp` asks the source and prints them ready to paste.
+One file per source under `sources/` names the connector, its connection and every table with its key, as in the example above. A table without its own `max_age` takes the source's. Secrets appear in the connection only as placeholders such as `$ERP_PASSWORD`, filled in from the environment when `apply` runs. Nobody has to type 200 table names: `rowvioli list erp` asks the source and prints them ready to paste. A new source is applied with an empty `tables` block first; run in a directory without `sources/` (on a worker's machine), `list` reads the connection from the target.
 
 [docs/definition.md](https://github.com/romanhaendler/rowvioli/blob/main/docs/definition.md) has every setting (load times, target names, change logs, safety limits, connector options) and what `apply` refuses.
 
@@ -175,7 +175,7 @@ There is no web UI; everything a UI needs is in `_rowvioli`: the view `status`, 
 
 ## Commands
 
-`key new`, `apply`, `work` and `status` above are most of it. `init` creates the schema `_rowvioli` on its own, `list` prints the tables of a source, `apply --check` checks a definition without a target, and `run` loads what is due once and ends, or loads a named source or table now. `rowvioli --version` prints the version.
+`key new`, `apply`, `work` and `status` above are most of it. `init` creates the schema `_rowvioli` on its own, `list` prints the tables of a source (from `sources/` here, else from the target), `apply --check` checks a definition without a target, and `run` loads what is due once and ends, or loads a named source or table now. `rowvioli --version` prints the version.
 
 [docs/commands.md](https://github.com/romanhaendler/rowvioli/blob/main/docs/commands.md) has every command with what it needs, `apply` in detail, the answer of `run` and its exit codes.
 
