@@ -4,7 +4,7 @@ a nested call while the batches are read. With the option `print` it writes the 
 driver might, and a progress bar to stdout, as DuckDB does."""
 import os
 import re
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote
 
 import pyarrow as pa
 
@@ -31,7 +31,7 @@ def batches(connection, options):
 
 
 def leak(connection):
-    password = unquote(urlsplit(connection["url"]).password)
+    password = unquote(re.match(r"\w+://[^:]*:(.*)@", connection["url"], re.S)[1])  # urlsplit drops a newline
     odbc = re.search(r"PWD\s*=\s*\{?([^;}]*)", connection.get("string", ""), re.I)  # unbraced, as a driver may
     raise RuntimeError(f"cannot connect with {connection} as {password}, token {connection['token']}"
                        + (f", password {odbc[1]}" if odbc else ""))

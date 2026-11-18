@@ -164,6 +164,16 @@ def test_a_ciphertext_copied_to_another_source_is_rejected(secret):
     assert run(secret, "erp")[0] == 0
 
 
+def test_two_sources_whose_sealed_connections_are_swapped_both_fail(secret):
+    apply_with(secret, PASSWORD)
+    secret.target("update _rowvioli.sources set connection = case name when 'erp' then (select connection from"
+                  " _rowvioli.sources where name = 'crm') else (select connection from _rowvioli.sources"
+                  " where name = 'erp') end")
+    code, answer = run(secret)
+    assert code == 1
+    assert [a["reason"].count("sealed for another source") for a in answer["tables"].values()] == [1, 1]
+
+
 
 def test_the_password_appears_nowhere_when_a_run_fails(secret):
     out = [apply_with(secret, PASSWORD)]
@@ -198,6 +208,34 @@ def test_a_password_with_at_and_percent_written_plainly_loads_and_leaks_nowhere_
     reason = secret.target("select reason from _rowvioli.runs where status = 'failed'")[0][0]
     assert "password authentication failed" in reason
     for part in (plain, "Sesam", "Torweg", "zz-0815", "Sesam%40Torweg%25zz-0815"):
+        assert leaks(secret, part, *out) == [], part
+
+
+def test_a_password_from_a_variable_with_at_slash_and_colon_is_encoded_and_loads(secret):
+    odd = "Se@sam/Tor:weg-0815"
+    role = "reader_" + secret.source_url.rsplit("/", 1)[1]
+    secret.source(f"alter role {role} password '{odd}'")
+    apply_with(secret, odd)
+    assert run(secret, "erp")[0] == 0
+
+
+@pytest.mark.parametrize("plain", ["Sesam[Torweg-0815", "Sesam]Torweg[0815"])
+def test_a_password_with_a_bracket_written_plainly_gets_as_far_as_the_connection_and_leaks_nowhere(secret, plain):
+    role = "reader_" + secret.source_url.rsplit("/", 1)[1]
+    secret.source(f"alter role {role} password '{plain}'")
+    text = (secret.dir / "sources" / "erp.toml").read_text().replace("$ERP_PASSWORD", plain)
+    secret.definition({"erp.toml": text, "crm.toml": text.replace("[erp", "[crm")})
+    out = [secret.run("apply", "sources")]
+    assert out[-1].returncode == 0, out[-1].stderr
+    out.append(secret.run("run", "erp"))
+    assert out[-1].returncode == 0, out[-1].stdout + out[-1].stderr
+    secret.source(f"alter role {role} password '{WRONG}'")
+    secret.target("update _rowvioli.tables set requested_at = now()")
+    out.append(secret.run("run", "erp"))
+    assert out[-1].returncode == 1
+    reason = secret.target("select reason from _rowvioli.runs where status = 'failed'")[0][0]
+    assert "password authentication failed" in reason
+    for part in (plain, "Sesam", "Torweg"):
         assert leaks(secret, part, *out) == [], part
 
 

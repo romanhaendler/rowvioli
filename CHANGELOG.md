@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+Fixed:
+
+- A password with a `[` written plainly in a URL of the definition no longer fails the run with `Invalid IPv6 URL`: the run goes on to connect, and the password is still scrubbed from every reason and error.
+
 ## 0.2.0 (2026-11-18)
 
 Added:

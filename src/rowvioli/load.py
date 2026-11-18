@@ -12,7 +12,7 @@ import re
 import signal
 import sys
 import threading
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote
 
 import pyarrow as pa
 
@@ -331,6 +331,12 @@ def widen(conn, table, staged, existing):
 ODBC_PASSWORD = re.compile(r"(?:^|;)\s*(?:PWD|Password)\s*=\s*(\{(?:[^}]|\}\})*\}|[^;]*)", re.I)
 
 
+def url_password(url):
+    """The password of a URL; urlsplit refuses a `[` in the host part (Invalid IPv6 URL), so the user info is cut by hand."""
+    userinfo = re.split(r"[/?#]", url.partition("://")[2])[0].rpartition("@")[0]
+    return userinfo.partition(":")[2] or None
+
+
 def connection_values(value, readable=()):
     """Every text of a connection, and the password of a URL or an ODBC string in it as written and decoded, since a
     driver may quote either (docs/connections.md "What happens to the decrypted connection")."""
@@ -340,7 +346,7 @@ def connection_values(value, readable=()):
         return [s for v in value for s in connection_values(v)]
     if not isinstance(value, str):
         return []
-    password = urlsplit(value).password if "://" in value else None
+    password = url_password(value) if "://" in value else None
     odbc = [m[1].strip() for m in ODBC_PASSWORD.finditer(value)]
     return ([value] + ([password, unquote(password)] if password else [])
             + odbc + [p[1:-1].replace("}}", "}") for p in odbc if p.startswith("{")])
@@ -348,7 +354,7 @@ def connection_values(value, readable=()):
 
 def target_secrets():
     """The password of the target's URL, written and decoded: its user and host stay readable in an error."""
-    password = urlsplit(os.environ.get("ROWVIOLI_TARGET_URL") or "").password
+    password = url_password(os.environ.get("ROWVIOLI_TARGET_URL") or "")
     return [password, unquote(password)] if password else []
 
 
