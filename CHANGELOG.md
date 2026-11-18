@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1 (2026-11-18)
+
+Fixed:
+
+- A NUL byte in a text value no longer fails the run with `invalid byte sequence for encoding "UTF8": 0x00`: it is removed while staging, for every connector. Text inside a list, a struct or a JSON value is not cleaned.
+
 ## 0.3.0 (2026-11-18)
 
 Added:
