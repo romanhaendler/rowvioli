@@ -8,11 +8,11 @@ All numbers were taken on 2026-11-11 with the scripts in `experiments/`, except 
 - No tuning unless stated. `work_mem` is the default 4 MB in experiments 01 and 02 and 256 MB in 03 and 06.
 - Every number is a single measurement. Expect a spread of well over 10 %.
 - Experiments 1 to 6 run inside the database. Reading from a source, the network and the COPY from a client are **not** included there. "Filling the staging table" is an `INSERT ... SELECT` inside Postgres and only stands in for the write cost of a COPY. Experiment 8 is the exception: it fills the staging table from a Python client on the same machine.
-- The test table has 16 columns (integers, decimals, dates, short texts), shaped after the `lineitem` table of the `hpdl` benchmark. A change set is 1 % updated, 0.1 % deleted and 0.1 % inserted rows.
+- The test table has 16 columns (integers, decimals, dates, short texts). A change set is 1 % updated, 0.1 % deleted and 0.1 % inserted rows.
 
 ## 1. Compare and publish in one transaction
 
-Experiment `01_veroeffentlichen.sql`. This is the first variant of the design: both comparison queries run inside the publishing transaction. Staging table is unlogged.
+Experiment `01_publish.sql`. This is the first variant of the design: both comparison queries run inside the publishing transaction. Staging table is unlogged.
 
 | Step | 10⁶ rows | 10⁷ rows |
 |---|---|---|
@@ -30,7 +30,7 @@ Applying the diff took a conspicuous 16 s for the delete step alone at 10⁷ row
 
 ## 2. Row comparison on a wide table
 
-Experiment `02_breite_tabelle.sql`. 900 columns (300 each of integer, `numeric(12,2)` and 8-character text), 100,000 rows, 784 MB per table. The change is placed in the last column, the worst case for a column-by-column comparison.
+Experiment `02_wide_table.sql`. 900 columns (300 each of integer, `numeric(12,2)` and 8-character text), 100,000 rows, 784 MB per table. The change is placed in the last column, the worst case for a column-by-column comparison.
 
 | Query | Duration |
 |---|---|
@@ -53,7 +53,7 @@ Not measured: a million rows of this width. Linear growth would mean about a min
 
 ## 3. Computing the diff before the transaction
 
-Experiment `03_unterschiede_vorab.sql`, 10⁷ rows, `work_mem` 256 MB, unlogged staging table. The diff goes into a table of its own with `CREATE TABLE ... AS`, which allows Postgres to run the query in parallel.
+Experiment `03_diff_upfront.sql`, 10⁷ rows, `work_mem` 256 MB, unlogged staging table. The diff goes into a table of its own with `CREATE TABLE ... AS`, which allows Postgres to run the query in parallel.
 
 | Step | Duration |
 |---|---|
@@ -65,7 +65,7 @@ The publishing transaction shrinks from 59 s to 15 s and depends only on the num
 
 ## 4. Killing a client
 
-Experiment `04_harter_abbruch.sh`. A client holds an advisory lock and is ended with `kill -9`.
+Experiment `04_hard_kill.sh`. A client holds an advisory lock and is ended with `kill -9`.
 
 | Situation | Lock released after |
 |---|---|
@@ -73,11 +73,11 @@ Experiment `04_harter_abbruch.sh`. A client holds an advisory lock and is ended 
 | Postgres is computing a 15 s statement | still held after 2 s, released after the statement ended |
 | The same with `client_connection_check_interval = 2s` | under 4 s |
 
-Not measured: a machine or network failure, where nobody closes the connection. Postgres then notices only through TCP keepalive. The `data-extractor` project came to the same limit (ADR-0011 there: about 60 s expected with the keepalive values used, not reproducible locally).
+Not measured: a machine or network failure, where nobody closes the connection. Postgres then notices only through TCP keepalive.
 
 ## 5. Claiming with several workers
 
-Experiment `05_vergabe.sql` and `05_vergabe.sh`. Two sources with `parallel` 4 and 2, 40 and 10 waiting runs, 12 workers that each claim, work for 0.15 to 0.35 s, record `ok` and release the lock. One additional worker claims a run and is ended with `kill -9`. A probe counts the held table locks per source every 20 ms.
+Experiment `05_claim.sql` and `05_claim.sh`. Two sources with `parallel` 4 and 2, 40 and 10 waiting runs, 12 workers that each claim, work for 0.15 to 0.35 s, record `ok` and release the lock. One additional worker claims a run and is ended with `kill -9`. A probe counts the held table locks per source every 20 ms.
 
 | Observation | Result |
 |---|---|
@@ -101,7 +101,7 @@ Experiment `06_temp_staging.sql`, 10⁷ rows, `work_mem` 256 MB, `temp_buffers` 
 
 - After publishing, mirror and staging table were identical row by row. This verifies the variant "diff first, then apply".
 - The diff takes as long as on one core in experiment 3. Postgres does not scan TEMP tables in parallel workers, so the gain from 40 s to 26 s is lost.
-- Filling is slower than with an unlogged table (16.4 s against 10.6 s). `data-extractor` measured both as equal at 10⁶ rows through ADBC (ADR-0004 there: 0.42 s against 0.46 s). The difference here was not investigated.
+- Filling is slower than with an unlogged table (16.4 s against 10.6 s). The difference here was not investigated.
 
 The same script shows how `ROW(...)` compares:
 
@@ -110,7 +110,7 @@ The same script shows how `ROW(...)` compares:
 
 ## 7. Encrypting secrets
 
-Experiment `07_geheimnisse.py`, PyNaCl 1.6.2. Not a timing but a check of the properties the encrypted connections rely on. The experiment encrypts a single named value. The design now encrypts a whole connection block under the name of its source (decision 26).
+Experiment `07_secrets.py`, PyNaCl 1.6.2. Not a timing but a check of the properties the encrypted connections rely on. The experiment encrypts a single named value. The design now encrypts a whole connection block under the name of its source (decision 26).
 
 | Property | Result |
 |---|---|
@@ -125,7 +125,7 @@ A 54-byte plaintext becomes a 102-byte ciphertext.
 
 ## 8. The driver of the control connection
 
-Experiment `08_treiber.py`, adbc-driver-postgresql 1.13.0, pyarrow 26.0.1, psycopg 3.3.8, Python client on macOS against `postgres:16-alpine` in Docker without limits. The question: can ADBC alone do everything a run needs on one connection, or is a second Postgres driver necessary?
+Experiment `08_drivers.py`, adbc-driver-postgresql 1.13.0, pyarrow 26.0.1, psycopg 3.3.8, Python client on macOS against `postgres:16-alpine` in Docker without limits. The question: can ADBC alone do everything a run needs on one connection, or is a second Postgres driver necessary?
 
 Each variant plays two complete runs on a single connection: take a session-level advisory lock, fill a TEMP staging table with 10⁶ rows of 8 columns (integer, text, decimal, timestamp with time zone, date, boolean, float, a column of nulls), compute the diff, publish in a transaction. The second run changes 1 % of the rows. A second connection watches.
 
@@ -266,23 +266,6 @@ Recommendation: the README names an index, and says it is for one key and a pers
 - **The pooler fails by itself under load.** With busy neighbours the driver's prepared statements also broke (`unnamed prepared statement does not exist`, `SQLSTATE 26000`) in 2 of 12 `init` runs, before and apart from the check.
 
 Limitations: one pooler version, one pool size, a synthetic load. A pass is no proof that no pooler is in front; the check catches the case it is built for, a pooler whose server connections are shared between clients, with a chance that grows with their number. Session mode was found to work in the shakedown (`install-target.md`).
-
-## Reference: hpdl
-
-From `hpdl/docs/performance.md`, same table shape, source and target with 2 CPUs and 4 GB each, worker with 3 CPUs:
-
-| Rows | Run | Duration |
-|---|---|---|
-| 10⁶ | initial load | 3.0 to 3.8 s |
-| 10⁶ | unchanged | 0.8 to 0.9 s |
-| 10⁶ | 1 % changed | 1.2 to 1.4 s |
-| 10⁷ | initial load | 30 to 43 s |
-| 10⁷ | unchanged | 8.3 to 10 s |
-| 10⁷ | 1 % changed | 25 to 42 s |
-
-These are complete runs including reading from the source, so they are not directly comparable with the numbers above. They show the order of magnitude: the simple path is in the same range at 10⁶ rows and clearly slower at 10⁷, where staging (16 s), diff (39 s) and publishing (17 s) add up to more than a minute before any reading.
-
-The bottleneck in `hpdl` was never the Python worker: source CPU on unchanged runs, target CPU on initial loads, a single target session on merges. This is the reason the choice of language does not decide the speed.
 
 ## Summary
 

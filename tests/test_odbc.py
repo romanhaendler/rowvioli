@@ -122,6 +122,7 @@ def test_without_an_odbc_driver_manager_a_source_of_type_odbc_fails_as_a_missing
     assert code == 1
     [reason] = [a["reason"] for a in answer["tables"].values()]
     assert reason.startswith('connector "odbc" cannot be loaded on worker ')
+    assert "install unixodbc (libodbc)" in reason and "Traceback" not in reason, reason
 
 
 @needs_driver

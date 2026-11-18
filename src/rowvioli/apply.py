@@ -14,7 +14,7 @@ def apply(directory, key_file, init=False):
     try:
         public = seal.public_key(key_file)
     except OSError as e:
-        raise SystemExit(f"public key {key_file}: {e.strerror}")
+        raise SystemExit(f"public key {key_file}: {e.strerror}; `rowvioli key new` creates it")
     except Exception:
         raise SystemExit(f"{key_file} holds no public key")
     for s in sources:

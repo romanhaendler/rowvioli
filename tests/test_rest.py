@@ -41,6 +41,10 @@ def api(rv):
             if url.path == "/readings":
                 page = int(query.get("page", ["1"])[0])
                 body = READINGS[page - 1] if page <= len(READINGS) else []
+            elif url.path in ("/wrapped", "/nested"):
+                page = int(query.get("page", ["1"])[0])
+                rows = READINGS[page - 1] if page <= len(READINGS) else []
+                body = {"data": rows} if url.path == "/wrapped" else {"result": {"items": rows}}
             elif url.path == "/slow":
                 time.sleep(6)  # longer than httpx's default of 5 seconds
                 body = [{"station": "a"}]
@@ -258,3 +262,30 @@ def test_a_mirror_with_rows_whose_source_delivers_zero_rows_still_fails(api):
 def test_an_answer_slower_than_five_seconds_loads(api):
     r, _ = load(api, 'a = { key = ["station"], path = "/slow", columns = { station = "text" } }')
     assert r.returncode == 0, r.stdout
+
+
+@pytest.mark.parametrize("path, rows, page", [("/wrapped", "data", True), ("/nested", "result.items", True),
+                                              ("/wrapped", "data", False), ("/nested", "result.items", False)])
+def test_rows_names_the_field_that_holds_the_array_paged_and_unpaged(api, path, rows, page):
+    paging = ', page = "page"' if page else ""
+    r, answer = load(api, f'a = {{ key = ["station"], path = "{path}", rows = "{rows}"{paging}, columns = {COLUMNS} }}')
+    assert r.returncode == 0, r.stdout
+    assert answer["raw_weather.a"]["inserted"] == (3 if page else 1)
+
+
+@pytest.mark.parametrize("path, rows", [("/wrapped", "nope"), ("/nested", "result.nope"), ("/nested", "data"),
+                                        ("/readings", "data"), ("/nested", "result")])
+def test_a_missing_rows_field_fails_the_run_naming_rows_and_keeps_the_mirror(api, path, rows):
+    load(api, 'a = { key = ["station"], path = "/readings", columns = { station = "text" } }')
+    before = api.target("select * from raw_weather.a")
+    api.target("update _rowvioli.tables set options = jsonb_set(jsonb_set(options, '{path}', to_jsonb(%s::text)), "
+               "'{rows}', to_jsonb(%s::text)), requested_at = now()", [path, rows])
+    assert api.run("run").returncode == 1
+    assert "rows" in reason(api)
+    assert api.target("select * from raw_weather.a") == before
+
+
+@pytest.mark.parametrize("rows", ['""', "5", "true"])
+def test_rows_that_is_no_field_name_fails_the_run_naming_the_option(api, rows):
+    r, _ = load(api, f'a = {{ key = ["station"], path = "/readings", rows = {rows}, columns = {COLUMNS} }}')
+    assert r.returncode == 1 and reason(api).endswith("a: the option rows must be a field name"), reason(api)

@@ -48,13 +48,15 @@ def test_list_for_file_prints_the_readable_files_without_keys_that_apply_and_loa
     d = ready.dir / "files"
     d.mkdir()
     (d / "customers.csv").write_text("customer_no,name\n1,Anna\n2,Ben\n")
-    (d / "orders.csv").write_text("order_no\n7\n")
+    (d / "orders.csv").write_text("order_no,customer_no\n7,1\n")  # one column would need sep
+    (d / "events.jsonl").write_text('{"id": 1}\n')
     (d / "readme.txt").write_text("not a table")
     file = source(ready, "files", "file", f'path = "{d}"')
     r = ready.run("list", "files")
     assert r.returncode == 0, r.stderr
-    assert r.stdout == '"customers.csv" = {}\n"orders.csv" = {}\n'
-    assert paste_apply_run(ready, file, r.stdout) == {"raw_files.customers": 2, "raw_files.orders": 1}
+    assert r.stdout == '"customers.csv" = {}\n"events.jsonl" = {}\n"orders.csv" = {}\n'
+    assert paste_apply_run(ready, file, r.stdout) == {"raw_files.customers": 2, "raw_files.events": 1,
+                                                      "raw_files.orders": 1}
 
 
 def test_list_needs_the_variables_of_the_listed_source_only(ready):

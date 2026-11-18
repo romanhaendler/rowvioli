@@ -288,14 +288,14 @@ def test_a_source_with_reordered_columns_still_gives_a_correct_mirror_and_change
 
 
 @pytest.mark.parametrize("command", ["run", "work"])
-@pytest.mark.parametrize("variable", ["ROWVIOLI_TARGET_URL", "ROWVIOLI_KEY_FILE"])
-def test_run_and_work_name_a_missing_variable_at_start(rv, command, variable):
-    r = rv.run(command, env={variable: ""}, timeout=10)
-    assert r.returncode != 0 and variable in r.stderr
+def test_run_and_work_name_a_missing_target_url_at_start(rv, command):
+    r = rv.run(command, env={"ROWVIOLI_TARGET_URL": ""}, timeout=10)
+    assert r.returncode != 0 and "ROWVIOLI_TARGET_URL" in r.stderr
 
 
 @pytest.mark.parametrize("command", ["init", "status", "run", "work"])
 def test_an_unreachable_target_gives_the_drivers_message_without_password_or_traceback(rv, command):
+    assert rv.run("key", "new").returncode == 0  # `run` and `work` check the key file before they connect
     r = rv.run(command, env={"ROWVIOLI_TARGET_URL": "postgresql://u:pass%25word@127.0.0.1:1/db"}, timeout=10)
     assert r.returncode == 1 and "Failed to connect" in r.stderr and "Traceback" not in r.stderr, r.stderr
     # libpq quotes a password that is not valid percent-encoding in its message

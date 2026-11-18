@@ -2,23 +2,21 @@
 
 Every decision of the concept with its reason, its price and what was rejected. The order follows the discussion of 2026-11-11, so the document also shows how the design got to where it is.
 
-There were two rounds on that day. Decisions 1 to 19 are the first round. The second round (decisions 20 to 30) replaced the model of orders, a jobs repo and an external scheduler with a maximum age per table, definitions in the target and stateless workers. Decisions of the first round that no longer hold are marked and kept, with their text unchanged. A third round (decisions 32 to 35) followed on 2026-11-12, after a throwaway prototype had tried out the model of the second round. A fourth round (decision 36) added load times, a fifth (decision 37) the lines of a worker, a sixth (decision 38) the rule for licences, a seventh (decisions 39 and 40) target names and history. An eighth (decisions 41 to 43) followed on 2026-11-15, after the shakedown of the built wheel.
+There were two rounds on that day. Decisions 1 to 19 are the first round. The second round (decisions 20 to 30) replaced the model of orders, a jobs repo and an external scheduler with a maximum age per table, definitions in the target and stateless workers. Decisions of the first round that no longer hold are marked and kept, with their text unchanged. A third round (decisions 32 to 35) followed on 2026-11-12, after a throwaway prototype had tried out the model of the second round. A fourth round (decision 36) added load times, a fifth (decision 37) the lines of a worker, a sixth (decision 38) the rule for licences, a seventh (decisions 39 and 40) target names and history. An eighth (decisions 41 to 43) followed on 2026-11-15, after the shakedown of the built wheel, and a ninth (decisions 44 to 46) on 2026-11-18, after the first mirror out of the box.
 
-Evidence refers to `docs/measurements.md` and to the earlier projects `hpdl`, `data-extractor` and `dataly` in the same workspace.
+Evidence refers to `docs/measurements.md`.
 
 ## Starting point
 
-Three earlier attempts exist: `hpdl` (Python worker, hash comparison per key range, SCD2), `data-extractor` (a specification in its sixth review round with 22 ADRs) and `dataly` (dlt and dbt behind a service with its own scheduler). None was satisfying.
-
-The first idea for a new attempt was a very fast Rust program. The discussion showed that speed was not the problem. The problem was complexity: load modes, hashes, key ranges, partitions, views, fencing tokens. The goal of this concept is therefore **half as many concepts**, with speed as a constraint and not as the aim.
+The first idea was a very fast Rust program. The discussion showed that speed was not the problem. The problem was complexity: load modes, hashes, key ranges, partitions, views, fencing tokens. The goal of this concept is therefore **half as many concepts**, with speed as a constraint and not as the aim.
 
 ## 1. PostgreSQL is the only target and the only place of coordination
 
 **Decision.** The program loads into PostgreSQL only. Definitions, runs, locks and status live in the target database. There is no other state: no state file, no broker, no service that has to be reachable.
 
-**Why.** All earlier projects loaded into Postgres. Session locks, transactions and the system view `pg_locks` give locking, dead-run detection and counting without building anything.
+**Why.** Session locks, transactions and the system view `pg_locks` give locking, dead-run detection and counting without building anything.
 
-**Price.** Other targets are out. A note in `data-extractor` (`docs/notiz-weitere-ziele.md`) examined which of these mechanisms other databases offer; Azure Database for PostgreSQL has all of them, Fabric and Databricks do not.
+**Price.** Other targets are out.
 
 ## 2. Compare in the target, by row comparison
 
@@ -26,10 +24,10 @@ The first idea for a new attempt was a very fast Rust program. The discussion sh
 
 **Why.** No hash, no canonical text form of values, no type normalisation in the program. The comparison happens in the target types, where it is exact. The program stays a pipe.
 
-**Price.** Every run writes the whole table once, even if nothing changed. At 10⁷ rows the path is slower than `hpdl`.
+**Price.** Every run writes the whole table once, even if nothing changed. At 10⁷ rows staging, diff and publishing add up to more than a minute.
 
 **Rejected.**
-- *Hash per row in the worker* (as in `hpdl` and `data-extractor`). Faster for large tables, but brings the hash definition, its recomputation after type changes and key ranges for bounded memory.
+- *Hash per row in the worker*. It brings the hash definition, its recomputation after type changes and key ranges for bounded memory.
 - *A stored hash column in the mirror.* Would roughly halve the comparison on wide tables because only key and hash of the mirror are read. Kept in reserve for a concrete table that is too slow.
 - *`EXCEPT`.* 40 times slower on a wide table.
 - *Sorted merge of two ordered streams.* Needs identical sort order in source and target, which collations do not guarantee.
@@ -43,7 +41,7 @@ The first idea for a new attempt was a very fast Rust program. The discussion sh
 **Price.** The initial load writes twice (staging table, then mirror). Tables without a key are deleted and re-inserted on every run, which bloats the table until autovacuum has cleaned up.
 
 **Rejected.**
-- *Swapping tables by renaming or attaching a partition.* Needs an exclusive lock that long-reading consumers block, and breaks dependent views. `data-extractor` spent several ADRs on this (0007, 0019, 0021).
+- *Swapping tables by renaming or attaching a partition.* Needs an exclusive lock that long-reading consumers block, and breaks dependent views.
 - *`TRUNCATE` and reload.* Not safe under MVCC: a concurrent reader can see an empty table.
 - *Views that switch to a published run number.* Only needed when several transactions write the same table in parallel, which this design does not do.
 
@@ -73,7 +71,7 @@ The first idea for a new attempt was a very fast Rust program. The discussion sh
 
 **Decision.** A run uses exactly one connection to the target for everything. Staging table and diff are TEMP tables on it.
 
-**Why.** No naming scheme, no clean-up, no leftovers of dead runs: the tables disappear with the connection. `data-extractor` came to the same conclusion (ADR-0004) and measured the same COPY throughput as with unlogged tables.
+**Why.** No naming scheme, no clean-up, no leftovers of dead runs: the tables disappear with the connection.
 
 **Price.** Postgres does not scan TEMP tables in parallel workers. The gain measured with an unlogged staging table (40 s down to 26 s at 10⁷ rows on two cores) is lost. In the working range of up to 10⁶ rows this is irrelevant. Parallelism comes from loading several tables at once.
 
@@ -85,7 +83,7 @@ The first idea for a new attempt was a very fast Rust program. The discussion sh
 
 **Decision.** A session-level advisory lock per target table, taken on the control connection. The publishing transaction runs on the same connection.
 
-**Why.** If the process dies, connection, lock and open transaction are gone together. A zombie cannot commit, because a COMMIT needs a command from a client that no longer exists. This makes a fencing token unnecessary. `data-extractor` needed one (ADR-0010) because several connections wrote the same table.
+**Why.** If the process dies, connection, lock and open transaction are gone together. A zombie cannot commit, because a COMMIT needs a command from a client that no longer exists. This makes a fencing token unnecessary.
 
 **Price.** The control connection must reach Postgres directly, not through a pooler in transaction mode. Advisory locks share one number space per database with every other application that uses them. During a long statement Postgres notices a dead client only with `client_connection_check_interval`. After a machine or network failure, release depends on TCP keepalive.
 
@@ -105,7 +103,7 @@ The first idea for a new attempt was a very fast Rust program. The discussion sh
 
 **Decision.** A source file holds the connection once, patterns for tables, and overrides for single tables.
 
-**Why.** With 200 tables in an ERP system, one file per table means 200 near-identical files and soon a wish for defaults and inheritance. `hpdl` already had layered settings for that reason.
+**Why.** With 200 tables in an ERP system, one file per table means 200 near-identical files and soon a wish for defaults and inheritance.
 
 **Price.** With a pattern like `dbo.*`, new tables in the source appear in the target automatically. A connector needs a second function that lists tables and keys.
 
@@ -144,7 +142,6 @@ This is not a scheduler. Nothing in the program knows about time.
 
 **Why.**
 - The data path runs through native libraries (Arrow, ADBC, arrow-odbc, DuckDB). The core hands chunks from one to the next. There is nothing to speed up.
-- In `hpdl` the bottleneck was never the worker but source and target.
 - A connector becomes two Python functions. For REST interfaces that is the natural language.
 - Informix needs the IBM ODBC driver on the machine in any language, so "one static binary" does not hold for that source anyway.
 
@@ -209,7 +206,7 @@ This is not a scheduler. Nothing in the program knows about time.
 
 **Decision.** The project ships an example Dockerfile, no image.
 
-**Why.** A useful image needs the ODBC drivers of Microsoft and IBM, which are under vendor licences and do not belong into an MIT project. `data-extractor` decided the same (ADR-0012).
+**Why.** A useful image needs the ODBC drivers of Microsoft and IBM, which are under vendor licences and do not belong into an MIT project.
 
 ## 17. Schema changes: additive automatically, everything else stops
 
@@ -225,7 +222,7 @@ This is not a scheduler. Nothing in the program knows about time.
 
 **Decision.** A run aborts if the source delivers zero rows or more than `max_delete_share` (default one half) of the rows would disappear.
 
-**Why.** "Consistent" is not enough. A broken source would empty the mirror in a perfectly consistent transaction. `dataly` has the same rule.
+**Why.** "Consistent" is not enough. A broken source would empty the mirror in a perfectly consistent transaction.
 
 ## 19. A worker claims only what it can load
 
@@ -287,7 +284,7 @@ Patterns can be added later as a second job of the worker without changing the m
 
 **Decision.** `rowvioli apply <directory>` writes the definition into the target: one row per source, one row per table. A worker brings its connectors, the address of the target and the private key, and nothing else. It has no checkout and no file that describes a source.
 
-`apply` is idempotent, never touches what the workers experienced, treats the directory as the whole definition and runs in one transaction. What is no longer in the directory is disabled, never deleted.
+`apply` is idempotent, never touches what the workers experienced (one exception, decision 46), treats the directory as the whole definition and runs in one transaction. What is no longer in the directory is disabled, never deleted.
 
 **Why.** All workers see the same definition at the same moment. The minutes of different states from decision 14 are gone, and so are the checkout, the `git pull` and the question how a worker notices a new program version. A new program version is an ordinary restart of the service. The pipeline that deploys the definition needs access to the target and nothing else.
 
@@ -598,7 +595,7 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 
 **Why.** Decision 26 encrypts the connection as a whole, the address too, so that whoever can write to the target cannot point a password at another server. An option that is joined to the address undid it: `path = ".evil.com/x"` sent the token to a host of someone else's choosing, and a `file` table `../outside.csv` read any file the worker can read. The check belongs in the connector because a writer of the target does not pass `apply`.
 
-**Price.** A REST API whose pages live on another host needs a connector of its own. A `file` source cannot read through a symbolic link that leaves its directory.
+**Price.** A REST API whose pages live on another host needs a connector of its own. A `file` source cannot read through a symbolic link that leaves its directory, also not as a match of a pattern.
 
 **Rejected.**
 - *Checking only in `apply`.* A writer of the target bypasses it.
@@ -628,6 +625,40 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 **Rejected.**
 - *A timeout option for `rest`.* A second bound beside the first.
 - *A longer fixed timeout.* It moves the problem.
+
+## 44. Names that are always the same are defaults
+
+**Decision.** `ROWVIOLI_KEY_FILE` unset means `worker.key` in the current directory, and `apply` without a directory takes `sources`, as `list` does. `run` and `work` stop at the start when the key file does not exist: they open it, and when that fails they name its path and the reason, and for a missing file say to copy `worker.key` from where `rowvioli key new` was run (only for a new target does `key new` create it); no table is attempted. The first mirror then needs one variable, `ROWVIOLI_TARGET_URL`.
+
+**Why.** `key new` writes `worker.key` into the current directory and the definition lives in `sources/` by convention, so the first mirror said both names twice, and the slip that mattered, a run without the key, showed only per table as a failed decryption that named no next step. The first wording sent a second machine to `key new`, which creates a pair that decrypts nothing; the message now says to copy the key, and the reason of a wrong key (`holds no private key <id>`) names both ways out.
+
+**Price.** A worker whose working directory is not where its key is (a service, cron) must still set `ROWVIOLI_KEY_FILE` or its working directory. A relative default depends on where the command runs.
+
+**Rejected.**
+- *`apply --init` creating the key pair.* The owner refused it: a private key must not appear as a side effect where the definition is deployed. That place holds every secret of the sources already, and a second private key there that nobody asked for is a copy to lose or leak. `key new` stays a command of its own, and `apply` without `worker.pub` says that `key new` creates it.
+
+## 45. A near miss of a built-in type fails apply
+
+**Decision.** A source `type` that is one edit (a letter added, left out, changed, or two neighbours swapped) from `postgres`, `file`, `odbc` or `rest`, or is `postgresql`, fails `apply` and `apply --check` with `type fiel is not installed here; did you mean file?`, unless a connector of that type is installed where `apply` runs: then it passes, and the message says so. `postgis`, two edits from `postgres`, and any other type pass. `apply` still works where no connector is installed.
+
+**Why.** Decision 22 leaves the connectors to the workers, so `apply` does not know which are installed, and a mistyped `type` showed at the first run, per table. The four built-in names are the only ones `apply` can know, and a slip on one of them is far likelier than a connector of someone else that happens to be that close. Asking the entry points of the machine that applies costs nothing and gives a connector of one's own named `jdbc` a way through.
+
+**Price.** A connector of one's own one edit from a built-in name fails `apply` on a machine that does not have it installed, such as a pipeline runner. An installed connector is otherwise not checked: `weather` passes whether or not a worker has it.
+
+**Rejected.**
+- *Refusing every type `apply` does not know.* The deployment needs no driver (decision 22).
+- *Two edits from `postgres`.* `postgis` is a name of its own, and the slip it would catch is rare.
+
+## 46. A changed target name makes a table new again
+
+**Decision.** `apply` resets `attempted_at`, `attempts`, `reason` and `loaded_at` of a table whose target schema or table changes. The table is `new` again: status shows no age and no old reason, it is due at the next run, and a first failure pauses one minute. `requested_at` stays. These are the only facts a worker wrote that `apply` touches. A table that is loading under the old name finishes into the old mirror, sets `loaded_at` and `attempts`, but not `attempted_at`: it stays new, and the next run loads the new name.
+
+**Why.** Under the new name no mirror exists yet, and the table kept its age, its attempts and its reason: a table last loaded under the old name sat out its `max_age` while `run` printed `{"tables": {}}`, and status described a mirror that does not exist.
+
+**Price.** `apply` moves a load time forward for a rename and forgets how often the table failed. The old tables stay where they are (decision 39), and the first run under the new name loads everything again, as a new table does.
+
+**Rejected.**
+- *Leaving the table alone and asking the person to request a load.* Nothing says so, and the first load under a new name is not a request but a first load.
 
 ## Corrections after the prototype
 

@@ -1,11 +1,14 @@
-"""The `file` connector: CSV, Excel and Parquet files from a directory (spec test 15)."""
+"""The `file` connector: CSV, Excel, Parquet and JSON files and patterns from a directory (spec test 15)."""
 import json
+import subprocess
+from datetime import date
 from decimal import Decimal
 
 import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from conftest import ROWVIOLI
 
 CUSTOMERS = [(1, "Anna", 2.5), (2, "Ben", None), (3, "Cleo", 10.0)]
 
@@ -132,16 +135,177 @@ path = "{files.dir / 'files'}"
     assert "both become raw_files.customers" in r.stderr
 
 
-@pytest.mark.parametrize("name", ["../outside.csv", "{abs}"])
+# each way out has a pattern twin: a pattern keeps the promise for every file it matches
+@pytest.mark.parametrize("name", ["../outside.csv", "{abs}", "link.csv", "../outsid?.csv", "{abs_pattern}",
+                                  "lin?.csv", "*", "away/*.csv"])
 def test_a_table_outside_the_connections_path_fails_naming_the_table(files, name):
     outside = files.dir / "outside.csv"
     outside.write_text("a\n1\n")
-    name = name.format(abs=outside)
+    (files.dir / "away").mkdir()
+    (files.dir / "away" / "far.csv").write_text("a\n1\n")
+    (files.dir / "files" / "link.csv").symlink_to(outside)
+    (files.dir / "files" / "away").symlink_to(files.dir / "away")
+    name = name.format(abs=outside, abs_pattern=str(outside)[:-1] + "?")
     code, answer = load(files, f'"{name}" = {{ key = ["a"], target_table = "x" }}\n')
     assert code == 1
     reason = answer["raw_files.x"]["reason"]
-    assert name in reason
+    assert name in reason and "a table must be a file inside" in reason
     assert files.target("select count(*) from information_schema.tables where table_name = 'x'") == [(0,)]
+
+
+def test_a_name_with_brackets_reads_that_file_and_not_the_one_duckdb_would_match(files):
+    (files.dir / "files" / "x[1].csv").write_text("a,b\nbracket,1\n")
+    (files.dir / "files" / "x1.csv").write_text("a,b\nplain,1\n")
+    code, answer = load(files, '"x[1].csv" = { target_table = "x" }\n')
+    assert code == 0, answer
+    assert files.target("select * from raw_files.x") == [("bracket", "1")]
+
+
+def orders(rv, *numbers):
+    for n in numbers:
+        (rv.dir / "files" / f"orders_{n}.csv").write_text(f"order_no;amount\n{n};{n}0\n")
+
+
+def test_a_pattern_mirrors_every_matching_file_and_a_new_file_arrives_on_the_next_run(files):
+    orders(files, 1, 2)
+    code, answer = load(files, '"orders_*.csv" = { key = ["order_no"], sep = ";", target_table = "orders" }\n')
+    assert code == 0, answer
+    assert files.target("select * from raw_files.orders order by 1") == [("1", "10"), ("2", "20")]
+    orders(files, 3)
+    r = files.run("run", "files", "orders_*.csv")
+    assert json.loads(r.stdout)["tables"]["raw_files.orders"] == {"status": "ok", "inserted": 1, "updated": 0,
+                                                                  "deleted": 0}
+
+
+@pytest.mark.parametrize("kind", ["csv", "jsonl"])
+def test_a_pattern_of_a_thousand_files_mirrors_with_few_open_files(files, kind):
+    for n in range(1000):  # a file a day for almost three years
+        (files.dir / "files" / f"day_{n:04}.{kind}").write_text(
+            f"order_no,amount\n{n},{n}0\n" if kind == "csv" else json.dumps({"order_no": n, "amount": n * 10}))
+    files.definition({"files.toml": f"""
+[files]
+type = "file"
+max_age = "1h"
+[files.connection]
+path = "{files.dir / 'files'}"
+[files.tables]
+"day_*.{kind}" = {{ key = ["order_no"], target_table = "orders" }}
+"""})
+    assert files.run("apply", "sources").returncode == 0
+    # the run's process inherits the limit: a file held open per match would exceed it
+    r = subprocess.run(["sh", "-c", 'ulimit -n 128 && exec "$0" run', ROWVIOLI], cwd=files.dir,
+                       env=files._env(None), capture_output=True, text=True, timeout=120)
+    assert json.loads(r.stdout)["tables"]["raw_files.orders"] == {"status": "ok", "inserted": 1000, "updated": 0,
+                                                                  "deleted": 0}, r.stderr
+
+
+def test_a_pattern_keeps_equal_rows_of_two_files_and_reads_columns_by_name(files):
+    (files.dir / "files" / "part_1.csv").write_text("a,b\n1,x\n")
+    (files.dir / "files" / "part_2.csv").write_text("a,b\n1,x\n")
+    (files.dir / "files" / "part_3.csv").write_text("b,a\ny,2\n")
+    code, answer = load(files, '"part_*.csv" = { target_table = "parts" }\n')
+    assert code == 0, answer
+    assert files.target("select a, b from raw_files.parts order by a") == [("1", "x"), ("1", "x"), ("2", "y")]
+
+
+def test_an_empty_csv_fails_saying_it_is_empty(files):
+    (files.dir / "files" / "empty.csv").write_text("")
+    code, answer = load(files, '"empty.csv" = {}\n')
+    assert code == 1
+    assert answer["raw_files.empty"]["reason"] == "empty.csv: the file is empty"
+
+
+def test_a_pattern_that_matches_nothing_fails(files):
+    code, answer = load(files, '"orders_*.csv" = { target_table = "orders" }\n')
+    assert code == 1
+    assert "orders_*.csv: no file in" in answer["raw_files.orders"]["reason"]
+
+
+@pytest.mark.parametrize("other, says", [("orders_3.json", "orders_*: matches .csv and .json files"),
+                                         ("orders_3.csv", "orders_3.csv has the columns order_no VARCHAR, "
+                                                          "amount VARCHAR, note VARCHAR")])
+def test_files_of_a_pattern_of_different_kinds_or_columns_fail_naming_the_file(files, other, says):
+    orders(files, 1, 2)
+    (files.dir / "files" / other).write_text('[{"order_no": 3}]' if other.endswith(".json")
+                                             else "order_no;amount;note\n3;30;x\n")
+    code, answer = load(files, '"orders_*" = { key = ["order_no"], sep = ";", target_table = "orders" }\n')
+    assert code == 1
+    assert says in answer["raw_files.orders"]["reason"]
+
+
+def test_a_pattern_without_target_table_fails_apply(files):
+    files.definition({"files.toml": f"""
+[files]
+type = "file"
+max_age = "1h"
+[files.connection]
+path = "{files.dir / 'files'}"
+[files.tables]
+"orders_*.csv" = {{}}
+"""})
+    r = files.run("apply", "sources")
+    assert r.returncode == 1
+    assert "orders_*.csv: a pattern needs target_table" in r.stderr
+
+
+# DuckDB read the first as one column `id,name`, and the second as the last line alone, its header dropped
+@pytest.mark.parametrize("text", ["id,name\n1,Anna\n2,Ben,extra\n3,Cleo\n", "id,name\n1,Anna\n2,Ben,extra\n"])
+def test_a_ragged_csv_fails_naming_the_separator_not_a_missing_column(files, text):
+    (files.dir / "files" / "ragged.csv").write_text(text)
+    code, answer = load(files, '"ragged.csv" = { key = ["id"] }\n')
+    assert code == 1
+    reason = answer["raw_files.ragged"]["reason"]
+    assert "no column id" not in reason and "sep" in reason
+
+
+NESTED = [{"id": 1, "amount": 2.5, "big": 123456789012345678901234567890, "day": "2024-01-02", "note": None,
+           "tags": ["a", "b"], "address": {"city": "Bern", "zip": [3000]}, "mixed": 1, "ok": True},
+          {"id": 2, "amount": 3, "big": 1, "day": "2024-02-03", "tags": [], "address": {"city": "Biel"},
+           "mixed": "two", "ok": False}]
+
+
+def test_json_and_json_lines_arrive_as_jsonb_as_written_and_a_second_run_changes_nothing(files):
+    (files.dir / "files" / "people.json").write_text(json.dumps(NESTED))
+    (files.dir / "files" / "lines.jsonl").write_text("".join(json.dumps(r) + "\n" for r in NESTED))
+    code, answer = load(files, '"people.json" = { key = ["id"] }\n"lines.jsonl" = { key = ["id"] }\n')
+    assert code == 0, answer
+    for table in ("people", "lines"):
+        assert {t for _, t in types(files, table)} == {"jsonb"}
+        assert files.target(f"select * from raw_files.{table} order by id") == [
+            (1, 2.5, 123456789012345678901234567890, "2024-01-02", None, ["a", "b"],
+             {"city": "Bern", "zip": [3000]}, 1, True),
+            (2, 3, 1, "2024-02-03", None, [], {"city": "Biel"}, "two", False)]
+    for table in ("people.json", "lines.jsonl"):
+        r = files.run("run", "files", table)
+        assert list(json.loads(r.stdout)["tables"].values()) == [
+            {"status": "ok", "inserted": 0, "updated": 0, "deleted": 0}], r.stdout
+
+
+def test_columns_casts_a_json_value_from_its_text(files):
+    (files.dir / "files" / "people.json").write_text(json.dumps(NESTED))
+    code, answer = load(files, '"people.json" = { key = ["id"], columns = { id = "bigint", day = "date", '
+                               'mixed = "text", amount = "decimal(10,2)", big = "hugeint" } }\n')
+    assert code == 0, answer
+    assert files.target("select id, day, mixed, amount, big from raw_files.people order by id") == [
+        (1, date(2024, 1, 2), "1", Decimal("2.50"), 123456789012345678901234567890),
+        (2, date(2024, 2, 3), "two", Decimal("3.00"), 1)]
+
+
+def test_a_json_file_whose_later_rows_differ_from_its_first_arrives_whole(files):
+    # beyond the 20480 rows DuckDB looks at first: other types, and a key that was not there before
+    rows = [{"id": i, "v": i} for i in range(25000)] + [{"id": 25000, "v": "x", "late": True}]
+    (files.dir / "files" / "long.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    code, answer = load(files, '"long.jsonl" = { key = ["id"] }\n')
+    assert code == 0, answer
+    assert files.target("select v, late from raw_files.long where id = '25000'") == [("x", True)]
+
+
+@pytest.mark.parametrize("text", ["[1, 2]", "[]"])
+def test_a_json_file_that_is_not_a_list_of_objects_fails(files, text):
+    (files.dir / "files" / "odd.json").write_text(text)
+    code, answer = load(files, '"odd.json" = {}\n')
+    assert code == 1
+    assert "records" in answer["raw_files.odd"]["reason"]
 
 
 def test_a_csv_with_only_a_header_is_mirrored_as_an_empty_table(files):

@@ -1,7 +1,9 @@
 """The rest connector: expects `url` and, optionally, `token` (sent as a Bearer header). A table is an endpoint: the
 option `path` is appended to `url`, `columns` names every column with a type (text, int8, float8, bool, date, timestamp,
 timestamptz) and `page` names a query parameter that counts from 1 until a page comes back empty; a page equal to the one
-before fails the run. Each response is a JSON array of flat objects and becomes one batch."""
+before fails the run. Each response is a JSON array of flat objects and becomes one batch; with the option `rows` the
+array sits in a field of a JSON object instead, `rows = "data"` or `rows = "result.items"` (names joined by dots), and a
+page ends the paging when the array in the field is empty."""
 from datetime import date, datetime, timezone
 from urllib.parse import urlsplit
 
@@ -31,6 +33,8 @@ def read(connection, table, options):
     for option in ("path", "columns"):
         if option not in options:
             raise Exception(f"{table}: the option {option} is missing")
+    if "rows" in options and not (isinstance(options["rows"], str) and options["rows"]):
+        raise Exception(f"{table}: the option rows must be a field name")
     columns = options["columns"]
     for name, type in columns.items():
         if type not in TYPES:
@@ -54,8 +58,11 @@ def read(connection, table, options):
             rows = response.json()
         except ValueError:
             rows = None
+        for field in options["rows"].split(".") if "rows" in options else []:
+            rows = rows.get(field) if isinstance(rows, dict) else None
         if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
-            raise Exception(f"{table}: {path} must answer a JSON array of flat objects")
+            raise Exception(f"{table}: {path} must answer a JSON array of flat objects"
+                            + (f" in the field {options['rows']} (option rows)" if "rows" in options else ""))
         if paged and not rows:
             if page == 1:  # an empty table still needs its columns
                 yield pa.RecordBatch.from_pylist([], schema=schema)
