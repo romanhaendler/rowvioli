@@ -4,7 +4,7 @@
 
 Added:
 
-- `rowvioli list` reads the source from the target where there is no `sources/` in the current directory and no `--definition`: it decrypts the stored connection with the worker key, so it runs on a worker, which has the connector, the route to the source and no checkout. A new source is applied with an empty `tables` block, listed on a worker and applied again. With `sources/` here or `--definition`, `list` works as before.
+- `rowvioli list` reads the source from the target where there is no `sources/` in the current directory and no `--definition`: it decrypts the stored connection with the worker key, so it runs on a worker's machine, which has the connector, the route to the source and no checkout. A new source is applied with an empty `tables` block, listed on a worker's machine and applied again. With `sources/` here or `--definition`, `list` works as before.
 
 ## 0.2.1 (2026-11-18)
 

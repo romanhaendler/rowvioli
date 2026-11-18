@@ -51,12 +51,11 @@ def command(a):
         raise SystemExit("list reads the source from a definition directory (sources/ here, or --definition <dir>) "
                          "or from the target (ROWVIOLI_TARGET_URL and the key file); neither is here")
     needs = {"init": ["ROWVIOLI_TARGET_URL"], "status": ["ROWVIOLI_TARGET_URL"],
-             "run": ["ROWVIOLI_TARGET_URL"], "work": ["ROWVIOLI_TARGET_URL"],
-             "list": ["ROWVIOLI_TARGET_URL"] * from_target}
+             "run": ["ROWVIOLI_TARGET_URL"], "work": ["ROWVIOLI_TARGET_URL"]}
     missing = [v for v in needs.get(a.command, []) if not os.environ.get(v)]
     if missing:
         raise SystemExit(f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} not set")
-    if a.command in needs:
+    if a.command in needs or from_target:
         target.check_address(os.environ["ROWVIOLI_TARGET_URL"])  # before the key file: it is the first slip to fix
     if a.command in ("run", "work") or from_target:  # one place for the default; the run processes inherit the absolute path
         key = os.path.abspath(os.environ.get("ROWVIOLI_KEY_FILE") or "worker.key")
@@ -124,7 +123,7 @@ def print_status(source, table):
 def print_tables(directory, name):
     """The tables of a source from its connector's `tables`, as lines for the source's tables block."""
     if directory is None:  # no definition here: the connection `apply` stored in the target, opened with the worker key
-        row = target.sql(target.connect(versioned=False), "SELECT type, connection, key_id FROM _rowvioli.sources "
+        row = target.sql(target.connect(), "SELECT type, connection, key_id FROM _rowvioli.sources "
                          "WHERE name = $1", [name])
         if not row:
             raise SystemExit(f"the target has no source {name}; `rowvioli apply` puts it there "

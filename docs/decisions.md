@@ -703,11 +703,11 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 
 ## 50. `list` reads the source from the target where there is no definition
 
-**Decision.** `rowvioli list <source>` reads the source from the definition when `--definition <dir>` is given or `sources/` is in the current directory, and otherwise from the target: the type, the sealed connection and the key id in `_rowvioli.sources`, decrypted with the private key (`ROWVIOLI_KEY_FILE`, else `worker.key`), as a run does. Nothing else changes: the connector's `tables` is called as before, the output is the same, the connection's values are scrubbed from a driver error. A new source is applied with an empty `tables` block, listed on a worker, pasted, applied again. A source removed from the definition keeps its row (`enabled = false`) and `list` still answers for it.
+**Decision.** `rowvioli list <source>` reads the source from the definition when `--definition <dir>` is given or `sources/` is in the current directory, and otherwise from the target: the type, the sealed connection and the key id in `_rowvioli.sources`, decrypted with the private key (`ROWVIOLI_KEY_FILE`, else `worker.key`), as a run does. Nothing else changes: the connector's `tables` is called as before, the output is the same, the connection's values are scrubbed from a driver error. A new source is applied with an empty `tables` block, listed on a worker's machine, pasted, applied again. From the target `list` stops at the start, like `run` and `work` (decision 44), when the key file cannot be opened. A source removed from the definition keeps its row (`enabled = false`) and `list` still answers for it.
 
 **Why.** The definition lives in its own repository whose pipeline runs `apply`, and that machine has no driver and no route to the source. The workers have both but, by decision 22, no checkout. `list` could run nowhere. The target holds the one thing that joins the two, and the worker holds the key.
 
-**Price.** The source must be applied before it can be listed, which is why the empty `tables` block is allowed. The machine that lists needs the private key, so it is a worker in all but name.
+**Price.** The source must be applied before it can be listed, which is why the empty `tables` block is allowed. The machine that lists needs the private key, so it is a worker's machine in all but name.
 
 **Rejected.**
 - *Shipping the definition to the workers.* The checkout of decision 14, which decision 22 removed.

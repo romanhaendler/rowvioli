@@ -116,3 +116,20 @@ def test_list_from_the_target_with_a_missing_or_wrong_key_fails_in_one_line(read
     r = ready.run("list", "erp", cwd=worker, env={"ROWVIOLI_KEY_FILE": ""})  # falls back to worker.key here
     assert r.returncode == 1 and r.stderr.count("\n") == 1 and "Traceback" not in r.stderr
     assert "cannot be decrypted" in r.stderr and "holds no private key" in r.stderr
+
+
+def test_list_with_a_definition_needs_no_target_address(ready):
+    ready.source("create table customers (customer_no int primary key)")
+    source(ready, "erp", "postgres", 'url = "$ERP_URL"')
+    for extra in ([], ["--definition", "sources"]):
+        r = ready.run("list", "erp", *extra, env={"ERP_URL": ready.source_url, "ROWVIOLI_TARGET_URL": "postgresql://u:p@w@h/x"})  # malformed, unused
+        assert r.returncode == 0 and r.stdout == '"public.customers" = { key = ["customer_no"] }\n', r.stderr
+
+
+def test_list_from_the_target_scrubs_the_connection_from_a_driver_error(ready):
+    source(ready, "erp", "postgres", 'url = "postgresql://u:hunter2pw@nowhere.invalid/x"')
+    assert ready.run("apply", "sources").returncode == 0
+    worker = ready.dir / "worker"  # no sources/ here
+    worker.mkdir()
+    r = ready.run("list", "erp", cwd=worker)
+    assert r.returncode == 1 and "\n" not in r.stderr.strip() and "hunter2pw" not in r.stderr
