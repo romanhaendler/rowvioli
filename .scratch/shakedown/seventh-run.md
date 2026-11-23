@@ -17,6 +17,7 @@ the rest are leads from one agent, and a ticket that starts from one reproduces 
 |---|---|---|
 | P18 | A message a command stops with is written raw: a source file or a subfolder named with an escape sequence, a connection key, a key file path ✓ | fixed in 0.4.1: every such message is written with control characters as `?` |
 | P18 | A target password with an unencoded `/` is printed up to the `/` by the driver's message (`invalid integer value "…" for connection option "port"`); in 0.4.0 too ✓ | fixed in 0.4.1: the address check names the cause and prints nothing of the address |
+| fix | The address check does not see a password whose part before the `/` is all digits (`u:12345/ab@host` looks like host and port), and a source's URL is cut the same way (`load.url_password`): a driver message that quotes only the cut part would show it. Not tried with a real source | left |
 | P18 | A target of 0.4.0 holding a name with a control character: `apply` refuses, `run` goes on, the way out works, but the old tables stay under a name nobody can type, and no page said how to drop them | documented in 0.4.1 (`docs/loading.md`, CHANGELOG) |
 | P18 | The name check covers five settings: connector option keys and values, `type`, and column names that come from the source (a CSV header) are stored raw and shown raw by `psql -At` | left |
 | P18 | Bidi and invisible characters (U+202E, U+200B, U+FEFF) pass in names; `status` can show a name reversed | left |
