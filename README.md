@@ -81,6 +81,7 @@ What you see (times shortened):
 created worker.key (keep it secret) and worker.pub
 the schema _rowvioli is ready in the target
 applied 1 sources with 1 tables
+2026-11-17 21:02:39 ▶ raw_try.customers            started           run 1
 2026-11-17 21:02:39 ✔ raw_try.customers            ok          0.5s  +3 ~0 -0
 source  table          target             max_age  age  due    status  reason
 try     customers.csv  raw_try.customers  1h       1s   in 1h  ok
@@ -89,6 +90,7 @@ try     customers.csv  raw_try.customers  1h       1s   in 1h  ok
  1           | Anna  | Bonn
  2           | Ben   | Essen
  3           | Carla | Mainz
+2026-11-17 21:02:41 ▶ raw_try.customers            started           run 2
 2026-11-17 21:02:41 ✔ raw_try.customers            ok          0.2s  +1 ~1 -0
  _valid_from | _valid_to  | customer_no | name  |  city
 -------------+------------+-------------+-------+---------
@@ -99,7 +101,7 @@ try     customers.csv  raw_try.customers  1h       1s   in 1h  ok
  20:02:41    |            | 4           | Dora  | Essen
 ```
 
-Anna lived in Bonn until the second run, and the history keeps both versions. Each run also prints a line of JSON, left out here.
+Anna lived in Bonn until the second run, and the history keeps both versions. `▶` marks a run that started, `✔` one that ended ok, and `+3 ~0 -0` is the rows it inserted, updated and deleted ([what the lines say](https://github.com/romanhaendler/rowvioli/blob/main/docs/operation.md)). Each run also prints a line of JSON, left out here.
 
 Two ideas carry the design:
 
