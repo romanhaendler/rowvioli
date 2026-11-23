@@ -122,7 +122,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE worker GRANT USAGE ON SCHEMAS TO consumer;
 ALTER DEFAULT PRIVILEGES FOR ROLE worker GRANT SELECT ON TABLES TO consumer;
 GRANT USAGE ON SCHEMA raw_erp TO consumer;                  -- for a schema that exists already
 GRANT SELECT ON ALL TABLES IN SCHEMA raw_erp TO consumer;   -- and its tables
-GRANT USAGE ON SCHEMA _rowvioli TO consumer;                -- optional: to read the status
+GRANT USAGE ON SCHEMA _rowvioli TO consumer;                -- optional: to read the status; without it a stopped mirror looks like a quiet source
 GRANT SELECT ON _rowvioli.status TO consumer;
 ```
 
