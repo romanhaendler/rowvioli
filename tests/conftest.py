@@ -100,10 +100,10 @@ class Rv:
         return {**os.environ, "ROWVIOLI_TARGET_URL": self.target_url,
                 "ROWVIOLI_KEY_FILE": str(self.dir / "worker.key"), **(env or {})}
 
-    def run(self, *args, env=None, timeout=60, open_files=None):
+    def run(self, *args, env=None, timeout=60, open_files=None, cwd=None):
         limit = (lambda: resource.setrlimit(resource.RLIMIT_NOFILE, (open_files, resource.getrlimit(
             resource.RLIMIT_NOFILE)[1]))) if open_files else None  # soft limit, set in the child before exec
-        return subprocess.run([ROWVIOLI, *args], cwd=self.dir, env=self._env(env), capture_output=True,
+        return subprocess.run([ROWVIOLI, *args], cwd=cwd or self.dir, env=self._env(env), capture_output=True,
                               text=True, timeout=timeout, preexec_fn=limit)
 
     def start(self, *args, env=None):

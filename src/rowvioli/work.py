@@ -26,11 +26,11 @@ LOST = """SELECT r.run FROM _rowvioli.runs r JOIN _rowvioli.status s ON s.id = r
            WHERE r.run = ANY(string_to_array($1, ',')::bigint[]) AND s.status <> 'loading'"""
 
 MASCOT = """\
-  .~~~~~~~.   .~~~~~~~.
-  { o   o }   { o   o }
-  {   v   }---{   v   }
-  '~~~~~~~'   '~~~~~~~'
-    |   |       |   |"""
+.----.     .~~~~~~~.     .~~~~~~~.     .~~~~~~~.     .----.
+|####|     { o   o }     { o   o }     { o   o }     |    |
+|####|-[#]-{   v   }-[#]-{   v   }-[#]-{   v   }-[#]-|    |
+|####|     '~~~~~~~'     '~~~~~~~'     '~~~~~~~'     |####|
+'----'       |   |         |   |         |   |       '----'"""
 
 
 SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -261,7 +261,11 @@ def run(source, table, slots):
         sources = [] if is_source else [r[0] for r in sql(
             conn, "SELECT DISTINCT source FROM _rowvioli.status WHERE right(source_table, $2::int) = $1::text",
             ["." + source, len(source) + 1])]
+        row = [] if is_source else sql(conn, "SELECT enabled FROM _rowvioli.sources WHERE name = $1", [source])
         conn.close()
+        if row:  # a source of the definition's past or without tables yet: not a mistake in the name
+            raise SystemExit(f"{source} has no tables; `rowvioli list {source}` prints them" if row[0][0]
+                             else f"{source} is not in the definition any more")
         if not is_source:
             raise SystemExit((f"{source} {table}: " if table else "") + f"{source} is no source: the first name of `run` is a source, the second a table"
                              + (f"; did you mean `rowvioli run {sources[0]} {source}`" if len(sources) == 1 else ""))

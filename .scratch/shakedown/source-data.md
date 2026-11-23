@@ -37,3 +37,23 @@ Postgres versions, ODBC, more than 300 columns.
 - Type change, dropped key column, dropped column, dropped table: each failed with the old state intact, and the README's recipe rebuilt it.
 - Identifiers with capitals, spaces, quotes, umlauts and keywords; 300 columns; composite and text keys; NaN/infinity/-0 floats; timestamps from year 1 and +14 h; bytea, plain arrays, uuid; text with control bytes and emoji.
 - File: BOM, `;`, quoted newlines, umlauts, added columns, `.CSV`, a space in the name. REST: 500s, HTML, wrapped objects failed with the old mirror kept; a 67 % truncation was caught.
+
+## Before 0.3.1 (2026-11-18): H2 only, narrowed to decision 51
+
+Status: needs-triage
+
+One host, on the wheel 0.3.1: NUL bytes in text through `file` (Parquet, CSV), `rest` and, for ordinary text, `odbc`.
+
+1. **[Misfit] ✓ A NUL inside `list<string>` fails with the raw driver message** `invalid byte sequence for
+   encoding "UTF8": 0x00`, no column named. documented: decision 51 (the failure, not the message). Belongs to
+   finding 6 above. Idea: name the column and say that nested text is not cleaned.
+2. **[Misfit] ✓ `\u0000` in a JSON file value fails at the change to `jsonb`** with `unsupported Unicode
+   escape sequence`, no column named. documented: decision 51. Idea: as 1.
+
+Held up: `a\0b` arrives as `ab` from Parquet (`string`, `large_string`), CSV and REST, byte-exact around
+umlauts and emoji, up to 1 MiB; NUL only becomes the empty text, null stays null; a second run changes
+nothing and the log gets no phantom row; a source value that gains a NUL is no update; two keys that differ
+only by NUL fail with `occurs twice` and nothing is published; `bytea` with 0x00 from Postgres arrives
+unchanged; ordinary text through psqlODBC is unchanged.
+
+Not covered: Excel, and a real Informix or SQL Server driver.

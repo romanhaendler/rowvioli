@@ -28,22 +28,23 @@ USERINFO = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://(?:([^/?#]*)@)?")
 
 
 def read(directory, env=None, only=None):
-    """Reads and checks every *.toml in the directory. With env, the placeholders of each connection are filled in
-    from it; without, they are only checked. With `only`, just that source's are filled: `list` needs no other
-    source's secrets. Returns (sources, tables, hash of the definition)."""
+    """Reads and checks every *.toml in the directory and its subfolders. With env, the placeholders of each
+    connection are filled in from it; without, they are only checked. With `only`, just that source's are filled:
+    `list` needs no other source's secrets. Returns (sources, tables, hash of the definition)."""
     if not Path(directory).is_dir():
         raise SystemExit(f"{directory} is not a directory")
     whole, sources, tables, names = {}, [], [], {}
-    files = sorted(Path(directory).glob("*.toml"))
+    files = sorted(Path(directory).rglob("*.toml"))
     if not files:
         raise SystemExit(f"{directory} holds no source files (*.toml); applying it would disable every table")
     for path in files:
+        label = path.relative_to(directory).as_posix()
         try:
             data = tomllib.loads(path.read_text())
         except tomllib.TOMLDecodeError as e:
-            raise SystemExit(f"{path.name}: {e}")
+            raise SystemExit(f"{label}: {e}")
         for name, s in data.items():
-            where = f"{path.name}: {name}"
+            where = f"{label}: {name}"
             if name in whole:
                 raise SystemExit(f"{where}: source {name} is defined twice")
             whole[name] = s
@@ -87,11 +88,11 @@ def read(directory, env=None, only=None):
                 for suffix in ("", "__log", "__history"):
                     if (schema, target + suffix) in names:
                         first_path, first = names[schema, target + suffix]
-                        both = (f"{first_path}: {first} and {path.name}: {name}: {table}" if first_path != path.name
-                                else f"{path.name}: {first} and {name}: {table}")
+                        both = (f"{first_path}: {first} and {label}: {name}: {table}" if first_path != label
+                                else f"{label}: {first} and {name}: {table}")
                         raise SystemExit(f"{both} both become {schema}.{target + suffix}; "
                                          "set target_table at one of them")
-                    names[schema, target + suffix] = path.name, f"{name}: {table}"
+                    names[schema, target + suffix] = label, f"{name}: {table}"
                 if s["type"] == "rest" and not str(t.get("path", s.get("path", "/"))).startswith("/"):
                     raise SystemExit(f"{spot}: path must start with /")
                 # no default zone: 14:00 that silently means UTC is found in production (decision 36)

@@ -15,6 +15,7 @@ import threading
 from urllib.parse import unquote
 
 import pyarrow as pa
+import pyarrow.compute as pc
 
 from . import contract, seal, target
 from .target import CLAIMABLE, quote, sql
@@ -203,7 +204,7 @@ def stage(conn, t):
                 f"{quote(n)}::{exact[n]} AS {quote(n)}" if n in exact else quote(n) for n in batches.schema.names)
                 + " FROM _driver")
             sql(conn, "DROP TABLE _driver")
-        rows_read = c.adbc_ingest("_stage", batches, mode="append", temporary=True)
+        rows_read = c.adbc_ingest("_stage", without_nul(batches), mode="append", temporary=True)
     # zero rows protect a mirror that has rows; a first load or an empty mirror publishes them
     if rows_read == 0 and t["max_delete_share"] < 1 and sql(conn, "SELECT to_regclass($1)", [t["mirror"]])[0][0] and \
             sql(conn, f"SELECT 1 FROM {t['mirror']} LIMIT 1"):
@@ -215,6 +216,19 @@ def stage(conn, t):
     if to_jsonb:
         sql(conn, "ALTER TABLE _stage " + ", ".join(to_jsonb))
     return rows_read
+
+
+def without_nul(batches):
+    """Postgres text cannot hold 0x00, so there is no faithful way to keep it: it is removed (decision 51)."""
+    # shortcut: only top-level string columns, a NUL inside a list or struct still fails the run, upgrade when a source needs it
+    text = [i for i, f in enumerate(batches.schema) if pa.types.is_string(f.type) or pa.types.is_large_string(f.type)]
+
+    def clean():
+        for b in batches:
+            for i in text:
+                b = b.set_column(i, batches.schema.field(i), pc.replace_substring(b.column(i), "\x00", ""))
+            yield b
+    return pa.RecordBatchReader.from_batches(batches.schema, clean())
 
 
 def stream(batches):

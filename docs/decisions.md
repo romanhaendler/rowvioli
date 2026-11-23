@@ -358,7 +358,7 @@ Patterns can be added later as a second job of the worker without changing the m
 def read(connection: dict, table: str, options: dict) -> Iterator[pyarrow.RecordBatch]:
 ```
 
-Nothing else goes in or out. A connector may offer `tables(connection)` for `rowvioli list`. A worker never calls it. Connectors are installed on the workers by the operator, as an optional extra of the core package or as a package of their own. A worker takes any due table. If its connector is missing or the connection cannot be decrypted, the run fails with a reason that names the worker.
+Nothing else goes in or out. A connector may offer `tables(connection)` for `rowvioli list`. The worker process never calls it (decision 50: a person on a worker's machine does). Connectors are installed on the workers by the operator, as an optional extra of the core package or as a package of their own. A worker takes any due table. If its connector is missing or the connection cannot be decrypted, the run fails with a reason that names the worker.
 
 **Why.**
 - All data enters through one fixed interface. The connector sees no target, no lock and no other table.
@@ -515,7 +515,7 @@ On 2026-11-12 the owner asked to see what a worker does (`.scratch/visibility/sp
 
 ## 37. A worker says what it does, and nothing keeps it
 
-> **Changed by decision 50.** Every line carries a mark (or a space) and colour wherever it goes, a run's line has columns, and at a terminal in the foreground a status line moves under the lines.
+> **Changed by decision 52.** Every line carries a mark (or a space) and colour wherever it goes, a run's line has columns, and at a terminal in the foreground a status line moves under the lines.
 
 **Decision.** `work` writes one line per event to stderr: start, a run's start and end, a failure, an unreachable target, stopping. `run` writes the start and end lines of its runs, not the worker's start line. Each begins with local date and time, and there is no setting for them. The lines are not stored. `rowvioli status` prints the status view as a table; the target stays the truth. At a terminal `work` first shows its mascot once; when stderr is not a terminal there are only the lines.
 
@@ -703,11 +703,36 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 
 **Evidence.** `tests/test_numeric.py`; the measurement in ticket 14.
 
+## 50. `list` reads the source from the target where there is no definition
+
+**Decision.** `rowvioli list <source>` reads the source from the definition when `--definition <dir>` is given or `sources/` is in the current directory, and otherwise from the target: the type, the sealed connection and the key id in `_rowvioli.sources`, decrypted with the private key (`ROWVIOLI_KEY_FILE`, else `worker.key`), as a run does. Nothing else changes: the connector's `tables` is called as before, the output is the same, the connection's values are scrubbed from a driver error. A new source is applied with an empty `tables` block, listed on a worker's machine, pasted, applied again. From the target `list` stops at the start, like `run` and `work` (decision 44), when the key file cannot be opened. A source removed from the definition keeps its row (`enabled = false`) and `list` still answers for it.
+
+**Why.** The definition lives in its own repository whose pipeline runs `apply`, and that machine has no driver and no route to the source. The workers have both but, by decision 22, no checkout. `list` could run nowhere. The target holds the one thing that joins the two, and the worker holds the key.
+
+**Price.** The source must be applied before it can be listed, which is why the empty `tables` block is allowed. The machine that lists needs the private key, so it is a worker's machine in all but name.
+
+**Rejected.**
+- *Shipping the definition to the workers.* The checkout of decision 14, which decision 22 removed.
+- *Putting the drivers where the definition is.* The machine that applies would need every vendor driver and a route to every source.
+- *An explicit `--from-target` flag.* A second way to say what the directory already says: a definition here wins, and where there is none the target is the only place left.
+
+## 51. NUL bytes in text are removed while staging
+
+**Decision.** `stage()` removes every NUL byte (0x00) from the top-level text columns (`string`, `large_string`) of each batch before it is ingested, for every connector. Text nested in a list or a struct is not cleaned, and neither is a `\u0000` escape inside a JSON value.
+
+**Why.** Postgres `text` cannot hold 0x00, so the load failed with `invalid byte sequence for encoding "UTF8": 0x00` and the table could never be loaded. The first report came from an Informix source read through `odbc`.
+
+**Price.** Two source values that differ only by NUL bytes become equal; in a key column that fails the run with the existing duplicate-key reason. A NUL inside a nested text still fails the run, and so does `\u0000` in a JSON value, at the change to `jsonb`. A value of NUL bytes only becomes the empty text, not null.
+
+**Rejected.**
+- *Failing with a clearer reason.* The table would still never load.
+- *An option per table.* A rule to carry for one byte.
+
 ## Ninth round: the lines
 
 On 2026-11-23 the owner asked for the output to be coloured by default and visibly better in a container too.
 
-## 50. The same line everywhere, coloured; a terminal adds a status line
+## 52. The same line everywhere, coloured; a terminal adds a status line
 
 **Decision.** An event line has one form wherever stderr goes, a terminal, a pipe, a file, a container log or the journal: local date and time to the second, a mark (`▶` started, `✔` ok, `✘` failed, `⚠` the target is unreachable, a space otherwise), then the text. A run's line has columns: the target table padded to 28 characters, `started`, `ok` or `failed`, the seconds since its claim, and the counts as `+inserted ~updated -deleted` or the reason. The lines are coloured by default, in a pipe and a file too: the time dim, a `✔` line green, a `✘` line red, a `⚠` line yellow. No colour when `NO_COLOR` is set and not empty, when `TERM` is `dumb`, or when stderr is the systemd journal, which `JOURNAL_STREAM` says by naming the device and inode of stderr itself. At a terminal that takes UTF-8, with the worker in its foreground, one status line moves under the lines ten times a second: a spinner, the slots in use, the runs with their seconds so far, the longest-running first, as many whole ones as fit the width and `+N` for the rest. It is wiped before every line and when the loop ends, and never reaches a pipe or a file. Output never ends a worker: without a stderr, with a closed one, or with one that cannot encode the marks, it loads on.
 

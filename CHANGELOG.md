@@ -4,11 +4,35 @@
 
 Changed:
 
-- The lines of `run` and `work` on stderr are the same at a terminal and in a log, and easier to read in both: date and time, a mark (`▶` started, `✔` ok, `✘` failed, `⚠` the target is unreachable), then a run's target table, `started`, `ok` or `failed`, its seconds and `+inserted ~updated -deleted` or the reason, in columns. `raw_erp.customers ok after 0.4s: 3 inserted, 0 updated, 0 deleted` is now `✔ raw_erp.customers            ok          0.4s  +3 ~0 -0`; a script that reads the old lines has to adapt. They are coloured by default, in a pipe, a file and a container log too, except when `NO_COLOR` is set, `TERM=dumb` or stderr is the systemd journal (decision 50).
+- The lines of `run` and `work` on stderr are the same at a terminal and in a log, and easier to read in both: date and time, a mark (`▶` started, `✔` ok, `✘` failed, `⚠` the target is unreachable), then a run's target table, `started`, `ok` or `failed`, its seconds and `+inserted ~updated -deleted` or the reason, in columns. `raw_erp.customers ok after 0.4s: 3 inserted, 0 updated, 0 deleted` is now `✔ raw_erp.customers            ok          0.4s  +3 ~0 -0`; a script that reads the old lines has to adapt. They are coloured by default, in a pipe, a file and a container log too, except when `NO_COLOR` is set, `TERM=dumb` or stderr is the systemd journal (decision 52).
 
 Added:
 
 - At a terminal, with the worker in the foreground, one status line moves under the lines: the slots in use and each run's seconds so far, the longest first, `+N` for those that do not fit. It never reaches a pipe or a file.
+
+## 0.3.1 (2026-11-18)
+
+Fixed:
+
+- A NUL byte in a text value no longer fails the run with `invalid byte sequence for encoding "UTF8": 0x00`: it is removed while staging, for every connector. Text inside a list, a struct or a JSON value is not cleaned.
+
+## 0.3.0 (2026-11-18)
+
+Added:
+
+- `rowvioli list` reads the source from the target where there is no `sources/` in the current directory and no `--definition`: it decrypts the stored connection with the worker key, so it runs on a worker's machine, which has the connector, the route to the source and no checkout. A new source is applied with an empty `tables` block, listed on a worker's machine and applied again. With `sources/` here or `--definition`, `list` works as before.
+
+Fixed:
+
+- `rowvioli run <source>` for a source applied with an empty `tables` block says ``erp has no tables; `rowvioli list erp` prints them``, and for a source no longer in the definition `erp is not in the definition any more`, instead of `erp is no source`.
+- `rowvioli list` of a `file` source with a missing directory names the directory instead of `***`.
+- `rowvioli list` of a source whose connection lacks a field says `the connection of source erp has no url` instead of `'url'`.
+
+## 0.2.2 (2026-11-18)
+
+Changed:
+
+- `apply`, `apply --check` and `list` read the source files in the subfolders of the definition directory too; an error in one of them names it with its subfolder (`crm/crm.toml: ...`). A source file that was kept in a subfolder, a hidden one too, is therefore applied now: move it out of the directory to keep it disabled.
 
 ## 0.2.1 (2026-11-18)
 

@@ -68,7 +68,7 @@ KillMode=mixed        # SIGTERM to the worker only, so its run processes are not
 
   A failure carries the reason of the status view; `worker lost` and `ended after max_seconds` are failures too. `the target is unreachable` is written once per outage. Run processes keep their stderr discarded, so no driver message from a source can carry a connection value into a log, and what a library writes to their stdout is dropped too. The line for an unreachable target keeps the driver's message as one line, like a reason, with the password of `ROWVIOLI_TARGET_URL` replaced by `***`.
 - **`rowvioli status` shows what is**, without `psql`. It prints the status view as a table; the `due` column says `now` or `in 20m`, so `ok` with an age above the maximum age is a table that is due and that nobody has taken yet (no worker runs). It computes nothing the view does not.
-- A worker has no checkout and no file that describes a source. A new source needs no change on any worker.
+- A worker has no checkout and no file that describes a source. A new source needs no change on any worker. `rowvioli list` run on a worker's machine, where there is no `sources/`, reads the source from the target with the worker's key.
 - Source passwords are not on the worker. They are inside the encrypted connections in the target and are decrypted when a run starts.
 - Test and production are separate targets with their own workers, their own key pair and the same definition.
 - Whoever runs containers can build an image from the program and the drivers, starting from [examples/Dockerfile](../examples/Dockerfile). It is not required. Its log gets the coloured lines, which `docker logs` shows as colour; for a log collector that does not render them, set `NO_COLOR=1`. A container started with a terminal nobody watches (`docker run -t -d`, `tty: true` in Compose) gets the status line into its log ten times a second: leave the terminal off.
@@ -87,7 +87,7 @@ Rights in the target:
 | Who | Needs |
 |---|---|
 | The pipeline that runs `apply` | to write the definition |
-| The workers | to read the definition, to write what they experienced, to create and write the mirrors |
+| The workers | to read the definition (`rowvioli list` run there without `sources/` reads `_rowvioli.sources` and `_rowvioli.meta` with the worker's role), to write what they experienced, to create and write the mirrors |
 | Whoever may request a load, for example an application of your own | to read the status view, to write `requested_at` and nothing else; to see progress, membership in `pg_read_all_stats` |
 | Consumers | to read the mirrors and, for history, the views `<target table>__history`. A view is a plain view and runs with its owner's rights, so the right to read it is enough; the change log needs none. Default privileges on tables cover views. To tell a quiet source from a worker that is gone, `USAGE` on `_rowvioli` and `SELECT` on `_rowvioli.status`: that gives the view and nothing else in the schema (`tables`, `runs` and the connections stay closed). |
 

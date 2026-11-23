@@ -327,7 +327,7 @@ def test_work_shows_the_mascot_before_its_start_line_at_a_terminal(ready):
         while "started with" not in out:
             assert select.select([master], [], [], 10)[0], out
             out += os.read(master, 4096).decode()
-        assert ".~~~~~~~.   .~~~~~~~." in out.split("started with")[0]
+        assert "{   v   }-[#]-{   v   }" in out.split("started with")[0]
     finally:
         os.close(master)
 
