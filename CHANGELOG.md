@@ -6,6 +6,7 @@ Changed:
 
 - `rowvioli apply`, `apply --check` and `list` fail on a control character (C0, DEL, C1, U+2028, U+2029) in a source name, a source table, a key column, `target_schema` or `target_table`, and name the file, the setting and the name with the character as an escape such as `\x1b` (decision 39). A name already in a target keeps loading.
 - `rowvioli status` and the error messages of `rowvioli list` and of an unreachable or refusing target write a control character (escape, carriage return, DEL, C1) as `?`, as the lines of `work` do. A reason that quotes source data can no longer clear the terminal. What is stored and the JSON of `run` and `list` stay as they are.
+- `rowvioli apply` accepts only ASCII digits in `max_age` and in `at`; an Arabic-Indic or full-width digit gets the usual message instead of the database's.
 
 Added:
 

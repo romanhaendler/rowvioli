@@ -171,3 +171,11 @@ def test_source_files_in_subfolders_belong_to_the_definition_and_errors_name_the
     (tmp_path / "crm" / "crm.toml").write_text(CRM.replace("max_age", "max_agee"))
     with pytest.raises(SystemExit, match=r"crm/crm\.toml: "):
         definition.read(tmp_path)
+
+
+@pytest.mark.parametrize("digit", ["٣", "３"])  # Arabic-Indic, full-width
+def test_a_digit_that_is_not_ascii_fails_max_age_and_at_with_the_usual_message(rv, digit):
+    r = check(rv, {"erp.toml": ERP.replace('max_age = "1h"', f'max_age = "1{digit}h"')})
+    assert r.returncode != 0 and "is not a whole number with s, m, h or d" in r.stderr, r.stderr
+    r = check(rv, {"erp.toml": ERP.replace('"dbo.Notes"     = {}', f'"dbo.Notes"     = {{ at = ["1{digit}:30"] }}')})
+    assert r.returncode != 0 and "is not a time HH:MM" in r.stderr, r.stderr

@@ -142,7 +142,7 @@ def settings(block, known, where):
         if k in block and k in RANGES and not RANGES[k][0](block[k]):
             raise SystemExit(f"{where}: {k} must be {RANGES[k][1]}")
     for time in block.get("at", []):
-        if not (isinstance(time, str) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", time)):
+        if not (isinstance(time, str) and re.fullmatch(r"([01][0-9]|2[0-3]):[0-5][0-9]", time)):
             raise SystemExit(f"{where}: at {time!r} is not a time HH:MM from 00:00 to 23:59")
     if "timezone" in block:
         try:
@@ -186,7 +186,7 @@ def type_slip(type, where):
 
 
 def interval(value, where):
-    m = re.fullmatch(r"([1-9]\d*)([smhd])", value)
+    m = re.fullmatch(r"([1-9][0-9]*)([smhd])", value)
     if not m:
         raise SystemExit(f"{where}: max_age {value!r} is not a whole number with s, m, h or d")
     return f"{m[1]} {UNITS[m[2]]}"
