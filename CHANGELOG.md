@@ -9,6 +9,7 @@ Changed:
 
 Added:
 
+- Ctrl+C ends `work` and `run` with one line, `stopped by Ctrl+C, 2 runs ended`, instead of a traceback: the run processes are ended before the program exits with 130. The tables of the ended runs close as `worker lost`. SIGTERM keeps its meaning of letting the runs finish (decision 33).
 - `work` writes `✔ the target is reachable again after <seconds>s` once when an outage of the target ends, after the `⚠ the target is unreachable` line, so a log shows how long it lasted.
 
 ## 0.4.0 (2026-11-23)

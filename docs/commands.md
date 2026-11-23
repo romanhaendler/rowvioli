@@ -69,3 +69,4 @@ Answer of `run` on stdout:
 |---|---|
 | 0 | No table failed. |
 | 1 | At least one table failed. The other tables are published. |
+| 130 | Ctrl+C: the run processes are ended, one line on stderr says so, nothing is on stdout. |

@@ -149,6 +149,23 @@ def test_work_on_sigterm_lets_the_run_publish_starts_nothing_new_and_exits_0(rea
     assert ready.target("select count(*) from _rowvioli.runs") == [(1,)]
 
 
+@pytest.mark.parametrize("command", ["work", "run"])
+def test_ctrl_c_ends_the_worker_with_one_line_130_and_no_run_process_left(ready, command):
+    slow(ready, "hanging", 60, 1)
+    apply(ready, source(ready, "erp", "", '"public.hanging" = { key = ["id"] }'))
+    worker = ready.start(command)
+    until(lambda: ready.target("select status from _rowvioli.status") == [("loading",)])
+    [run] = [int(x) for x in subprocess.run(["pgrep", "-P", str(worker.pid)], capture_output=True, text=True).stdout.split()]
+    worker.send_signal(signal.SIGINT)  # to the worker alone, as a test must: at a terminal the run gets it too
+    assert worker.wait(timeout=10) == 130
+    err = worker.stderr.read()
+    assert re.search(r"stopped by Ctrl\+C, 1 run ended$", err.strip()) and "Traceback" not in err, err
+    assert not alive(run)
+    assert worker.stdout.read() == ""  # `run` writes no answer
+    until(lambda: ready.target("select status from _rowvioli.status") == [("failed",)], timeout=20)  # as after SIGKILL
+    assert ready.target("select reason from _rowvioli.status") == [("worker lost",)]
+
+
 def test_with_the_limits_full_the_targets_connections_stay_at_the_running_tables_plus_one_per_worker(ready):
     tables = "\n".join(f'"public.slow{i}" = {{ key = ["id"] }}' for i in range(4))
     for i in range(4):
@@ -391,7 +408,9 @@ def test_a_stderr_that_cannot_encode_the_marks_loses_no_line(ready):
 
 def test_control_characters_in_a_table_name_never_reach_the_log(ready):
     ready.source("create table customers (id int primary key)")
-    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"], target_table = "a\\u001b[2J\\nBBB\\r\\u001b]0;T\\u0007" }'))
+    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
+    # `apply` refuses such a name now; one applied by an older version is in the target and keeps loading
+    ready.target("update _rowvioli.tables set target_table = %s", ["a\033[2J\nBBB\r\033]0;T\a"])
     r = ready.run("run", "erp", env=COLOUR | {"NO_COLOR": "1"})
     assert "\033" not in r.stderr and "\r" not in r.stderr and "\a" not in r.stderr, repr(r.stderr)
     assert len(r.stderr.splitlines()) == 2, r.stderr  # started and ok, no forged line

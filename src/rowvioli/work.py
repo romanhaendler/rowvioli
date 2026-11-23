@@ -80,11 +80,14 @@ def loop(slots, source="", table="", once=False):
     process for each, up to `slots` at a time. With `once` it returns ({target table: answer}, crashed) when
     nothing in scope is due or loading. `crashed`: a run process died before it claimed anything; `once` then
     starts no more, so it cannot start processes forever. Without `once`, SIGTERM (Ctrl+Break on Windows) makes it
-    start nothing new and return once its runs have ended (decision 33)."""
+    start nothing new and return once its runs have ended (decision 33). SIGINT (Ctrl+C), with or without `once`,
+    kills the run processes, says so in one line and exits with 130; nothing is recorded, the tables close as `worker
+    lost` (decision 7)."""
     worker = f"{socket.gethostname()}:{os.getpid()}"
     answers, runs, crashed = {}, {}, False  # runs: process -> what it said after its claim, None until then
     ended = []  # runs killed after max_seconds whose reason is not yet recorded
-    stopping = []
+    stopping, interrupted = [], []
+    signal.signal(signal.SIGINT, lambda *_: interrupted.append(True))  # seen within two seconds, not mid-statement
     lines = queue.Queue()  # what the run processes say, from one reader thread each
     if not once:
         for name in ("SIGTERM", "SIGBREAK"):  # Windows never delivers SIGTERM; Ctrl+Break is its stop signal
@@ -115,6 +118,12 @@ def loop(slots, source="", table="", once=False):
                 say("the target is unreachable, connecting again every two seconds: "
                     + load.reason_line(load.target_secrets(), e, "asking the target"), "⚠")
             conn, claimable = None, 0
+        if interrupted:
+            for p in runs:
+                p.kill()
+                p.wait()
+            say(f"stopped by Ctrl+C, {len(runs)} run{'' if len(runs) == 1 else 's'} ended")
+            raise SystemExit(130)
         if stopping and not stopped:
             stopped = True
             say(f"stopping, {len(runs)} run{' finishes' if len(runs) == 1 else 's finish'}")

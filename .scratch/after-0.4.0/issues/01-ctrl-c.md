@@ -1,6 +1,6 @@
 # 01: Ctrl+C ends `work` and `run` with one line, not a traceback
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -19,3 +19,7 @@ Ctrl+C (SIGINT) at a terminal ends `rowvioli work` and `rowvioli run` with a 20-
 
 - [ ] A test sends SIGINT to a worker with a run going: exit code 130, the line on stderr, no `Traceback`, no run process left.
 - [ ] The same for `run`.
+
+## Comments
+
+`loop` catches SIGINT for `work` and for `run` (a flag, seen within two seconds, not an exception mid-statement), kills and waits for its run processes, says the line and exits with 130; the line has no mark, and `run` writes no JSON then. Not done: a SIGINT before `loop` starts (while connecting) still gives Python's default.
