@@ -54,3 +54,4 @@ Five Sonnet agents and one Fable read (13 tool calls). Images pulled: none. Ever
 - A table refused with "the table left the definition" and applied again shows the old reason until its next run. open
 - On Windows `out()` writes LF where the text layer would write CRLF. open
 - Ctrl+C during `say_waiting` (the end of `run` without names) is ignored. open
+- Ctrl+C in the instant the worker itself asks the target cancels that query only (the driver's own handler): `work` takes it for an unreachable target and goes on. Treating a cancelled statement (SQLSTATE 57014) as the interrupt was built and reverted: a `statement_timeout` or a `pg_cancel_backend` on the worker's queries would then stop a worker in production. open
