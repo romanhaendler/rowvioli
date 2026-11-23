@@ -1,6 +1,6 @@
 # 04: `status`, `list` and the error messages write no control characters to a terminal
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -19,3 +19,7 @@ Write them through the same filter. What is stored (`runs.reason`, the status vi
 
 - [ ] A test puts a reason with ESC and `\r` into a table (a real failing load if cheap, else directly in `_rowvioli`) and `rowvioli status` prints it with `?`.
 - [ ] A test for the `list` message.
+
+## Comments
+
+`status` writes the reason, and `list` and the target error write their messages, through `work.plain` (the `list` message line by line, `cli.shown`, so a driver's line breaks stay); the `list` test uses a database name with ESC and CR that the server quotes.

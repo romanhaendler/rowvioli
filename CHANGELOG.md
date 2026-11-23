@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+Changed:
+
+- `rowvioli status` and the error messages of `rowvioli list` and of an unreachable or refusing target write a control character (escape, carriage return, DEL, C1) as `?`, as the lines of `work` do. A reason that quotes source data can no longer clear the terminal. What is stored and the JSON of `run` and `list` stay as they are.
+
 Added:
 
 - `work` writes `✔ the target is reachable again after <seconds>s` once when an outage of the target ends, after the `⚠ the target is unreachable` line, so a log shows how long it lasted.

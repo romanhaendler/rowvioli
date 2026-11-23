@@ -42,7 +42,7 @@ def main():
     try:
         command(a)
     except adbc.Error as e:  # the target refused or is unreachable: its message in one line, not a traceback
-        raise SystemExit(load.reason_line(load.target_secrets(), e, "asking the target"))
+        raise SystemExit(work.plain(load.reason_line(load.target_secrets(), e, "asking the target")))
 
 
 def command(a):
@@ -114,10 +114,15 @@ def print_status(source, table):
             reason = "" if written is None else f"{written:,} of about {last:,} rows" if last else f"{written:,} rows"
         lines.append([src, name, target_name, definition.duration(max_age),
                       "" if age is None else definition.duration(age),
-                      "now" if wait is None else "in " + definition.duration(wait), status, reason or ""])
+                      "now" if wait is None else "in " + definition.duration(wait), status, work.plain(reason or "")])
     widths = [max(len(line[i]) for line in lines) for i in range(7)]
     for line in lines:
         print(("  ".join(c.ljust(w) for c, w in zip(line, widths)) + "  " + line[7]).rstrip())
+
+
+def shown(text):
+    """A message for a terminal: control characters as `?`, line breaks kept."""
+    return "\n".join(map(work.plain, text.split("\n")))
 
 
 def print_tables(directory, name):
@@ -131,7 +136,7 @@ def print_tables(directory, name):
         try:
             s = {"type": row[0][0], "connection": seal.unseal(os.environ["ROWVIOLI_KEY_FILE"], row[0][2], name, row[0][1])}
         except Exception as e:
-            raise SystemExit(f"the connection of source {name} cannot be decrypted: {e}")
+            raise SystemExit(shown(f"the connection of source {name} cannot be decrypted: {e}"))
     else:
         sources, _, _ = definition.read(directory, os.environ, only=name)
         s = next((s for s in sources if s["name"] == name), None)
@@ -146,8 +151,8 @@ def print_tables(directory, name):
         readable = ("path",) if s["type"] == "file" else ()  # a directory is no secret (as in a run)
         values = load.connection_values(s["connection"], readable)
         if isinstance(e, KeyError) and e.args and isinstance(e.args[0], str) and e.args[0] not in s["connection"]:
-            raise SystemExit(load.scrub(values, f"the connection of source {name} has no {e.args[0]}"))
-        raise SystemExit(load.scrub(values, str(e) or type(e).__name__))
+            raise SystemExit(shown(load.scrub(values, f"the connection of source {name} has no {e.args[0]}")))
+        raise SystemExit(shown(load.scrub(values, str(e) or type(e).__name__)))
     for table, key in tables.items():
         # a JSON string and a JSON list of strings are TOML as well
         print(f"{json.dumps(table)} = {{ key = {json.dumps(key)} }}" if key else f"{json.dumps(table)} = {{}}")

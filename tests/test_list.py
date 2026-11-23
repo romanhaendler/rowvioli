@@ -155,6 +155,13 @@ def test_list_of_a_file_source_with_a_missing_directory_names_the_directory(read
     assert r.returncode == 1 and "/nowhere/files" in r.stderr and "***" not in r.stderr
 
 
+def test_list_writes_no_control_character_of_a_message_to_the_terminal(ready):
+    """The server quotes the database name of the url in its refusal."""
+    source(ready, "erp", "postgres", f'url = "{ready.source_url.rsplit("/", 1)[0]}/no%1B%5B2Jdb%0D"')
+    r = ready.run("list", "erp")
+    assert r.returncode == 1 and "no?[2Jdb?" in r.stderr and "\033" not in r.stderr and "\r" not in r.stderr, r.stderr
+
+
 def test_list_of_a_source_whose_connection_lacks_a_field_names_the_field(ready):
     source(ready, "erp", "postgres", 'host = "x"')
     for cwd in (None, ready.dir / "worker"):

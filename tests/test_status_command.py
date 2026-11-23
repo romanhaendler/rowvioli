@@ -116,3 +116,9 @@ def test_a_role_that_may_only_read_the_status_view_can_run_status(rv, add):
     rv.target("drop schema _rowvioli cascade")
     r = rv.run("status", env={"ROWVIOLI_TARGET_URL": url})
     assert r.returncode != 0 and "rowvioli init" in r.stderr and "Traceback" not in r.stderr
+
+
+def test_a_reason_with_control_characters_is_printed_with_question_marks(rv, add):
+    add("erp", "a", attempted_at="2026-01-01 00:00Z", attempts=1, reason="bad \033[2J value\r1")
+    out = rv.run("status").stdout
+    assert "bad ?[2J value?1" in out and "\033" not in out and "\r" not in out
