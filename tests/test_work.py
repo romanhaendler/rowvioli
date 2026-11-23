@@ -171,6 +171,19 @@ def test_ctrl_c_ends_the_worker_with_one_line_130_and_no_run_process_left(ready,
     assert ready.target("select status, reason from _rowvioli.runs") == [("running", None)]  # nothing recorded
 
 
+@pytest.mark.parametrize("command", ["work", "run"])
+def test_ctrl_c_while_the_worker_waits_on_its_own_query_ends_it_as_well(ready, command):
+    with psycopg.connect(ready.target_url) as holder:
+        holder.execute("lock table _rowvioli.tables in access exclusive mode")  # the worker's next query waits
+        worker = ready.start(command)
+        until(lambda: ready.target("select 1 from pg_stat_activity where wait_event_type = 'Lock' "
+                                   "and datname = current_database()"))
+        worker.send_signal(signal.SIGINT)  # the driver's handler is in place now and cancels the query
+        assert worker.wait(timeout=10) == 130
+    err = worker.stderr.read()
+    assert re.search(r"stopped by Ctrl\+C, 0 runs ended$", err.strip()) and "unreachable" not in err, err
+
+
 def test_with_the_limits_full_the_targets_connections_stay_at_the_running_tables_plus_one_per_worker(ready):
     tables = "\n".join(f'"public.slow{i}" = {{ key = ["id"] }}' for i in range(4))
     for i in range(4):
