@@ -431,3 +431,20 @@ def test_apply_init_with_a_broken_definition_creates_no_schema(rv):
     r = rv.run("apply", "--init", "sources", env=ENV)
     assert r.returncode != 0
     assert rv.target("select to_regclass('_rowvioli.meta') is null") == [(True,)]
+
+
+def test_a_refusal_of_the_target_is_printed_with_question_marks_for_control_characters(ready):
+    ready.target("""create function refuse() returns trigger language plpgsql
+                    as $$ begin raise exception E'refused \\033[2J here\\rnow'; end $$""")
+    ready.target("create trigger refuse before insert on _rowvioli.sources for each row execute function refuse()")
+    r = apply(ready, {"erp.toml": ERP})
+    assert r.returncode == 1 and "refused ?[2J here?now" in r.stderr, repr(r.stderr)
+    assert "\033" not in r.stderr and "\r" not in r.stderr, repr(r.stderr)
+
+
+def test_an_old_target_name_with_a_control_character_is_said_with_a_question_mark(ready):
+    assert apply(ready, {"erp.toml": ERP}).returncode == 0
+    # applied by an older version, which let such names in; the definition's own names are refused
+    ready.target("update _rowvioli.tables set target_table = %s where source_table = 'dbo.Notes'", ["n\033[2Jotes"])
+    r = apply(ready, {"erp.toml": ERP})
+    assert r.returncode == 0 and "raw_erp.n?[2Jotes" in r.stdout and "\033" not in r.stdout, repr(r.stdout)

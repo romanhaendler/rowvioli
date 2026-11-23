@@ -6,7 +6,7 @@ from importlib.resources import files
 
 import adbc_driver_postgresql.dbapi as adbc
 
-from . import definition, seal, target
+from . import definition, seal, target, work
 
 
 def apply(directory, key_file, init=False):
@@ -40,6 +40,7 @@ def apply(directory, key_file, init=False):
     try:
         target.transaction(conn, files(__package__).joinpath("sql/apply.sql").read_text(), [payload])
     except adbc.Error as e:  # Postgres names what it refused, for example a time zone it does not know
-        raise SystemExit(f"the target refused the definition, nothing was changed: {e}")
-    print(*changed, sep="\n", end="\n" if changed else "")
+        raise SystemExit("the target refused the definition, nothing was changed: "
+                         + "\n".join(map(work.plain, str(e).split("\n"))))  # it may quote a value of the definition
+    print(*map(work.plain, changed), sep="\n", end="\n" if changed else "")  # an old name may hold a control character
     print(f"applied {len(sources)} sources with {len(tables)} tables")

@@ -122,3 +122,11 @@ def test_a_reason_with_control_characters_is_printed_with_question_marks(rv, add
     add("erp", "a", attempted_at="2026-01-01 00:00Z", attempts=1, reason="bad \033[2J value\r1")
     out = rv.run("status").stdout
     assert "bad ?[2J value?1" in out and "\033" not in out and "\r" not in out
+
+
+def test_names_with_control_characters_are_printed_with_question_marks(rv, add):
+    rv.target("insert into _rowvioli.sources (name, type) values (%s, 'postgres')", ["e\033rp"])
+    add("e\033rp", "a\033[2J\rb")  # applied by an older version, which let such names in
+    out = rv.run("status").stdout
+    assert "e?rp" in out and "a?[2J?b" in out and "raw_e?rp.a?[2J?b" in out, out
+    assert "\033" not in out and "\r" not in out, repr(out)
