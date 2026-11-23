@@ -116,14 +116,9 @@ def loop(slots, source="", table="", once=False):
                 say(f"the target is reachable again after {time.monotonic() - down:.0f}s", "✔")
                 down = None
         except adbc.Error as e:  # the target is unreachable: try again in two seconds (open point E11)
-            # query_canceled: during a statement the driver's SIGINT handler replaces ours and cancels it instead.
-            # shortcut: statement_timeout and pg_cancel_backend give it too and stop the worker the same way, upgrade
-            # if a target sets one for the worker's role
-            if e.sqlstate == "57014":
-                interrupted.append(True)
-            elif once:
+            if once:
                 raise
-            elif conn:
+            if conn:
                 down = time.monotonic()
                 say("the target is unreachable, connecting again every two seconds: "
                     + load.reason_line(load.target_secrets(), e, "asking the target"), "⚠")
