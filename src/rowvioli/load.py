@@ -304,7 +304,7 @@ def publish(conn, t, staged, mirror, log, rows_read, counts):
         [(name, enabled)] = sql(conn, "SELECT target_schema || '.' || target_table, enabled FROM _rowvioli.tables"
                                       " WHERE id = $1", [t["id"]])
         raise Exception(f"the target name changed to {name} while this run loaded {t['name']}; nothing was published, "
-                        f"the following run loads {name}" if enabled else
+                        f"the next run loads {name}" if enabled else
                         f"the table left the definition while this run loaded {t['name']}; nothing was published")
     sql(conn, """UPDATE _rowvioli.runs SET status = 'ok', finished_at = clock_timestamp(), rows_read = $2,
                         inserted = $3, updated = $4, deleted = $5 WHERE run = $1""",

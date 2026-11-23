@@ -258,6 +258,11 @@ def test_a_disabled_table_is_not_loaded_again_and_its_mirror_stays(erp):
     assert rows(erp.target, "select * from raw_erp.customers") == rows(erp.source, "select * from customers")
 
 
+def scrubbed(reason):
+    """A reason as a run stores it here: the test source's password is x, and a reason never holds the password."""
+    return reason.replace("x", "***")
+
+
 def applied_while_notes_loads(erp, tables):
     """Loads raw_erp.notes, then holds its next run at reading the source while `tables` is applied and the
     memos (same columns, other rows) are loaded. Returns that run's answer once the source lets it read on."""
@@ -286,9 +291,9 @@ def test_a_run_whose_target_name_apply_gave_to_another_table_publishes_nothing(e
     answer = applied_while_notes_loads(erp, tables)
     assert rows(erp.target, "select * from raw_erp.notes") == rows(erp.source, "select * from memos")
     if notes_now:  # the next run of notes loads its new name
-        assert answer["raw_erp.notes"] == {"status": "failed", "reason": f"the target name changed to {notes_now} "
-                                           "while this run loaded raw_erp.notes; nothing was published, the following "
-                                           f"run loads {notes_now}"}
+        assert answer["raw_erp.notes"] == {"status": "failed", "reason": scrubbed(
+            f"the target name changed to {notes_now} while this run loaded raw_erp.notes; nothing was published, "
+            f"the next run loads {notes_now}")}
         assert answer[notes_now]["status"] == "ok"
         assert rows(erp.target, f"select * from {notes_now}") == rows(erp.source, "select * from notes")
     else:
@@ -302,9 +307,9 @@ def test_a_run_whose_target_name_changes_while_it_loads_publishes_nothing_and_th
         erp, setting, now):
     before = rows(erp.source, "select * from notes")
     answer = applied_while_notes_loads(erp, f'"public.notes" = {{ {setting} }}\n')
-    assert answer == {"raw_erp.notes": {"status": "failed", "reason": f"the target name changed to {now} "
-                                        "while this run loaded raw_erp.notes; nothing was published, the following "
-                                        f"run loads {now}"},
+    assert answer == {"raw_erp.notes": {"status": "failed", "reason": scrubbed(
+                          f"the target name changed to {now} while this run loaded raw_erp.notes; nothing was "
+                          f"published, the next run loads {now}")},
                       now: {"status": "ok", "inserted": 4, "updated": 0, "deleted": 0}}
     assert rows(erp.target, "select * from raw_erp.notes") == before
     assert erp.target("select status, reason from _rowvioli.status") == [("ok", None)]
