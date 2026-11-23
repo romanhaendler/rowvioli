@@ -1,6 +1,6 @@
 # 03: `apply` refuses control characters in the names of the definition
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -18,3 +18,7 @@ From `.scratch/shakedown/fifth-run.md` (P18). The root of the escape-code findin
 
 - [ ] A test per setting: `apply` exits non-zero and the message names file, setting and the escaped name.
 - [ ] `apply --check` and `list` fail the same way.
+
+## Comments
+
+`definition.clean` checks the five kinds of name while reading; decision 39 is extended in place with one sentence, as earlier small additions were.
