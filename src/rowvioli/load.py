@@ -270,7 +270,7 @@ def diff(conn, t, staged, mirror):
 
 def publish(conn, t, staged, mirror, log, rows_read, counts):
     """Step 6, one transaction: new columns, mirror, change log and its view, loaded_at, attempts and the run's
-    row."""
+    row. Raises, so nothing is published, when the table's row no longer gives it this target name."""
     names = ", ".join(quote(c) for c, _ in staged)
     new = not mirror
     if new:
@@ -296,7 +296,16 @@ def publish(conn, t, staged, mirror, log, rows_read, counts):
         deleted = rowcount(conn, f"DELETE FROM {t['mirror']}")
         counts = {"inserted": rowcount(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _stage"),
                   "updated": 0, "deleted": deleted}
-    sql(conn, "UPDATE _rowvioli.tables SET loaded_at = now(), attempts = 0 WHERE id = $1", [t["id"]])
+    # the table lock guards the table, not its name, which an apply may have given to another table meanwhile
+    # (decision 53). Last, so the row lock that holds off an apply until COMMIT is taken after every wait on a mirror
+    if not sql(conn, """UPDATE _rowvioli.tables SET loaded_at = now(), attempts = 0
+                         WHERE id = $1 AND enabled AND target_schema = $2 AND target_table = $3 RETURNING id""",
+               [t["id"], t["schema"], t["table"]]):
+        [(name, enabled)] = sql(conn, "SELECT target_schema || '.' || target_table, enabled FROM _rowvioli.tables"
+                                      " WHERE id = $1", [t["id"]])
+        raise Exception(f"the target name changed to {name} while this run loaded {t['name']}; nothing was published, "
+                        f"the following run loads {name}" if enabled else
+                        f"the table left the definition while this run loaded {t['name']}; nothing was published")
     sql(conn, """UPDATE _rowvioli.runs SET status = 'ok', finished_at = clock_timestamp(), rows_read = $2,
                         inserted = $3, updated = $4, deleted = $5 WHERE run = $1""",
         [t["run"], rows_read, counts["inserted"], counts["updated"], counts["deleted"]])

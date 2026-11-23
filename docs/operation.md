@@ -73,6 +73,8 @@ KillMode=mixed
 
   Control characters in a table name or a reason are written as `?`; `rowvioli status` and the error messages of `list` and of a refused target do the same. What is stored and what is JSON stays as it is.
 
+  Output never stops a worker or changes the exit code of `run`. A line that cannot be written, to a pipe whose reader is gone, a full disk or a log stream that stalls, is lost, and the next line is tried again, so a worker speaks again once the failure passes.
+
   A failure carries the reason of the status view; `worker lost` and `ended after max_seconds` are failures too. `the target is unreachable` is written once per outage, and `the target is reachable again after <seconds>s` once when it ends, so a log shows how long it lasted. `run` has neither line: it fails on an unreachable target. Run processes keep their stderr discarded, so no driver message from a source can carry a connection value into a log, and what a library writes to their stdout is dropped too. The line for an unreachable target keeps the driver's message as one line, like a reason, with the password of `ROWVIOLI_TARGET_URL` replaced by `***`.
 - **`rowvioli status` shows what is**, without `psql`. It prints the status view as a table; the `due` column says `now` or `in 20m`, so `ok` with an age above the maximum age is a table that is due and that nobody has taken yet (no worker runs). It computes nothing the view does not.
 - A worker has no checkout and no file that describes a source. A new source needs no change on any worker. `rowvioli list` run on a worker's machine, where there is no `sources/`, reads the source from the target with the worker's key.

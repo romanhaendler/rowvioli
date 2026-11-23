@@ -1,5 +1,6 @@
 """`rowvioli work`, the order of loading, both limits, `max_seconds`, SIGTERM and an unreachable target
 (spec tests 9, 10, 11, 13, 14, 19)."""
+import contextlib
 import os
 import pty
 import re
@@ -380,6 +381,29 @@ def test_a_broken_stderr_pipe_does_not_change_the_exit_code(tmp_path):
     p = subprocess.run([sys.executable, "-c", code], stderr=w, capture_output=False, stdout=subprocess.PIPE, timeout=30)
     os.close(w)
     assert p.returncode == 0, p.returncode
+
+
+def test_a_write_that_fails_once_loses_only_its_own_line():
+    r, w = os.pipe()
+    os.set_blocking(w, False)  # the file description is shared, so the worker's stderr is non-blocking too
+    with contextlib.suppress(BlockingIOError):
+        while True:
+            os.write(w, b"." * 4096)  # full: the first line fails
+    code = ("import sys; from rowvioli import work; work.say('lost'); print('tried', flush=True); "
+            "sys.stdin.readline(); work.say('written'); sys.exit(0)")
+    p = subprocess.Popen([sys.executable, "-c", code], stderr=w, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         text=True)
+    os.close(w)
+    assert p.stdout.readline() == "tried\n"
+    os.set_blocking(r, False)  # the failure passes: the pipe is drained
+    with contextlib.suppress(BlockingIOError):
+        while os.read(r, 65536):
+            pass
+    p.communicate("\n", timeout=30)
+    os.set_blocking(r, True)
+    with os.fdopen(r, "rb") as f:
+        err = f.read()
+    assert p.returncode == 0 and b"written" in err, err
 
 
 def test_say_without_a_stderr_does_not_raise(monkeypatch):

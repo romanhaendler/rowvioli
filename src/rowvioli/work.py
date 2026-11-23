@@ -51,13 +51,18 @@ def colour():
 
 
 def out(text):
-    """Writes to stderr. Output never ends the worker: without a stderr, or with a closed one, the text is lost.
-    A mark stderr cannot encode comes out as \\u2714: Python writes stderr with backslashreplace."""
+    """Writes to stderr. Output never ends the worker: without a stderr, or with a closed one, the text is lost,
+    and a write that fails (a broken pipe, a full disk) loses only its own text, so the next is tried again. A mark
+    stderr cannot encode comes out as \\u2714: Python writes stderr with backslashreplace."""
     try:
-        sys.stderr.write(text)
-        sys.stderr.flush()
+        data = text.encode(sys.stderr.encoding, sys.stderr.errors)
+        # past Python's buffer, where a failed text would stay and fail again at shutdown: exit code 120.
+        # With -u, or under pytest, there is no buffer in between
+        raw = getattr(sys.stderr.buffer, "raw", sys.stderr.buffer)
+        while data and (written := raw.write(data)):  # None: a non-blocking stderr is full, the rest is lost
+            data = data[written:]
     except (AttributeError, OSError, ValueError):
-        sys.stderr = None  # else Python fails again flushing the unflushed data at shutdown: exit code 120
+        pass
 
 
 def plain(text):

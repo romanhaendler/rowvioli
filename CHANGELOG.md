@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Fixed:
+
+- A run whose target name `apply` changes while it loads, or whose table leaves the definition, fails and publishes nothing: `the target name changed to raw_erp.clients while this run loaded raw_erp.customers; nothing was published, the following run loads raw_erp.clients`. Before, it published into the old name, also when `apply` had given that name to another table, whose mirror then held the wrong rows with status `ok` (decision 53).
+- A worker whose stderr fails once, on a full disk or a log stream that stalls, writes its lines again once the failure passes. Before, it stayed silent for good, and a later crash printed no traceback. A line that fails is lost (decision 52).
+
 Changed:
 
 - `rowvioli apply`, `apply --check` and `list` fail on a control character (C0, DEL, C1, U+2028, U+2029) in a source name, a source table, a key column, `target_schema` or `target_table`, and name the file, the setting and the name with the character as an escape such as `\x1b` (decision 39). A name already in a target keeps loading.
