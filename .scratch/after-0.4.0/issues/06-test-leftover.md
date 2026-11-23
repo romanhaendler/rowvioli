@@ -1,6 +1,6 @@
 # 06: The mascot test starts the worker as the foreground of a controlling terminal for nothing
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -9,3 +9,7 @@ From the final review of 0.4.0. `tests/test_work.py`, the mascot test: `start_ne
 ## Acceptance criteria
 
 - [ ] `uv run pytest tests/test_work.py` green; `fcntl` and `termios` imported only if something else needs them.
+
+## Comments
+
+The mascot test is a plain pseudo-terminal again; `fcntl` and `termios` imports dropped.

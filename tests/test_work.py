@@ -1,6 +1,5 @@
 """`rowvioli work`, the order of loading, both limits, `max_seconds`, SIGTERM and an unreachable target
 (spec tests 9, 10, 11, 13, 14, 19)."""
-import fcntl
 import os
 import pty
 import re
@@ -9,7 +8,6 @@ import signal
 import socket
 import subprocess
 import sys
-import termios
 import time
 import uuid
 
@@ -320,8 +318,7 @@ def test_work_shows_the_mascot_before_its_start_line_at_a_terminal_and_nothing_t
     apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
     master, slave = pty.openpty()
     worker = subprocess.Popen([ROWVIOLI, "work"], cwd=ready.dir, env=ready._env(COLOUR | {"PYTHONIOENCODING": "utf-8"}),
-                              stdout=subprocess.DEVNULL, stderr=slave, start_new_session=True,
-                              preexec_fn=lambda: fcntl.ioctl(slave, termios.TIOCSCTTY, 0))  # its foreground, as a shell does
+                              stdout=subprocess.DEVNULL, stderr=slave)
     ready.started.append(worker)
     os.close(slave)
     try:
