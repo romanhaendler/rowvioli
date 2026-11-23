@@ -200,6 +200,13 @@ DROP TABLE raw_erp.customers__log CASCADE;
 
 After a changed key (or a key taken away) the old mirror has to go as well, the third statement: `DROP TABLE raw_erp.customers`. The next run builds anew and the history begins there. To keep the old history instead, rename mirror, change log and history view as above.
 
+**A name with a control character from an older version.** A target may hold a table whose name has one (such a name is refused now). Give the table a clean `target_table` and run `apply`: it prints the change with `?` for the character, and the next run builds the new tables. The old tables stay, and their name cannot be typed. Find it with `\dt` in `psql`, which shows the character as `\x1B`, and write it as an escape string with the character as `\001B` (a backslash in the name is doubled). Drop the mirror and its change log, and the history view goes with the log:
+
+```sql
+DROP TABLE raw_erp.U&"c\001B[31mred" CASCADE;
+DROP TABLE raw_erp.U&"c\001B[31mred__log" CASCADE;
+```
+
 **A column was dropped in the source**, here `city`. The run fails with `column city is missing in the source`, and keeps failing, since the program never drops a column. Drop it from the mirror and from the change log; the history view reads the log, so it goes first, and the next run creates it again:
 
 ```sql
