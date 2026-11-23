@@ -1,6 +1,6 @@
 # 05: A worker stays mute after one failed write to stderr
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Opus
 
@@ -16,3 +16,7 @@ Decide and build the smallest rule that keeps both promises: the exit code of `r
 
 - [ ] The broken-pipe test stays green (exit code unchanged).
 - [ ] A test with a write that fails once and then works: the next line is written.
+
+## Comments
+
+`out()` writes the encoded line to the stream below Python's buffer and keeps `sys.stderr`, so a failed line is lost instead of left to fail again at shutdown (exit code 120), and the next line is tried again; measured with a pipe without a reader (exit 0, a naive write gives 120) and a pipe set non-blocking and filled, then drained (`second` arrives, before only the buffered `first` at exit). Not checked: ENOSPC on a real file (`/dev/full`), and the Windows console, where the stream below is `_WindowsConsoleIO`, which takes UTF-8.
