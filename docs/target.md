@@ -20,6 +20,17 @@ Staging table and diff are TEMP tables on the control connection. They have no f
 
 The schema may be one that other things read already. Beside every mirror with a key stand `<name>__log` and `<name>__history` in the same schema, and `log = false` leaves them out. A table that is there under the name of a mirror is taken over when its columns, their types and its primary key are those of the source: the first run deletes the rows the source does not have, and the change log begins with the rows that are left. Otherwise the run fails and names the difference.
 
+**A consumer that may read only the mirrors cannot tell a mirror that stopped from a quiet source.** After a failed run the mirror keeps its last good state and looks exactly like one whose source has not changed; only `_rowvioli.status` shows the difference. The consumer needs two grants for that, and nothing else in the schema opens with them:
+
+```sql
+GRANT USAGE ON SCHEMA _rowvioli TO consumer;
+GRANT SELECT ON _rowvioli.status TO consumer;
+```
+
+`SELECT target_table, status, age, reason FROM _rowvioli.status` then shows `failed` with the reason (for example `customers.csv: no such file in data`), or `ok` with the age of the last load.
+
+**A view of the consumer's own over a mirror keeps its columns.** `CREATE VIEW mine AS SELECT * FROM raw_erp.customers` is expanded when it is created, since Postgres fixes the columns of a view then. When the source gains a column, the mirror gets it with the next run and `mine` does not: replace the view (`CREATE OR REPLACE VIEW`, which may add columns at the end) or drop it and create it again.
+
 Bookkeeping in the schema `_rowvioli`:
 
 ```

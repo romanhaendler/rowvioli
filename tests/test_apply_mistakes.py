@@ -155,6 +155,14 @@ def test_a_target_address_with_a_second_at_fails_before_connecting_and_shows_no_
         assert "127.0.0.1" not in r.stderr and "u:p" not in r.stderr, r.stderr
 
 
+@pytest.mark.parametrize("url", ["localhost", "mysql://u:secret@127.0.0.1/db", "u:secret@127.0.0.1/db"])
+def test_a_target_address_without_the_postgres_scheme_says_so_and_shows_no_part_of_it(rv, url):
+    for command in ("init", "status", "run"):
+        r = rv.run(command, env={"ROWVIOLI_TARGET_URL": url}, timeout=10)
+        assert r.returncode != 0 and "postgresql:// or postgres://" in r.stderr, r.stderr
+        assert "keepalives" not in r.stderr and "secret" not in r.stderr and "127.0.0.1" not in r.stderr, r.stderr
+
+
 def test_a_target_address_with_several_hosts_and_a_query_string_is_no_slip(rv):
     url = "postgresql://postgres:x@127.0.0.1:1,127.0.0.1:2/db?connect_timeout=1&application_name=a"
     r = rv.run("status", env={"ROWVIOLI_TARGET_URL": url}, timeout=20)
@@ -171,3 +179,17 @@ def test_source_files_in_subfolders_belong_to_the_definition_and_errors_name_the
     (tmp_path / "crm" / "crm.toml").write_text(CRM.replace("max_age", "max_agee"))
     with pytest.raises(SystemExit, match=r"crm/crm\.toml: "):
         definition.read(tmp_path)
+
+
+@pytest.mark.parametrize("digit", ["٣", "３"])  # Arabic-Indic, full-width
+def test_a_digit_that_is_not_ascii_fails_max_age_and_at_with_the_usual_message(rv, digit):
+    r = check(rv, {"erp.toml": ERP.replace('max_age = "1h"', f'max_age = "1{digit}h"')})
+    assert r.returncode != 0 and "is not a whole number with s, m, h or d" in r.stderr, r.stderr
+    r = check(rv, {"erp.toml": ERP.replace('"dbo.Notes"     = {}', f'"dbo.Notes"     = {{ at = ["1{digit}:30"] }}')})
+    assert r.returncode != 0 and "is not a time HH:MM" in r.stderr, r.stderr
+
+
+def test_a_message_a_command_stops_with_has_no_control_character_from_a_file_name(rv):
+    r = check(rv, {"a\x1b[2Jb.toml": "[t2]\ntype = \"file\"\n[t2.connection]\n[t2.tables]\n"})
+    assert r.returncode == 1 and "\033" not in r.stderr, repr(r.stderr)
+    assert "a?[2Jb.toml" in r.stderr, repr(r.stderr)

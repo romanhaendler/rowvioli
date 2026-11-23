@@ -168,6 +168,7 @@ Data passes through the program only in the lines `read` and `copy_into_staging`
 | Key | a key column is not in the source, a key combination occurs twice in the staging table, a key column is null, or the key in the definition differs from the primary key of the mirror. | a missing key column in step 3, as soon as the connector has delivered its columns, before the staging table exists; the rest in step 4 |
 | Safety limits | the source delivers zero rows while the mirror has rows and `max_delete_share` is below 1, or more than `max_delete_share` of the rows would disappear. | zero rows at the end of step 3; the share after step 5 |
 | Change log | a change log exists and this run would not write to it (`log = false`, or the key was taken away), or it exists and its mirror does not. | step 4 |
+| Target name | `apply` gave the table another target name, or took it out of the definition, while the run loaded. Nothing is published; a renamed table loads its new name at once (decision 53). | step 6, the last statement before COMMIT |
 
 The share of deletions is known only from the diff, so it is checked after step 5. The safety limits keep a broken source from emptying the mirror in a perfectly consistent way. Zero rows protects a mirror that has rows. A table on its first load, or a mirror that is empty, publishes zero rows: a new empty table in the source is mirrored as an empty table. `max_delete_share = 1.0` on a table (or its source) says that every row may go, so an emptied source then gives an empty mirror (with a key, a `D` row in the change log for each row; without one, an empty table, since a table without a key is replaced as a whole and its mirror is empty when it has no rows). The reason for zero rows names this way out (decision 48).
 
@@ -198,6 +199,23 @@ DROP TABLE raw_erp.customers__log CASCADE;
 ```
 
 After a changed key (or a key taken away) the old mirror has to go as well, the third statement: `DROP TABLE raw_erp.customers`. The next run builds anew and the history begins there. To keep the old history instead, rename mirror, change log and history view as above.
+
+**A name with a control character from an older version.** A target may hold a table whose name has one (such a name is refused now). Give the table a clean `target_table` and run `apply`: it prints the change with `?` for the character, and the next run builds the new tables. The old tables stay, and their name cannot be typed. Find it with `\dt` in `psql`, which shows the character as `\x1B`, and write it as an identifier with Unicode escapes with the character as `\001B` (a backslash in the name is doubled). Drop the mirror and its change log, and the history view goes with the log:
+
+```sql
+DROP TABLE raw_erp.U&"c\001B[31mred" CASCADE;
+DROP TABLE raw_erp.U&"c\001B[31mred__log" CASCADE;
+```
+
+**A column was dropped in the source**, here `city`. The run fails with `column city is missing in the source`, and keeps failing, since the program never drops a column. Drop it from the mirror and from the change log; the history view reads the log, so it goes first, and the next run creates it again:
+
+```sql
+DROP VIEW raw_erp.customers__history;
+ALTER TABLE raw_erp.customers DROP COLUMN city;
+ALTER TABLE raw_erp.customers__log DROP COLUMN city;
+```
+
+The next run is `ok`, and the log still replays to the mirror. The versions of rows that differed only in `city` now look alike in the history, and the values of `city` are gone from it. A table without a change log needs only the second statement. Not for a key column: dropping it drops the mirror's primary key, and a key column gone from the source is a changed key (above). A view of a consumer's own that reads `city` makes the `DROP` fail; drop that view first and create it again afterwards.
 
 **A column's type was tightened after the first load**, for example `columns = { amount = "decimal(10,2)" }` for a CSV column that arrived as text. The run fails and names the column, and the mirror stays as it is, since the program never converts a column:
 

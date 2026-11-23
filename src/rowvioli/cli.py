@@ -42,7 +42,18 @@ def main():
     try:
         command(a)
     except adbc.Error as e:  # the target refused or is unreachable: its message in one line, not a traceback
-        raise SystemExit(load.reason_line(load.target_secrets(), e, "asking the target"))
+        stop(load.reason_line(load.target_secrets(), e, "asking the target"))
+    except SystemExit as e:
+        if not isinstance(e.code, str):
+            raise
+        stop(e.code)
+
+
+def stop(message):
+    """Ends with the message on stderr and exit code 1, as SystemExit(message) does, but written by out(): Python's own
+    write stays in stderr's buffer, where a broken pipe fails it again at shutdown and makes the exit code 120."""
+    work.out(shown(message) + "\n")
+    raise SystemExit(1)
 
 
 def command(a):
@@ -112,12 +123,18 @@ def print_status(source, table):
             conn, STATUS, [source, table]):
         if status == "loading":  # progress in place of a reason, none yet: no reason
             reason = "" if written is None else f"{written:,} of about {last:,} rows" if last else f"{written:,} rows"
-        lines.append([src, name, target_name, definition.duration(max_age),
+        # every cell: a name applied by an older version may hold a control character too
+        lines.append([work.plain(c) for c in (src, name, target_name, definition.duration(max_age),
                       "" if age is None else definition.duration(age),
-                      "now" if wait is None else "in " + definition.duration(wait), status, reason or ""])
+                      "now" if wait is None else "in " + definition.duration(wait), status, reason or "")])
     widths = [max(len(line[i]) for line in lines) for i in range(7)]
     for line in lines:
         print(("  ".join(c.ljust(w) for c, w in zip(line, widths)) + "  " + line[7]).rstrip())
+
+
+def shown(text):
+    """A message for a terminal: control characters as `?`, line breaks kept. stop() applies it to every message."""
+    return "\n".join(map(work.plain, text.split("\n")))
 
 
 def print_tables(directory, name):

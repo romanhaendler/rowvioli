@@ -4,7 +4,10 @@ import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+import psycopg
 import pytest
+
+from conftest import until
 
 SOURCE = """
 create table customers (customer_no int primary key, name text, city text);
@@ -255,6 +258,63 @@ def test_a_disabled_table_is_not_loaded_again_and_its_mirror_stays(erp):
     assert rows(erp.target, "select * from raw_erp.customers") == rows(erp.source, "select * from customers")
 
 
+def scrubbed(reason):
+    """A reason as a run stores it here: the test source's password is x, and a reason never holds the password."""
+    return reason.replace("x", "***")
+
+
+def applied_while_notes_loads(erp, tables):
+    """Loads raw_erp.notes, then holds its next run at reading the source while `tables` is applied and the
+    memos (same columns, other rows) are loaded. Returns that run's answer once the source lets it read on."""
+    erp.source("create table memos (txt text, n int)")
+    erp.source("insert into memos values ('m', 7), ('n', 8), ('o', 9)")
+    apply(erp, definition(erp, NOTES))
+    ok(erp)
+    erp.source("insert into notes values ('c', 3)")  # read by the held run, so that it would change the mirror
+    with psycopg.connect(erp.source_url) as holder:
+        holder.execute("lock table notes in access exclusive mode")
+        held = erp.start("run", "erp", "public.notes")
+        until(lambda: erp.source("select 1 from pg_locks where not granted and relation = 'notes'::regclass"))
+        apply(erp, definition(erp, tables))
+        if "public.memos" in tables:
+            ok(erp, "erp", "public.memos")
+        holder.rollback()
+    out, _ = held.communicate(timeout=30)
+    return json.loads(out)["tables"]
+
+
+@pytest.mark.parametrize("tables, notes_now", [
+    ('"public.memos" = { target_table = "notes" }\n', None),  # notes leaves the definition, memos takes its name
+    ('"public.notes" = { target_table = "memos" }\n"public.memos" = { target_table = "notes" }\n', "raw_erp.memos"),
+])
+def test_a_run_whose_target_name_apply_gave_to_another_table_publishes_nothing(erp, tables, notes_now):
+    answer = applied_while_notes_loads(erp, tables)
+    assert rows(erp.target, "select * from raw_erp.notes") == rows(erp.source, "select * from memos")
+    if notes_now:  # the next run of notes loads its new name
+        assert answer["raw_erp.notes"] == {"status": "failed", "reason": scrubbed(
+            f"the target name changed to {notes_now} while this run loaded raw_erp.notes; nothing was published, "
+            f"the next run loads {notes_now}")}
+        assert answer[notes_now]["status"] == "ok"
+        assert rows(erp.target, f"select * from {notes_now}") == rows(erp.source, "select * from notes")
+    else:
+        assert answer == {"raw_erp.notes": {"status": "failed", "reason": "the table left the definition while this "
+                                            "run loaded raw_erp.notes; nothing was published"}}
+
+
+@pytest.mark.parametrize("setting, now", [('target_table = "clients"', "raw_erp.clients"),
+                                          ('target_schema = "crm"', "crm.notes")])
+def test_a_run_whose_target_name_changes_while_it_loads_publishes_nothing_and_the_next_run_loads_the_new_name(
+        erp, setting, now):
+    before = rows(erp.source, "select * from notes")
+    answer = applied_while_notes_loads(erp, f'"public.notes" = {{ {setting} }}\n')
+    assert answer == {"raw_erp.notes": {"status": "failed", "reason": scrubbed(
+                          f"the target name changed to {now} while this run loaded raw_erp.notes; nothing was "
+                          f"published, the next run loads {now}")},
+                      now: {"status": "ok", "inserted": 4, "updated": 0, "deleted": 0}}
+    assert rows(erp.target, "select * from raw_erp.notes") == before
+    assert erp.target("select status, reason from _rowvioli.status") == [("ok", None)]
+
+
 def test_a_source_with_reordered_columns_still_gives_a_correct_mirror_and_change_log(erp):
     ok(erp)
     # same names and types, the two text columns swapped
@@ -287,6 +347,25 @@ def test_an_unreachable_target_gives_the_drivers_message_without_password_or_tra
     # libpq quotes a password that is not valid percent-encoding in its message
     r = rv.run(command, env={"ROWVIOLI_TARGET_URL": "postgresql://u:geheim%zz@127.0.0.1:1/db"}, timeout=10)
     assert r.returncode == 1 and "invalid percent-encoded token" in r.stderr and "geheim" not in r.stderr, r.stderr
+
+
+@pytest.mark.parametrize("char, encoded", [("/", "%2F"), ("?", "%3F")])
+def test_a_password_with_an_unencoded_slash_or_question_mark_is_refused_without_printing_it(rv, char, encoded):
+    url = f"postgresql://u:Xk3Zq9{char}tR2mWv@127.0.0.1:1/db"
+    r = rv.run("status", env={"ROWVIOLI_TARGET_URL": url}, timeout=10)
+    assert r.returncode == 1 and encoded in r.stderr and "percent-encoded" in r.stderr, r.stderr
+    assert "Xk3Zq9" not in r.stdout + r.stderr and "tR2mWv" not in r.stdout + r.stderr, r.stderr
+
+
+@pytest.mark.parametrize("url", ["postgresql://127.0.0.1:1/db", "postgresql://u:p%2Fq@[::1]:1/db",
+                                 "postgresql://127.0.0.1:1/db?options=-c%20x=a@b",
+                                 "postgresql://[::1]/db?application_name=a@b",
+                                 "postgresql://u:ab#cd@127.0.0.1:1/db",  # the driver takes a # as it is
+                                 "postgresql://127.0.0.1:1,localhost/db?application_name=a@b",
+                                 "postgresql://127.0.0.1:/db?port=1&application_name=a@b"])
+def test_a_valid_address_still_gets_to_a_connection_attempt(rv, url):
+    r = rv.run("status", env={"ROWVIOLI_TARGET_URL": url}, timeout=10)
+    assert r.returncode == 1 and "Failed to connect" in r.stderr, r.stderr
 
 
 @pytest.mark.parametrize("command", ["run", "work"])

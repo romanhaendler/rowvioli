@@ -41,14 +41,22 @@ To be set up once: the program with its connectors, for example `uv tool install
 
 ```ini
 # systemd service for a worker
+[Unit]
+StartLimitIntervalSec=0
+
 [Service]
 User=etl
 EnvironmentFile=/etc/rowvioli/env
-ExecStart=rowvioli work --slots 4
+ExecStart=/home/etl/.local/bin/rowvioli work --slots 4
 Restart=always
-TimeoutStopSec=3600   # as long as max_seconds, so running tables can finish
-KillMode=mixed        # SIGTERM to the worker only, so its run processes are not ended with it
+RestartSec=5
+# as long as max_seconds, so running tables can finish
+TimeoutStopSec=3600
+# SIGTERM to the worker only, so its run processes are not ended with it
+KillMode=mixed
 ```
+
+`ExecStart` needs the program's absolute path: `uv tool install` puts it into `~/.local/bin` of the user who installed it (`command -v rowvioli` shows where). `RestartSec` and `StartLimitIntervalSec=0`, which belongs under `[Unit]`, where systemd reads it, are there because a worker started while the target is down exits with 1 at once (`Failed to connect: ...`, so a wrong address is seen at the first start); only a worker that has connected once retries every two seconds. Without them systemd restarts it five times within a second and then leaves the service failed, which a target that comes up a minute later does not undo.
 
 - **A worker says what it does**, one line per event on stderr, the same line wherever stderr goes: local date and time, a mark (`▶` started, `✔` ok, `✘` failed, `⚠` the target is unreachable), then the text. A run's line has columns: the target table, `started`, `ok` or `failed`, the seconds since its claim, then the counts (`+inserted ~updated -deleted`) or the reason. `run` writes the start and end lines of its runs, not the worker's start line. A worker with nothing to do writes no line, and `rowvioli status` shows what is due when. Nothing is stored and nothing is configured: the lines are for a person at a terminal and for the log system you already have (journald, Docker), and what happened to a table stays in `_rowvioli.runs`. At a terminal the worker first shows its mascot.
 
@@ -59,19 +67,22 @@ KillMode=mixed        # SIGTERM to the worker only, so its run processes are not
   2026-11-12 14:03:03 ▶ raw_crm.contacts             started           run 18
   2026-11-12 14:03:05 ✘ raw_crm.contacts             failed      2.1s  62 % of the rows would be deleted
   2026-11-12 14:05:40 ⚠ the target is unreachable, connecting again every two seconds: …
+  2026-11-12 14:05:52 ✔ the target is reachable again after 12s
   2026-11-12 14:09:12   stopping, 1 run finishes
   ```
 
   The lines are coloured, in a pipe, a file and a container log too: the time dim, a `✔` line green, a `✘` line red, a `⚠` line yellow. `NO_COLOR=1` (any non-empty value, `NO_COLOR=0` too) or `TERM=dumb` switches the colour off and leaves the lines as they are. Under cron, the mail or log file gets the colour codes unless `NO_COLOR` is set. A worker whose stderr is the systemd journal, as it is for a service by default, writes no colour: `journalctl` strips escape codes in its usual view, but the journal keeps them, and `journalctl -o json` hands such a message to a log shipper as an array of bytes. The legacy Windows console prints the escape codes as text; set `NO_COLOR=1` there.
 
-  Control characters in a table name or a reason are written as `?`.
+  Control characters in a table name or a reason are written as `?`; `rowvioli status` and the error messages of `list` and of a refused target do the same. What is stored and what is JSON stays as it is.
 
-  A failure carries the reason of the status view; `worker lost` and `ended after max_seconds` are failures too. `the target is unreachable` is written once per outage. Run processes keep their stderr discarded, so no driver message from a source can carry a connection value into a log, and what a library writes to their stdout is dropped too. The line for an unreachable target keeps the driver's message as one line, like a reason, with the password of `ROWVIOLI_TARGET_URL` replaced by `***`.
+  Output never stops a worker or changes the exit code of `run`. A line that cannot be written, to a pipe whose reader is gone, a full disk or a log stream that stalls, is lost, and the next line is tried again, so a worker speaks again once the failure passes.
+
+  A failure carries the reason of the status view; `worker lost` and `ended after max_seconds` are failures too. `the target is unreachable` is written once per outage, and `the target is reachable again after <seconds>s` once when it ends, so a log shows how long it lasted. `run` has neither line: it fails on an unreachable target. Run processes keep their stderr discarded, so no driver message from a source can carry a connection value into a log, and what a library writes to their stdout is dropped too. The line for an unreachable target keeps the driver's message as one line, like a reason, with the password of `ROWVIOLI_TARGET_URL` replaced by `***`.
 - **`rowvioli status` shows what is**, without `psql`. It prints the status view as a table; the `due` column says `now` or `in 20m`, so `ok` with an age above the maximum age is a table that is due and that nobody has taken yet (no worker runs). It computes nothing the view does not.
 - A worker has no checkout and no file that describes a source. A new source needs no change on any worker. `rowvioli list` run on a worker's machine, where there is no `sources/`, reads the source from the target with the worker's key.
 - Source passwords are not on the worker. They are inside the encrypted connections in the target and are decrypted when a run starts.
 - Test and production are separate targets with their own workers, their own key pair and the same definition.
-- Whoever runs containers can build an image from the program and the drivers, starting from [examples/Dockerfile](../examples/Dockerfile). It is not required. Its log gets the coloured lines, which `docker logs` shows as colour; for a log collector that does not render them, set `NO_COLOR=1`.
+- Whoever runs containers can build an image from the program and the drivers, starting from [examples/Dockerfile](../examples/Dockerfile). It is not required. Its log gets the coloured lines, which `docker logs` shows as colour; for a log collector that does not render them, set `NO_COLOR=1`. Give the container a restart policy (`restart: always` in Compose, `docker run --restart unless-stopped`) and never one that gives up after a few tries: a worker that starts before its target exits at once, as for the unit above, and must be started again until the target is there.
 
 ## The target
 
@@ -117,7 +128,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE worker GRANT USAGE ON SCHEMAS TO consumer;
 ALTER DEFAULT PRIVILEGES FOR ROLE worker GRANT SELECT ON TABLES TO consumer;
 GRANT USAGE ON SCHEMA raw_erp TO consumer;                  -- for a schema that exists already
 GRANT SELECT ON ALL TABLES IN SCHEMA raw_erp TO consumer;   -- and its tables
-GRANT USAGE ON SCHEMA _rowvioli TO consumer;                -- optional: to read the status
+GRANT USAGE ON SCHEMA _rowvioli TO consumer;                -- optional: to read the status; without it a stopped mirror looks like a quiet source
 GRANT SELECT ON _rowvioli.status TO consumer;
 ```
 
@@ -136,6 +147,8 @@ The program creates no roles. Whoever can write the definition decides what is l
 | New program version | run to completion, each within `max_seconds` | the restart of the worker. On SIGTERM it starts nothing new, waits for its runs and exits. |
 
 On Windows the stop signal is Ctrl+Break instead of SIGTERM.
+
+Ctrl+C (SIGINT) is the opposite of SIGTERM, for `work` and for `run`: nothing waits. The run processes have a process group of their own, so at a terminal only the worker gets the signal (on Windows a run gets it too and may record it as its reason). It ends its run processes, writes one line, `stopped by Ctrl+C, 2 runs ended` (`1 run ended` for one), and exits with 130, without a traceback. It notices the signal within two seconds, except while it connects again to an unreachable target: then once that attempt gives up. A Ctrl+C that lands in the instant the worker asks the target cancels that query only: `work` writes `the target is unreachable` with `canceling statement due to user request` and goes on, `run` ends with that message and exit code 1; press it again. Nothing is recorded: the tables of the ended runs close as `worker lost`, as after a hard kill, and are retried after the pause. `run <source>` interrupted while it requests its tables, before its loop starts, still ends with Python's traceback, or with `canceling statement due to user request` and exit code 1. Ctrl+Z stops the worker alone: its runs go on, and it hears of them after `fg`.
 
 From 0.1.0, update every worker before applying new tables: a mirror that a new worker creates has `numeric(p,s)` where the source has it, and a worker of 0.1.0 fails on it with `has changed its type from numeric(10,2) to numeric`. Going back to 0.1.0 needs `ALTER TABLE ... ALTER <column> TYPE numeric` on such columns, in the mirror and its change log.
 

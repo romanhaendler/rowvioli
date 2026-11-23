@@ -382,6 +382,22 @@ def test_check_fails_each_invalid_definition_without_a_target_or_the_variables(r
     assert "Traceback" not in r.stderr
 
 
+@pytest.mark.parametrize("old, new, setting, shown", [
+    ("[erp", '["e\\u001bp"', "source name", r"e\x1bp"),
+    ('"dbo.Notes"     = {}', '"dbo.No\\u001btes" = {}', "source table", r"dbo.No\x1btes"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { key = ["i\\u0085d"] }', "key", r"i\x85d"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { target_table = "a\\u001b[2J\\nB" }', "target_table", r"a\x1b[2J\x0aB"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes" = { target_schema = "s\\u007f" }', "target_schema", r"s\x7f"),
+    ("parallel = 4", 'parallel = 4\ntarget_schema = "s\\u2028x"', "target_schema", r"s\u2028x"),
+])
+def test_a_control_character_in_a_name_of_the_definition_fails_apply_check_and_list(ready, old, new, setting, shown):
+    ready.definition({"erp.toml": ERP.replace(old, new)})
+    for args in (("apply", "sources"), ("apply", "--check", "sources"), ("list", "erp", "--definition", "sources")):
+        r = ready.run(*args, env=ENV)
+        assert r.returncode != 0 and "erp.toml" in r.stderr and setting in r.stderr and shown in r.stderr, (args, r.stderr)
+        assert "Traceback" not in r.stderr and "\033" not in r.stderr and "\n" not in r.stderr.strip()
+
+
 def test_apply_init_creates_the_schema_on_a_fresh_target_and_applies(rv):
     assert rv.run("key", "new").returncode == 0
     rv.definition({"erp.toml": ERP})
@@ -415,3 +431,20 @@ def test_apply_init_with_a_broken_definition_creates_no_schema(rv):
     r = rv.run("apply", "--init", "sources", env=ENV)
     assert r.returncode != 0
     assert rv.target("select to_regclass('_rowvioli.meta') is null") == [(True,)]
+
+
+def test_a_refusal_of_the_target_is_printed_with_question_marks_for_control_characters(ready):
+    ready.target("""create function refuse() returns trigger language plpgsql
+                    as $$ begin raise exception E'refused \\033[2J here\\rnow'; end $$""")
+    ready.target("create trigger refuse before insert on _rowvioli.sources for each row execute function refuse()")
+    r = apply(ready, {"erp.toml": ERP})
+    assert r.returncode == 1 and "refused ?[2J here?now" in r.stderr, repr(r.stderr)
+    assert "\033" not in r.stderr and "\r" not in r.stderr, repr(r.stderr)
+
+
+def test_an_old_target_name_with_a_control_character_is_said_with_a_question_mark(ready):
+    assert apply(ready, {"erp.toml": ERP}).returncode == 0
+    # applied by an older version, which let such names in; the definition's own names are refused
+    ready.target("update _rowvioli.tables set target_table = %s where source_table = 'dbo.Notes'", ["n\033[2Jotes"])
+    r = apply(ready, {"erp.toml": ERP})
+    assert r.returncode == 0 and "raw_erp.n?[2Jotes" in r.stdout and "\033" not in r.stdout, repr(r.stdout)

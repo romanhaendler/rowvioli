@@ -1,5 +1,6 @@
 """The control connection to the target: keepalive, schema version, SQL (decision 28: ADBC only)."""
 import os
+import re
 from importlib.resources import files
 
 import adbc_driver_postgresql.dbapi as adbc
@@ -21,10 +22,23 @@ NO_SCHEMA = "the target has no schema _rowvioli: run `rowvioli init` first"
 
 
 def check_address(url):
-    """Fails before connecting for a second @ in the address, which the driver would read as part of the host."""
+    """Fails before connecting for an address that is no postgres URL, or has a second @, which the driver would
+    read as part of the host. Never prints the address: it may hold a password."""
+    if not url.startswith(("postgresql://", "postgres://")):
+        raise SystemExit("ROWVIOLI_TARGET_URL must start with postgresql:// or postgres://")
     if url.split("://", 1)[-1].split("?", 1)[0].count("@") > 1:
         raise SystemExit("ROWVIOLI_TARGET_URL has more than one @ after the scheme: a password with @, / or : "
                          "must be percent-encoded")
+    rest = url.split("://", 1)[1]
+    authority = re.split(r"[/?]", rest, 1)[0]  # not at #: the driver takes a # in a password as it is
+    host = authority.rsplit("]", 1)[-1]  # after an IPv6 host's bracket, so its colons are no user info
+    port = host.rsplit(":", 1)[-1]
+    # a password holding / or ? ends the authority early: what is left looks like host:word with an @ further on.
+    # Several hosts (a comma) and an empty port are the driver's to judge.
+    if (":" in host and "@" not in authority and "," not in authority and port and not port.isdigit()
+            and "@" in rest[len(authority):]):
+        raise SystemExit("ROWVIOLI_TARGET_URL: the password holds a / or ?, which must be percent-encoded "
+                         "(%2F, %3F)")
 
 
 def connect(init=False, versioned=True):

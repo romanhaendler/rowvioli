@@ -1,6 +1,7 @@
 """`rowvioli work`, the order of loading, both limits, `max_seconds`, SIGTERM and an unreachable target
 (spec tests 9, 10, 11, 13, 14, 19)."""
-import fcntl
+import contextlib
+import io
 import os
 import pty
 import re
@@ -9,7 +10,6 @@ import signal
 import socket
 import subprocess
 import sys
-import termios
 import time
 import uuid
 
@@ -151,6 +151,27 @@ def test_work_on_sigterm_lets_the_run_publish_starts_nothing_new_and_exits_0(rea
     assert ready.target("select count(*) from _rowvioli.runs") == [(1,)]
 
 
+@pytest.mark.parametrize("command", ["work", "run"])
+def test_ctrl_c_ends_the_worker_with_one_line_130_and_no_run_process_left(ready, command):
+    slow(ready, "hanging", 60, 1)
+    apply(ready, source(ready, "erp", "", '"public.hanging" = { key = ["id"] }'))
+    worker = subprocess.Popen([ROWVIOLI, command], cwd=ready.dir, env=ready._env(None), stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, text=True, start_new_session=True)
+    ready.started.append(worker)
+    until(lambda: ready.target("select status from _rowvioli.status") == [("loading",)])
+    [run] = [int(x) for x in subprocess.run(["pgrep", "-P", str(worker.pid)], capture_output=True, text=True).stdout.split()]
+    time.sleep(1)  # the run is inside its source read, where the driver's own SIGINT handler would cancel it
+    os.killpg(worker.pid, signal.SIGINT)  # as a terminal does: to the whole foreground process group
+    assert worker.wait(timeout=10) == 130
+    err = worker.stderr.read()
+    assert re.search(r"stopped by Ctrl\+C, 1 run ended$", err.strip()) and "Traceback" not in err, err
+    assert not alive(run)
+    assert worker.stdout.read() == ""  # `run` writes no answer
+    until(lambda: ready.target("select status from _rowvioli.status") == [("failed",)], timeout=20)  # as after SIGKILL
+    assert ready.target("select reason from _rowvioli.status") == [("worker lost",)]
+    assert ready.target("select status, reason from _rowvioli.runs") == [("running", None)]  # nothing recorded
+
+
 def test_with_the_limits_full_the_targets_connections_stay_at_the_running_tables_plus_one_per_worker(ready):
     tables = "\n".join(f'"public.slow{i}" = {{ key = ["id"] }}' for i in range(4))
     for i in range(4):
@@ -235,6 +256,9 @@ def test_a_run_whose_target_restarts_ends_within_seconds_and_the_table_loads_aga
         err = said_after_sigterm(worker)
         assert re.search(r"✘ raw_erp\.hanging +failed +\d+\.\ds  connection to the target lost", err), err
         assert "the target is unreachable" in err and "SELECT" not in err, err  # a reason is one line
+        assert err.count("⚠ the target is unreachable") == 1, err  # once per outage
+        assert len(re.findall(r"✔ the target is reachable again after \d+s", err)) == 1, err
+        assert err.index("⚠ the target is unreachable") < err.index("reachable again"), err
     finally:
         subprocess.run(["docker", "rm", "-fv", name], capture_output=True)
 
@@ -320,8 +344,7 @@ def test_work_shows_the_mascot_before_its_start_line_at_a_terminal_and_nothing_t
     apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
     master, slave = pty.openpty()
     worker = subprocess.Popen([ROWVIOLI, "work"], cwd=ready.dir, env=ready._env(COLOUR | {"PYTHONIOENCODING": "utf-8"}),
-                              stdout=subprocess.DEVNULL, stderr=slave, start_new_session=True,
-                              preexec_fn=lambda: fcntl.ioctl(slave, termios.TIOCSCTTY, 0))  # its foreground, as a shell does
+                              stdout=subprocess.DEVNULL, stderr=slave)
     ready.started.append(worker)
     os.close(slave)
     try:
@@ -365,9 +388,48 @@ def test_a_broken_stderr_pipe_does_not_change_the_exit_code(tmp_path):
     assert p.returncode == 0, p.returncode
 
 
+def test_a_message_the_program_stops_with_keeps_exit_code_1_on_a_broken_stderr_pipe(tmp_path):
+    env = {k: v for k, v in os.environ.items() if k != "ROWVIOLI_TARGET_URL"}
+    r, w = os.pipe()
+    os.close(r)  # the reader is gone
+    p = subprocess.run([ROWVIOLI, "status"], cwd=tmp_path, env=env, stderr=w, stdout=subprocess.PIPE, timeout=30)
+    os.close(w)
+    assert p.returncode == 1, p.returncode
+    p = subprocess.run([ROWVIOLI, "status"], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30)
+    assert (p.returncode, p.stderr) == (1, "ROWVIOLI_TARGET_URL is not set\n")
+
+
+def test_a_write_that_fails_once_loses_only_its_own_line():
+    r, w = os.pipe()
+    os.set_blocking(w, False)  # the file description is shared, so the worker's stderr is non-blocking too
+    with contextlib.suppress(BlockingIOError):
+        while True:
+            os.write(w, b"." * 4096)  # full: the first line fails
+    code = ("import sys; from rowvioli import work; work.say('lost'); print('tried', flush=True); "
+            "sys.stdin.readline(); work.say('written'); sys.exit(0)")
+    p = subprocess.Popen([sys.executable, "-c", code], stderr=w, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         text=True)
+    os.close(w)
+    assert p.stdout.readline() == "tried\n"
+    os.set_blocking(r, False)  # the failure passes: the pipe is drained
+    with contextlib.suppress(BlockingIOError):
+        while os.read(r, 65536):
+            pass
+    p.communicate("\n", timeout=30)
+    os.set_blocking(r, True)
+    with os.fdopen(r, "rb") as f:
+        err = f.read()
+    assert p.returncode == 0 and b"written" in err, err
+
+
 def test_say_without_a_stderr_does_not_raise(monkeypatch):
     monkeypatch.setattr("sys.stderr", None)
     work.say("x")
+
+
+def test_say_to_a_stderr_without_an_encoding_does_not_raise():
+    with contextlib.redirect_stderr(io.StringIO()):
+        work.say("x")
 
 
 def test_a_stderr_that_is_the_journal_gets_no_colour_and_any_other_does(ready, tmp_path):
@@ -391,7 +453,9 @@ def test_a_stderr_that_cannot_encode_the_marks_loses_no_line(ready):
 
 def test_control_characters_in_a_table_name_never_reach_the_log(ready):
     ready.source("create table customers (id int primary key)")
-    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"], target_table = "a\\u001b[2J\\nBBB\\r\\u001b]0;T\\u0007" }'))
+    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
+    # `apply` refuses such a name now; one applied by an older version is in the target and keeps loading
+    ready.target("update _rowvioli.tables set target_table = %s", ["a\033[2J\nBBB\r\033]0;T\a"])
     r = ready.run("run", "erp", env=COLOUR | {"NO_COLOR": "1"})
     assert "\033" not in r.stderr and "\r" not in r.stderr and "\a" not in r.stderr, repr(r.stderr)
     assert len(r.stderr.splitlines()) == 2, r.stderr  # started and ok, no forged line
@@ -404,3 +468,23 @@ def test_say_writes_a_reason_with_control_characters_as_question_marks(capsys):
     assert err.endswith(" failed: bad ?[31mvalue???forged\n") and err.count("\n") == 1 and "\033" not in err
     work.say("one\u2028two\u2029three")  # str.splitlines() splits there
     assert capsys.readouterr().err.endswith(" one?two?three\n")
+
+
+def test_plain_replaces_exactly_the_c0_del_and_c1_characters_and_the_two_line_separators():
+    for code in (0x00, 0x1f, 0x7f, 0x9f, 0x2028, 0x2029):
+        assert work.plain(chr(code)) == "?", hex(code)
+    for code in (0x20, 0x7e, 0xa0):
+        assert work.plain(chr(code)) == chr(code), hex(code)
+
+
+def test_the_marks_are_green_red_and_yellow(monkeypatch, capsys):
+    monkeypatch.setattr(work, "colour", lambda: True)
+    for mark, code in (("✔", 32), ("✘", 31), ("⚠", 33)):
+        work.say("x", mark)
+        assert capsys.readouterr().err.endswith(f" \033[{code}m{mark} x\033[0m\n")
+
+
+def test_the_target_table_of_a_run_line_is_padded_to_28_characters(monkeypatch, capsys):
+    monkeypatch.setattr(work, "colour", lambda: False)
+    work.say_run({"claimed": "raw_erp.t", "started": time.monotonic()}, "started", "run 1")
+    assert f"▶ {'raw_erp.t':<28} started " in capsys.readouterr().err

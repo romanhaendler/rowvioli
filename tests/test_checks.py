@@ -53,6 +53,16 @@ def test_a_key_that_differs_from_the_mirrors_primary_key_fails_the_run(erp):
     assert rows(erp.target, MIRROR) == before
 
 
+def test_a_table_that_lost_its_key_in_the_definition_says_so_and_names_both_ways_out(erp):
+    ok(erp)
+    apply(erp, definition(erp, '"public.customers" = {}\n'))
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    assert "no key any more" in reason and "['customer_no']" in reason, reason
+    assert "put the key back" in reason and "target_table" in reason, reason
+    assert "[] differs" not in reason, reason
+
+
 def test_a_new_source_column_appears_in_the_mirror_and_the_change_log_with_values(erp):
     ok(erp)
     erp.source("alter table customers add column phone text")

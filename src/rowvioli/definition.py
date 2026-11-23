@@ -25,6 +25,15 @@ KINDS = {str: "a string", bool: "true or false", int: "a whole number", (int, fl
 PLACEHOLDER = re.compile(r"\$(\$|[A-Z][A-Z0-9_]*)?")
 # group 1 is the user info of a URL: `scheme://user:password@`
 USERINFO = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://(?:([^/?#]*)@)?")
+# C0, DEL, C1, and U+2028/2029, where splitlines() splits; a name with one is nothing a person types in SQL
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+
+
+def clean(where, setting, name):
+    """Fails on a control character in a name of the definition, showing it as an escape (decision 39)."""
+    if CONTROL.search(name):
+        shown = CONTROL.sub(lambda m: f"\\x{ord(m[0]):02x}" if ord(m[0]) < 256 else f"\\u{ord(m[0]):04x}", name)
+        raise SystemExit(f"{where}: {setting} {shown} holds a control character")
 
 
 def read(directory, env=None, only=None):
@@ -44,6 +53,7 @@ def read(directory, env=None, only=None):
         except tomllib.TOMLDecodeError as e:
             raise SystemExit(f"{label}: {e}")
         for name, s in data.items():
+            clean(label, "source name", name)
             where = f"{label}: {name}"
             if name in whole:
                 raise SystemExit(f"{where}: source {name} is defined twice")
@@ -63,6 +73,7 @@ def read(directory, env=None, only=None):
                             "connection": fill(s["connection"], f"{where}: connection",
                                               env if only in (None, name) else None)})
             for table, t in s["tables"].items():
+                clean(where, "source table", table)
                 spot = f"{where}: {table}"
                 settings(t, {**TABLE_SETTINGS, **TABLE_ONLY}, spot)
                 typos(t, spot)
@@ -73,10 +84,14 @@ def read(directory, env=None, only=None):
                 key = t.get("key")
                 if key is not None and not (key and all(isinstance(c, str) and c for c in key)):
                     raise SystemExit(f"{spot}: key must be a list of column names")
+                for c in key or []:
+                    clean(spot, "key", c)
                 # a file's extension is not a name part: `customers.csv` becomes `customers`
                 target = t["target_table"] if "target_table" in t else (
                     Path(table).stem if s["type"] == "file" else table.rsplit(".", 1)[-1]).lower()
                 schema = t.get("target_schema", s.get("target_schema", f"raw_{name}"))
+                clean(spot, "target_schema", schema)
+                clean(spot, "target_table", target)
                 # Postgres cuts names at 63 bytes; the change log and the history view add `__log`, `__history`
                 if len(schema.encode()) > 63:
                     raise SystemExit(f"{spot}: target_schema {schema} is longer than 63 bytes")
@@ -127,7 +142,7 @@ def settings(block, known, where):
         if k in block and k in RANGES and not RANGES[k][0](block[k]):
             raise SystemExit(f"{where}: {k} must be {RANGES[k][1]}")
     for time in block.get("at", []):
-        if not (isinstance(time, str) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", time)):
+        if not (isinstance(time, str) and re.fullmatch(r"([01][0-9]|2[0-3]):[0-5][0-9]", time)):
             raise SystemExit(f"{where}: at {time!r} is not a time HH:MM from 00:00 to 23:59")
     if "timezone" in block:
         try:
@@ -171,7 +186,7 @@ def type_slip(type, where):
 
 
 def interval(value, where):
-    m = re.fullmatch(r"([1-9]\d*)([smhd])", value)
+    m = re.fullmatch(r"([1-9][0-9]*)([smhd])", value)
     if not m:
         raise SystemExit(f"{where}: max_age {value!r} is not a whole number with s, m, h or d")
     return f"{m[1]} {UNITS[m[2]]}"

@@ -145,7 +145,7 @@ def test_a_key_taken_away_fails_naming_the_log_until_log_view_and_mirror_are_dro
     apply(erp, definition(erp, '"public.customers" = {}\n'))
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
-    assert "raw_erp.customers__log" in reason and "DROP TABLE" in reason
+    assert "no key any more" in reason and "raw_erp.customers__log" in reason and "DROP TABLE" in reason
     erp.target("drop table raw_erp.customers__log cascade")
     erp.target("drop table raw_erp.customers")
     again(erp)

@@ -51,13 +51,18 @@ def colour():
 
 
 def out(text):
-    """Writes to stderr. Output never ends the worker: without a stderr, or with a closed one, the text is lost.
-    A mark stderr cannot encode comes out as \\u2714: Python writes stderr with backslashreplace."""
+    """Writes to stderr. Output never ends the worker: without a stderr, or with a closed one, the text is lost,
+    and a write that fails (a broken pipe, a full disk) loses only its own text, so the next is tried again. A mark
+    stderr cannot encode comes out as \\u2714: Python writes stderr with backslashreplace."""
     try:
-        sys.stderr.write(text)
-        sys.stderr.flush()
-    except (AttributeError, OSError, ValueError):
-        sys.stderr = None  # else Python fails again flushing the unflushed data at shutdown: exit code 120
+        data = text.encode(sys.stderr.encoding, sys.stderr.errors)
+        # past Python's buffer, where a failed text would stay and fail again at shutdown: exit code 120.
+        # With -u, or under pytest, there is no buffer in between
+        raw = getattr(sys.stderr.buffer, "raw", sys.stderr.buffer)
+        while data and (written := raw.write(data)):  # None: a non-blocking stderr is full, the rest is lost
+            data = data[written:]
+    except (AttributeError, OSError, TypeError, ValueError):  # TypeError: a stream without an encoding, a StringIO
+        pass
 
 
 def plain(text):
@@ -80,18 +85,21 @@ def loop(slots, source="", table="", once=False):
     process for each, up to `slots` at a time. With `once` it returns ({target table: answer}, crashed) when
     nothing in scope is due or loading. `crashed`: a run process died before it claimed anything; `once` then
     starts no more, so it cannot start processes forever. Without `once`, SIGTERM (Ctrl+Break on Windows) makes it
-    start nothing new and return once its runs have ended (decision 33)."""
+    start nothing new and return once its runs have ended (decision 33). SIGINT (Ctrl+C), with or without `once`,
+    kills the run processes, says so in one line and exits with 130; nothing is recorded, the tables close as `worker
+    lost` (decision 7)."""
     worker = f"{socket.gethostname()}:{os.getpid()}"
     answers, runs, crashed = {}, {}, False  # runs: process -> what it said after its claim, None until then
     ended = []  # runs killed after max_seconds whose reason is not yet recorded
-    stopping = []
+    stopping, interrupted = [], []
+    signal.signal(signal.SIGINT, lambda *_: interrupted.append(True))  # seen within two seconds, not mid-statement
     lines = queue.Queue()  # what the run processes say, from one reader thread each
     if not once:
         for name in ("SIGTERM", "SIGBREAK"):  # Windows never delivers SIGTERM; Ctrl+Break is its stop signal
             if hasattr(signal, name):
                 signal.signal(getattr(signal, name), lambda *_: stopping.append(True))
     conn = target.connect()
-    stopped = False
+    stopped, down = False, None  # down: when the target became unreachable
     if not once:
         if sys.stderr and sys.stderr.isatty():
             out(MASCOT + "\n")
@@ -104,13 +112,23 @@ def loop(slots, source="", table="", once=False):
                 ended.pop(0)
             claimable, busy = sql(conn, CLAIMABLE_AND_BUSY, [source, table])[0]
             end_lost(conn, runs)
+            if down:
+                say(f"the target is reachable again after {time.monotonic() - down:.0f}s", "✔")
+                down = None
         except adbc.Error as e:  # the target is unreachable: try again in two seconds (open point E11)
             if once:
                 raise
             if conn:
+                down = time.monotonic()
                 say("the target is unreachable, connecting again every two seconds: "
                     + load.reason_line(load.target_secrets(), e, "asking the target"), "⚠")
             conn, claimable = None, 0
+        if interrupted:
+            for p in runs:
+                p.kill()
+                p.wait()
+            say(f"stopped by Ctrl+C, {len(runs)} run{'' if len(runs) == 1 else 's'} ended")
+            raise SystemExit(130)
         if stopping and not stopped:
             stopped = True
             say(f"stopping, {len(runs)} run{' finishes' if len(runs) == 1 else 's finish'}")
@@ -122,7 +140,12 @@ def loop(slots, source="", table="", once=False):
             p = subprocess.Popen([sys.executable, "-m", "rowvioli.load", worker, source, table],
                                  # nothing unscrubbed on stderr: a driver may print a connection value there
                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-                                 stdin=subprocess.PIPE)  # ends with the worker: the run's sign of its death
+                                 stdin=subprocess.PIPE,  # ends with the worker: the run's sign of its death
+                                 # out of the terminal's foreground group, so Ctrl+C reaches the worker alone and the
+                                 # driver's SIGINT handler in the run cannot cancel its statement. Windows ignores it:
+                                 # its console gives Ctrl+C to every process, and a run may record the interrupt as its
+                                 # reason before the worker ends it
+                                 process_group=0)
             runs[p] = None
             threading.Thread(target=pump, args=(p, lines), daemon=True).start()
         crashed |= listen(runs, answers, ended, 2, lines)
