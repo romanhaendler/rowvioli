@@ -349,6 +349,22 @@ def test_an_unreachable_target_gives_the_drivers_message_without_password_or_tra
     assert r.returncode == 1 and "invalid percent-encoded token" in r.stderr and "geheim" not in r.stderr, r.stderr
 
 
+@pytest.mark.parametrize("char, encoded", [("/", "%2F"), ("?", "%3F"), ("#", "%23")])
+def test_a_password_with_an_unencoded_slash_question_mark_or_hash_is_refused_without_printing_it(rv, char, encoded):
+    url = f"postgresql://u:Xk3Zq9{char}tR2mWv@127.0.0.1:1/db"
+    r = rv.run("status", env={"ROWVIOLI_TARGET_URL": url}, timeout=10)
+    assert r.returncode == 1 and encoded in r.stderr and "percent-encoded" in r.stderr, r.stderr
+    assert "Xk3Zq9" not in r.stdout + r.stderr and "tR2mWv" not in r.stdout + r.stderr, r.stderr
+
+
+@pytest.mark.parametrize("url", ["postgresql://127.0.0.1:1/db", "postgresql://u:p%2Fq@[::1]:1/db",
+                                 "postgresql://127.0.0.1:1/db?options=-c%20x=a@b",
+                                 "postgresql://[::1]/db?application_name=a@b"])
+def test_a_valid_address_still_gets_to_a_connection_attempt(rv, url):
+    r = rv.run("status", env={"ROWVIOLI_TARGET_URL": url}, timeout=10)
+    assert r.returncode == 1 and "Failed to connect" in r.stderr, r.stderr
+
+
 @pytest.mark.parametrize("command", ["run", "work"])
 def test_run_and_work_refuse_fewer_than_one_slot(rv, command):
     # with no slot nothing can start, so `run` would wait forever for what is due
