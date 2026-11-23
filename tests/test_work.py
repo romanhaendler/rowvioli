@@ -154,10 +154,13 @@ def test_work_on_sigterm_lets_the_run_publish_starts_nothing_new_and_exits_0(rea
 def test_ctrl_c_ends_the_worker_with_one_line_130_and_no_run_process_left(ready, command):
     slow(ready, "hanging", 60, 1)
     apply(ready, source(ready, "erp", "", '"public.hanging" = { key = ["id"] }'))
-    worker = ready.start(command)
+    worker = subprocess.Popen([ROWVIOLI, command], cwd=ready.dir, env=ready._env(None), stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, text=True, start_new_session=True)
+    ready.started.append(worker)
     until(lambda: ready.target("select status from _rowvioli.status") == [("loading",)])
     [run] = [int(x) for x in subprocess.run(["pgrep", "-P", str(worker.pid)], capture_output=True, text=True).stdout.split()]
-    worker.send_signal(signal.SIGINT)  # to the worker alone, as a test must: at a terminal the run gets it too
+    time.sleep(1)  # the run is inside its source read, where the driver's own SIGINT handler would cancel it
+    os.killpg(worker.pid, signal.SIGINT)  # as a terminal does: to the whole foreground process group
     assert worker.wait(timeout=10) == 130
     err = worker.stderr.read()
     assert re.search(r"stopped by Ctrl\+C, 1 run ended$", err.strip()) and "Traceback" not in err, err
@@ -165,6 +168,7 @@ def test_ctrl_c_ends_the_worker_with_one_line_130_and_no_run_process_left(ready,
     assert worker.stdout.read() == ""  # `run` writes no answer
     until(lambda: ready.target("select status from _rowvioli.status") == [("failed",)], timeout=20)  # as after SIGKILL
     assert ready.target("select reason from _rowvioli.status") == [("worker lost",)]
+    assert ready.target("select status, reason from _rowvioli.runs") == [("running", None)]  # nothing recorded
 
 
 def test_with_the_limits_full_the_targets_connections_stay_at_the_running_tables_plus_one_per_worker(ready):

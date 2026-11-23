@@ -140,7 +140,12 @@ def loop(slots, source="", table="", once=False):
             p = subprocess.Popen([sys.executable, "-m", "rowvioli.load", worker, source, table],
                                  # nothing unscrubbed on stderr: a driver may print a connection value there
                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-                                 stdin=subprocess.PIPE)  # ends with the worker: the run's sign of its death
+                                 stdin=subprocess.PIPE,  # ends with the worker: the run's sign of its death
+                                 # out of the terminal's foreground group, so Ctrl+C reaches the worker alone and the
+                                 # driver's SIGINT handler in the run cannot cancel its statement. Windows ignores it:
+                                 # its console gives Ctrl+C to every process, and a run may record the interrupt as its
+                                 # reason before the worker ends it
+                                 process_group=0)
             runs[p] = None
             threading.Thread(target=pump, args=(p, lines), daemon=True).start()
         crashed |= listen(runs, answers, ended, 2, lines)
