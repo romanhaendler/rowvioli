@@ -515,7 +515,7 @@ On 2026-11-12 the owner asked to see what a worker does (`.scratch/visibility/sp
 
 ## 37. A worker says what it does, and nothing keeps it
 
-> **Changed by decision 52.** Every line carries a mark (or a space) and colour wherever it goes, and a run's line has columns.
+> **Changed by decision 52.** Every line carries a mark (or a space), is coloured unless that is switched off, wherever it goes, and a run's line has columns.
 
 **Decision.** `work` writes one line per event to stderr: start, a run's start and end, a failure, an unreachable target, stopping. `run` writes the start and end lines of its runs, not the worker's start line. Each begins with local date and time, and there is no setting for them. The lines are not stored. `rowvioli status` prints the status view as a table; the target stays the truth. At a terminal `work` first shows its mascot once; when stderr is not a terminal there are only the lines.
 
