@@ -5,10 +5,11 @@
 Changed:
 
 - The lines of `run` and `work` on stderr are the same at a terminal and in a log, and easier to read in both: date and time, a mark (`▶` started, `✔` ok, `✘` failed, `⚠` the target is unreachable), then a run's target table, `started`, `ok` or `failed`, its seconds and `+inserted ~updated -deleted` or the reason, in columns. `raw_erp.customers ok after 0.4s: 3 inserted, 0 updated, 0 deleted` is now `✔ raw_erp.customers            ok          0.4s  +3 ~0 -0`; a script that reads the old lines has to adapt. They are coloured by default, in a pipe, a file and a container log too, except when `NO_COLOR` is set, `TERM=dumb` or stderr is the systemd journal (decision 52).
+- A control character in a target table name or in a reason (escape, newline, carriage return, DEL, C1) is written as `?` in the lines and the status line, so a name cannot clear the screen, set the window title or forge a line in the log (decision 52).
 
 Added:
 
-- At a terminal, with the worker in the foreground, one status line moves under the lines: the slots in use and each run's seconds so far, the longest first, `+N` for those that do not fit. It never reaches a pipe or a file.
+- At a terminal, with the worker in the foreground, one status line moves under the lines: the slots in use and each run's seconds so far, the longest first, `+N` for those that do not fit. It never reaches a pipe or a file. A terminal that stops reading (Ctrl+S, a stalled SSH session) does not stop the worker: its lines appear when it reads again.
 
 ## 0.3.1 (2026-11-18)
 

@@ -1,8 +1,11 @@
 """The worker loop of `run` and `work`: ask what is claimable, start a fresh process per run."""
+import atexit
+import functools
 import json
 import math
 import os
 import queue
+import re
 import signal
 import socket
 import subprocess
@@ -35,6 +38,9 @@ MASCOT = """\
 
 SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 COLOURS = {"✔": "32", "✘": "31", "⚠": "33"}
+# what a live terminal has yet to take, written by a thread of its own: a terminal that stops reading (Ctrl+S, a
+# stalled session, a laptop asleep) must not stop the worker from claiming, ending runs and recording reasons
+WAITING = queue.Queue()
 
 
 def colour():
@@ -71,13 +77,52 @@ def out(text):
         sys.stderr = None  # else Python fails again flushing the unflushed data at shutdown: exit code 120
 
 
+def plain(text):
+    """The text with every control character (C0, DEL, C1) as `?`: a table name or a reason quoting source data
+    cannot clear the screen, set the title or forge a line."""
+    return re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]", "?", text)  # 2028, 2029: splitlines() splits there
+
+
 def say(text, mark=""):
     """One line on stderr: local date and time to the second, a mark or a space, the text. Nothing but scrubbed
     text. The same line everywhere; colour() adds colour, and at a live terminal it replaces the status line."""
-    when, body = time.strftime("%Y-%m-%d %H:%M:%S"), f"{mark or ' '} {text}"
+    when, body = time.strftime("%Y-%m-%d %H:%M:%S"), f"{mark or ' '} {plain(text)}"
     if colour():
         when, body = f"\033[2m{when}\033[0m", f"\033[{COLOURS[mark]}m{body}\033[0m" if mark in COLOURS else body
-    out(("\r\033[K" if live() else "") + f"{when} {body}\n")
+    show(("\r\033[K" if live() else "") + f"{when} {body}\n")
+
+
+def show(text):
+    """Writes to stderr like out(); at a live terminal, and behind lines still waiting so that they keep their order,
+    it hands the text to the writer thread and goes on."""
+    if live() or WAITING.unfinished_tasks:
+        writer()
+        WAITING.put(text)
+    else:
+        out(text)
+
+
+@functools.cache
+def writer():
+    """Starts the thread that writes what waits, once; when the process ends, what still waits gets drain()."""
+    threading.Thread(target=write, daemon=True).start()
+    atexit.register(drain)
+
+
+def write():
+    """Writes what waits, in order, as fast as stderr takes it."""
+    while True:
+        out(WAITING.get())
+        WAITING.task_done()
+
+
+def drain():
+    """Waits until what waits is written, two seconds at most. A terminal that has not taken it by then gets nothing
+    more, nor Python's exit message or traceback: each would wait for it, and the process would not end."""
+    lost = getattr(sys.stderr, "name", None) == os.devnull
+    with WAITING.all_tasks_done:
+        if not WAITING.all_tasks_done.wait_for(lambda: not WAITING.unfinished_tasks, 0 if lost else 2) and not lost:
+            sys.stderr = open(os.devnull, "w")  # the writer thread holds the old one, so no flush at exit waits for it
 
 
 def width():
@@ -95,7 +140,7 @@ def status_line(slots, runs, now, width):
     # shortcut: the cut counts characters, not screen columns: wide (CJK) names can wrap, upgrade when someone has them
     if not runs:
         return (head + "idle")[:max(width, 0)]
-    entries = [f"{c['claimed']} {now - c['started']:.1f}s"
+    entries = [f"{plain(c['claimed'])} {now - c['started']:.1f}s"
                for c in sorted(filter(None, runs.values()), key=lambda c: c["started"])]  # None: not yet claimed
     for n in range(len(entries), -1, -1):  # as many whole entries as fit
         line = head + " · ".join(entries[:n] + ([f"+{len(entries) - n}"] if len(entries) > n else []))
@@ -120,11 +165,11 @@ def loop(slots, source="", table="", once=False):
                 signal.signal(getattr(signal, name), lambda *_: stopping.append(True))
     conn = target.connect()
     stopped = False
-    if not once:
-        if sys.stderr and sys.stderr.isatty():
-            out(MASCOT + "\n")
-        say(f"worker {worker} started with {slots} slots on {sql(conn, 'SELECT current_database()')[0][0]}")
     try:
+        if not once:
+            if sys.stderr and sys.stderr.isatty():
+                show(MASCOT + "\n")
+            say(f"worker {worker} started with {slots} slots on {sql(conn, 'SELECT current_database()')[0][0]}")
         while True:
             try:
                 conn = conn or target.connect()
@@ -155,9 +200,10 @@ def loop(slots, source="", table="", once=False):
                 runs[p] = None
                 threading.Thread(target=pump, args=(p, lines), daemon=True).start()
             crashed |= listen(runs, answers, ended, 2, lines, slots)
-    finally:  # no status line is left behind, whatever ends the loop
+    finally:  # no status line is left behind, whatever ends the loop, and the lines are out before what follows
         if live():
-            out("\r\033[K")
+            show("\r\033[K")
+        drain()
 
 
 def pump(p, lines):
@@ -180,8 +226,9 @@ def listen(runs, answers, ended, seconds, lines, slots):
     `max_seconds`; its claim goes to `ended`. Returns True if one died before it claimed anything."""
     end = time.monotonic() + seconds
     while (now := time.monotonic()) < end:
-        if live():  # cut to the width: a wrapped line cannot be wiped with \r
-            out("\r\033[K" + status_line(slots, runs, now, width() - 1))
+        if live() and not WAITING.unfinished_tasks:  # a terminal that is behind misses frames, never lines
+            # cut to the width: a wrapped line cannot be wiped with \r
+            show("\r\033[K" + status_line(slots, runs, now, width() - 1))
         for p, claim in runs.items():
             if claim and claim["deadline"] <= now:
                 p.kill()  # docs/target.md "Order when finishing": kill first, write the reason afterwards
@@ -285,3 +332,4 @@ def say_waiting():
         when = due.strftime("%H:%M:%S" if due.date() == datetime.now().date() else "%Y-%m-%d %H:%M:%S")
         say(f"{n} table{'s wait out their pause' if n > 1 else ' waits out its pause'} after a failure, the first "
             f"until {when}; `rowvioli run <source>` loads them now")
+        drain()  # out before the answer of `run` on stdout
