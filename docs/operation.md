@@ -44,11 +44,15 @@ To be set up once: the program with its connectors, for example `uv tool install
 [Service]
 User=etl
 EnvironmentFile=/etc/rowvioli/env
-ExecStart=rowvioli work --slots 4
+ExecStart=/home/etl/.local/bin/rowvioli work --slots 4
 Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
 TimeoutStopSec=3600   # as long as max_seconds, so running tables can finish
 KillMode=mixed        # SIGTERM to the worker only, so its run processes are not ended with it
 ```
+
+`ExecStart` needs the program's absolute path: `uv tool install` puts it into `~/.local/bin` of the user who installed it (`command -v rowvioli` shows where). `RestartSec` and the start limit are there because a worker started while the target is down exits with 1 at once (`Failed to connect: ...`, so a wrong address is seen at the first start); only a worker that has connected once retries every two seconds. Without them systemd restarts it five times within a second and then leaves the service failed, which a target that comes up a minute later does not undo.
 
 - **A worker says what it does**, one line per event on stderr, the same line wherever stderr goes: local date and time, a mark (`▶` started, `✔` ok, `✘` failed, `⚠` the target is unreachable), then the text. A run's line has columns: the target table, `started`, `ok` or `failed`, the seconds since its claim, then the counts (`+inserted ~updated -deleted`) or the reason. `run` writes the start and end lines of its runs, not the worker's start line. A worker with nothing to do writes no line, and `rowvioli status` shows what is due when. Nothing is stored and nothing is configured: the lines are for a person at a terminal and for the log system you already have (journald, Docker), and what happened to a table stays in `_rowvioli.runs`. At a terminal the worker first shows its mascot.
 
@@ -72,7 +76,7 @@ KillMode=mixed        # SIGTERM to the worker only, so its run processes are not
 - A worker has no checkout and no file that describes a source. A new source needs no change on any worker. `rowvioli list` run on a worker's machine, where there is no `sources/`, reads the source from the target with the worker's key.
 - Source passwords are not on the worker. They are inside the encrypted connections in the target and are decrypted when a run starts.
 - Test and production are separate targets with their own workers, their own key pair and the same definition.
-- Whoever runs containers can build an image from the program and the drivers, starting from [examples/Dockerfile](../examples/Dockerfile). It is not required. Its log gets the coloured lines, which `docker logs` shows as colour; for a log collector that does not render them, set `NO_COLOR=1`.
+- Whoever runs containers can build an image from the program and the drivers, starting from [examples/Dockerfile](../examples/Dockerfile). It is not required. Its log gets the coloured lines, which `docker logs` shows as colour; for a log collector that does not render them, set `NO_COLOR=1`. Give the container a restart policy (`restart: always` in Compose, `docker run --restart unless-stopped`) and never one that gives up after a few tries: a worker that starts before its target exits at once, as for the unit above, and must be started again until the target is there.
 
 ## The target
 

@@ -1,6 +1,6 @@
 # 11: The systemd unit of `docs/operation.md` gives up when the target comes up after the worker
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -10,3 +10,7 @@ Docs only, the program stays as it is (a worker that cannot reach its target at 
 
 - The unit gets `RestartSec=5` and no start limit, an absolute `ExecStart` with a sentence on where the program is, and one sentence on why.
 - The container paragraph says the same for a restart policy.
+
+## Comments
+
+- Resolved in `docs/operation.md`. Run: a worker against a closed port exits 1 in 0.3 s with `Failed to connect: ... Connection refused`. The systemd behaviour (five restarts, then failed) is reasoned, not run under systemd. `command -v rowvioli` and the `~/.local/bin` path were not run under `uv tool install`.
