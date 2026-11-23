@@ -1,8 +1,6 @@
 """`rowvioli work`, the order of loading, both limits, `max_seconds`, SIGTERM and an unreachable target
 (spec tests 9, 10, 11, 13, 14, 19)."""
-import contextlib
 import fcntl
-import json
 import os
 import pty
 import re
@@ -270,7 +268,6 @@ def test_work_says_its_start_and_what_it_loads_and_the_counts_equal_those_in_run
     [(inserted, updated, deleted)] = ready.target("select inserted, updated, deleted from _rowvioli.runs")
     assert re.search(rf"\033\[0m \033\[32m✔ raw_erp\.customers +ok +\d+\.\ds  \+{inserted} ~{updated} -{deleted}\033\[0m\n",
                      err)
-    assert "\r" not in err and not set(work.SPIN) & set(err)  # the status line never reaches a pipe
 
 
 def test_work_says_a_failure_with_the_reason_of_the_status(ready):
@@ -318,38 +315,23 @@ def test_a_run_process_dying_before_its_claim_gives_a_line_with_its_exit_code(re
     assert re.search(r"✘ a run process ended with exit code 1 before it claimed", ready.run("run", timeout=20).stderr)
 
 
-def test_work_shows_the_mascot_before_its_start_line_at_a_terminal(ready):
+def test_work_shows_the_mascot_before_its_start_line_at_a_terminal_and_nothing_that_moves_the_cursor(ready):
+    ready.source("create table customers (id int primary key)")
+    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
     master, slave = pty.openpty()
-    worker = subprocess.Popen([ROWVIOLI, "work"], cwd=ready.dir, env=ready._env(None), stdout=subprocess.DEVNULL,
-                              stderr=slave)
-    ready.started.append(worker)
-    os.close(slave)
-    try:
-        out = ""
-        while "started with" not in out:
-            assert select.select([master], [], [], 10)[0], out
-            out += os.read(master, 4096).decode()
-        assert "{   v   }-[#]-{   v   }" in out.split("started with")[0]
-    finally:
-        os.close(master)
-
-
-def at_a_terminal(ready, env, *until_texts):
-    """What a real worker writes to a pseudo-terminal it is the foreground process of, until every one of
-    `until_texts` is in it (30 s at most: the status line keeps the terminal busy)."""
-    master, slave = pty.openpty()
-    worker = subprocess.Popen([ROWVIOLI, "work", "--slots", "4"], cwd=ready.dir, env=ready._env(None) | env,
+    worker = subprocess.Popen([ROWVIOLI, "work"], cwd=ready.dir, env=ready._env(COLOUR | {"PYTHONIOENCODING": "utf-8"}),
                               stdout=subprocess.DEVNULL, stderr=slave, start_new_session=True,
-                              preexec_fn=lambda: fcntl.ioctl(slave, termios.TIOCSCTTY, 0))  # as a shell does
+                              preexec_fn=lambda: fcntl.ioctl(slave, termios.TIOCSCTTY, 0))  # its foreground, as a shell does
     ready.started.append(worker)
     os.close(slave)
     try:
-        raw, deadline = b"", time.monotonic() + 30
-        while not all(t in raw.decode(errors="replace") for t in until_texts):
-            assert time.monotonic() < deadline, raw.decode(errors="replace")
-            if select.select([master], [], [], 1)[0]:
-                raw += os.read(master, 4096)
-        return raw.decode(errors="replace")
+        raw = b""
+        while "✔" not in raw.decode(errors="replace"):
+            assert select.select([master], [], [], 10)[0], raw
+            raw += os.read(master, 4096)
+        out = raw.decode()
+        assert "{   v   }-[#]-{   v   }" in out.split("started with")[0]
+        assert "\033[K" not in out and "\r" not in out.replace("\r\n", "") and not set("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏") & set(out), out
     finally:
         os.close(master)
 
@@ -407,55 +389,6 @@ def test_a_stderr_that_cannot_encode_the_marks_loses_no_line(ready):
     assert r.returncode == 0 and re.search(r"\\u2714 raw_erp\.customers +ok ", r.stderr), r.stderr
 
 
-def test_work_at_a_terminal_shows_the_lines_and_a_status_line(ready):
-    one_ok_one_failed(ready)
-    out = at_a_terminal(ready, COLOUR | {"PYTHONIOENCODING": "utf-8"}, "✘", "✔")
-    assert "/4 slots" in out and re.search(r"\033\[0m ▶ raw_erp\.customers +started +run \d+", out), out
-    assert re.search(r"\r\033\[K\033\[2m\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\033\[0m \033\[32m✔ raw_erp\.customers +ok ", out), out
-
-
-def test_run_at_a_terminal_wipes_its_status_line_last_and_says_what_waits(ready):
-    one_ok_one_failed(ready)
-    for code, last in ((1, "\r\033[K"), (0, "`rowvioli run <source>` loads them now\r\n")):  # then nothing is due
-        master, slave = pty.openpty()
-        p = subprocess.Popen([ROWVIOLI, "run"], cwd=ready.dir, env=ready._env(None) | COLOUR | {"PYTHONIOENCODING": "utf-8"},
-                             stdout=subprocess.PIPE, stderr=slave, start_new_session=True,
-                             preexec_fn=lambda: fcntl.ioctl(slave, termios.TIOCSCTTY, 0))
-        ready.started.append(p)
-        os.close(slave)
-        raw = b""
-        with contextlib.suppress(OSError):  # EIO once the run has ended and its terminal is closed (Linux)
-            while select.select([master], [], [], 30)[0] and (chunk := os.read(master, 4096)):
-                raw += chunk
-        os.close(master)
-        assert p.wait(timeout=10) == code and "tables" in json.loads(p.stdout.read())
-        out = raw.decode()
-        assert out.endswith(last) and (" slots" in out) == bool(code), repr(out[-300:])
-
-
-def test_work_at_a_terminal_with_no_color_still_shows_the_status_line(ready):
-    one_ok_one_failed(ready)
-    out = at_a_terminal(ready, COLOUR | {"NO_COLOR": "1", "PYTHONIOENCODING": "utf-8"}, "✘", "✔")
-    assert "/4 slots" in out and "\033[3" not in out and "\033[2m" not in out, out
-
-
-def test_the_status_line_lists_the_longest_running_first_and_counts_what_does_not_fit():
-    runs = {i: {"claimed": f"raw_erp.t{i}", "started": 1000 - i * 10} for i in range(15)}  # t14 runs longest
-    line = work.status_line(15, runs, 1000, 100)
-    assert line[0] in work.SPIN and line[1:].startswith(" 15/15 slots  raw_erp.t14 ") and len(line) <= 100
-    shown = line.split("slots  ")[1].split(" · ")
-    *entries, more = shown
-    assert more.startswith("+") and len(entries) + int(more[1:]) == 15
-    assert entries[:2] == ["raw_erp.t14 140.0s", "raw_erp.t13 130.0s"]
-    assert all(re.fullmatch(r"raw_erp\.t\d+ \d+\.\ds", e) for e in entries)
-    wide = work.status_line(15, runs, 1000, 400)
-    assert "+" not in wide and wide.count(" · ") == 14
-    assert work.status_line(4, {}, 1000, 100)[1:] == " 0/4 slots  idle"
-    assert work.status_line(4, {"starting": None}, 1000, 100)[1:].rstrip() == " 1/4 slots"  # nothing claimed yet
-    assert len(work.status_line(4, {}, 1000, 5)) <= 5
-    assert not work.status_line(4, {"starting": None}, 1000, 100).endswith(" ")
-
-
 def test_control_characters_in_a_table_name_never_reach_the_log(ready):
     ready.source("create table customers (id int primary key)")
     apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"], target_table = "a\\u001b[2J\\nBBB\\r\\u001b]0;T\\u0007" }'))
@@ -465,49 +398,9 @@ def test_control_characters_in_a_table_name_never_reach_the_log(ready):
     assert "a?[2J?BBB??]0;T?" in r.stderr
 
 
-def test_the_status_line_has_no_control_characters_in_a_name():
-    runs = {1: {"claimed": "a\033[2J\nBBB\r\033]0;T\a\x7f\x9b", "started": 990}}
-    line = work.status_line(4, runs, 1000, 100)
-    assert "a?[2J?BBB??]0;T???" in line and not [c for c in line if ord(c) < 0x20 or 0x7f <= ord(c) <= 0x9f]
-
-
 def test_say_writes_a_reason_with_control_characters_as_question_marks(capsys):
     work.say("failed: bad \033[31mvalue\r\n\x9bforged")
     err = capsys.readouterr().err
     assert err.endswith(" failed: bad ?[31mvalue???forged\n") and err.count("\n") == 1 and "\033" not in err
     work.say("one\u2028two\u2029three")  # str.splitlines() splits there
     assert capsys.readouterr().err.endswith(" one?two?three\n")
-
-
-def test_a_terminal_that_stops_reading_does_not_stop_the_worker(ready):
-    slow(ready, "hanging", 30, 1)
-    apply(ready, source(ready, "erp", "max_seconds = 4", '"public.hanging" = { key = ["id"] }'))
-    master, slave = pty.openpty()
-    flags = fcntl.fcntl(slave, fcntl.F_GETFL)
-    fcntl.fcntl(slave, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-    with contextlib.suppress(BlockingIOError):  # no room left before the worker says anything: nobody reads
-        while True:
-            os.write(slave, b"#" * 64)
-    assert not select.select([], [slave], [], 0)[1]
-    fcntl.fcntl(slave, fcntl.F_SETFL, flags)
-    worker = subprocess.Popen([ROWVIOLI, "work", "--slots", "4"], cwd=ready.dir,
-                              env=ready._env(None) | COLOUR | {"PYTHONIOENCODING": "utf-8"},
-                              stdout=subprocess.DEVNULL, stderr=slave, start_new_session=True,
-                              preexec_fn=lambda: fcntl.ioctl(slave, termios.TIOCSCTTY, 0))
-    ready.started.append(worker)
-    os.close(slave)
-    try:  # max_seconds still ends the run and its reason is recorded: kill, then at most 2 s to the next round
-        until(lambda: ready.target("select status, reason from _rowvioli.runs") == [("failed", "ended after max_seconds = 4")],
-              timeout=20)
-        [(seconds,)] = ready.target("select extract(epoch from finished_at - started_at) from _rowvioli.runs")
-        assert seconds < 4 + 4, seconds
-        raw, deadline = b"", time.monotonic() + 10  # then the terminal reads again: every line, in order
-        while "ended after max_seconds" not in raw.decode(errors="replace"):
-            assert time.monotonic() < deadline, raw.decode(errors="replace")
-            if select.select([master], [], [], 1)[0]:
-                raw += os.read(master, 4096)
-        out = raw.decode(errors="replace")
-        said = [out.index(t) for t in ("{   v   }", "started with 4 slots", "▶ raw_erp.hanging", "✘ raw_erp.hanging")]
-        assert said == sorted(said), out
-    finally:
-        os.close(master)
