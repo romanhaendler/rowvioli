@@ -48,8 +48,10 @@ ExecStart=/home/etl/.local/bin/rowvioli work --slots 4
 Restart=always
 RestartSec=5
 StartLimitIntervalSec=0
-TimeoutStopSec=3600   # as long as max_seconds, so running tables can finish
-KillMode=mixed        # SIGTERM to the worker only, so its run processes are not ended with it
+# as long as max_seconds, so running tables can finish
+TimeoutStopSec=3600
+# SIGTERM to the worker only, so its run processes are not ended with it
+KillMode=mixed
 ```
 
 `ExecStart` needs the program's absolute path: `uv tool install` puts it into `~/.local/bin` of the user who installed it (`command -v rowvioli` shows where). `RestartSec` and the start limit are there because a worker started while the target is down exits with 1 at once (`Failed to connect: ...`, so a wrong address is seen at the first start); only a worker that has connected once retries every two seconds. Without them systemd restarts it five times within a second and then leaves the service failed, which a target that comes up a minute later does not undo.
