@@ -1,6 +1,7 @@
 """`rowvioli work`, the order of loading, both limits, `max_seconds`, SIGTERM and an unreachable target
 (spec tests 9, 10, 11, 13, 14, 19)."""
 import contextlib
+import io
 import os
 import pty
 import re
@@ -426,6 +427,11 @@ def test_a_write_that_fails_once_loses_only_its_own_line():
 def test_say_without_a_stderr_does_not_raise(monkeypatch):
     monkeypatch.setattr("sys.stderr", None)
     work.say("x")
+
+
+def test_say_to_a_stderr_without_an_encoding_does_not_raise():
+    with contextlib.redirect_stderr(io.StringIO()):
+        work.say("x")
 
 
 def test_a_stderr_that_is_the_journal_gets_no_colour_and_any_other_does(ready, tmp_path):

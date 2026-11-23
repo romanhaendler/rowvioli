@@ -61,7 +61,7 @@ def out(text):
         raw = getattr(sys.stderr.buffer, "raw", sys.stderr.buffer)
         while data and (written := raw.write(data)):  # None: a non-blocking stderr is full, the rest is lost
             data = data[written:]
-    except (AttributeError, OSError, ValueError):
+    except (AttributeError, OSError, TypeError, ValueError):  # TypeError: a stream without an encoding, a StringIO
         pass
 
 
