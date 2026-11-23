@@ -42,7 +42,7 @@ def main():
     try:
         command(a)
     except adbc.Error as e:  # the target refused or is unreachable: its message in one line, not a traceback
-        stop(work.plain(load.reason_line(load.target_secrets(), e, "asking the target")))
+        stop(load.reason_line(load.target_secrets(), e, "asking the target"))
     except SystemExit as e:
         if not isinstance(e.code, str):
             raise
@@ -52,7 +52,7 @@ def main():
 def stop(message):
     """Ends with the message on stderr and exit code 1, as SystemExit(message) does, but written by out(): Python's own
     write stays in stderr's buffer, where a broken pipe fails it again at shutdown and makes the exit code 120."""
-    work.out(message + "\n")
+    work.out(shown(message) + "\n")
     raise SystemExit(1)
 
 
@@ -133,7 +133,7 @@ def print_status(source, table):
 
 
 def shown(text):
-    """A message for a terminal: control characters as `?`, line breaks kept."""
+    """A message for a terminal: control characters as `?`, line breaks kept. stop() applies it to every message."""
     return "\n".join(map(work.plain, text.split("\n")))
 
 
@@ -148,7 +148,7 @@ def print_tables(directory, name):
         try:
             s = {"type": row[0][0], "connection": seal.unseal(os.environ["ROWVIOLI_KEY_FILE"], row[0][2], name, row[0][1])}
         except Exception as e:
-            raise SystemExit(shown(f"the connection of source {name} cannot be decrypted: {e}"))
+            raise SystemExit(f"the connection of source {name} cannot be decrypted: {e}")
     else:
         sources, _, _ = definition.read(directory, os.environ, only=name)
         s = next((s for s in sources if s["name"] == name), None)
@@ -163,8 +163,8 @@ def print_tables(directory, name):
         readable = ("path",) if s["type"] == "file" else ()  # a directory is no secret (as in a run)
         values = load.connection_values(s["connection"], readable)
         if isinstance(e, KeyError) and e.args and isinstance(e.args[0], str) and e.args[0] not in s["connection"]:
-            raise SystemExit(shown(load.scrub(values, f"the connection of source {name} has no {e.args[0]}")))
-        raise SystemExit(shown(load.scrub(values, str(e) or type(e).__name__)))
+            raise SystemExit(load.scrub(values, f"the connection of source {name} has no {e.args[0]}"))
+        raise SystemExit(load.scrub(values, str(e) or type(e).__name__))
     for table, key in tables.items():
         # a JSON string and a JSON list of strings are TOML as well
         print(f"{json.dumps(table)} = {{ key = {json.dumps(key)} }}" if key else f"{json.dumps(table)} = {{}}")

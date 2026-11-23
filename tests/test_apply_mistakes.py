@@ -187,3 +187,9 @@ def test_a_digit_that_is_not_ascii_fails_max_age_and_at_with_the_usual_message(r
     assert r.returncode != 0 and "is not a whole number with s, m, h or d" in r.stderr, r.stderr
     r = check(rv, {"erp.toml": ERP.replace('"dbo.Notes"     = {}', f'"dbo.Notes"     = {{ at = ["1{digit}:30"] }}')})
     assert r.returncode != 0 and "is not a time HH:MM" in r.stderr, r.stderr
+
+
+def test_a_message_a_command_stops_with_has_no_control_character_from_a_file_name(rv):
+    r = check(rv, {"a\x1b[2Jb.toml": "[t2]\ntype = \"file\"\n[t2.connection]\n[t2.tables]\n"})
+    assert r.returncode == 1 and "\033" not in r.stderr, repr(r.stderr)
+    assert "a?[2Jb.toml" in r.stderr, repr(r.stderr)

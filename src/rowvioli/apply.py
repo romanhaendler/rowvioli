@@ -41,6 +41,6 @@ def apply(directory, key_file, init=False):
         target.transaction(conn, files(__package__).joinpath("sql/apply.sql").read_text(), [payload])
     except adbc.Error as e:  # Postgres names what it refused, for example a time zone it does not know
         raise SystemExit("the target refused the definition, nothing was changed: "
-                         + "\n".join(map(work.plain, str(e).split("\n"))))  # it may quote a value of the definition
+                         + str(e))
     print(*map(work.plain, changed), sep="\n", end="\n" if changed else "")  # an old name may hold a control character
     print(f"applied {len(sources)} sources with {len(tables)} tables")
