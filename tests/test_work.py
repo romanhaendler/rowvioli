@@ -233,6 +233,9 @@ def test_a_run_whose_target_restarts_ends_within_seconds_and_the_table_loads_aga
         err = said_after_sigterm(worker)
         assert re.search(r"✘ raw_erp\.hanging +failed +\d+\.\ds  connection to the target lost", err), err
         assert "the target is unreachable" in err and "SELECT" not in err, err  # a reason is one line
+        assert err.count("⚠ the target is unreachable") == 1, err  # once per outage
+        assert len(re.findall(r"✔ the target is reachable again after \d+s", err)) == 1, err
+        assert err.index("⚠ the target is unreachable") < err.index("reachable again"), err
     finally:
         subprocess.run(["docker", "rm", "-fv", name], capture_output=True)
 

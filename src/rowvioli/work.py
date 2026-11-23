@@ -91,7 +91,7 @@ def loop(slots, source="", table="", once=False):
             if hasattr(signal, name):
                 signal.signal(getattr(signal, name), lambda *_: stopping.append(True))
     conn = target.connect()
-    stopped = False
+    stopped, down = False, None  # down: when the target became unreachable
     if not once:
         if sys.stderr and sys.stderr.isatty():
             out(MASCOT + "\n")
@@ -104,10 +104,14 @@ def loop(slots, source="", table="", once=False):
                 ended.pop(0)
             claimable, busy = sql(conn, CLAIMABLE_AND_BUSY, [source, table])[0]
             end_lost(conn, runs)
+            if down:
+                say(f"the target is reachable again after {time.monotonic() - down:.0f}s", "✔")
+                down = None
         except adbc.Error as e:  # the target is unreachable: try again in two seconds (open point E11)
             if once:
                 raise
             if conn:
+                down = time.monotonic()
                 say("the target is unreachable, connecting again every two seconds: "
                     + load.reason_line(load.target_secrets(), e, "asking the target"), "⚠")
             conn, claimable = None, 0

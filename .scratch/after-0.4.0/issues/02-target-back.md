@@ -1,6 +1,6 @@
 # 02: The log says when the target is reachable again
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -17,3 +17,7 @@ From `.scratch/shakedown/fifth-run.md` (H4).
 ## Acceptance criteria
 
 - [ ] The existing test for the unreachable target (or one next to it) restarts the target and sees the `⚠` line once and then the new line once.
+
+## Comments
+
+`loop` remembers when the target became unreachable and writes the `✔` line once when its next query succeeds; the restart test asserts both lines once.

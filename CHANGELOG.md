@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+Added:
+
+- `work` writes `✔ the target is reachable again after <seconds>s` once when an outage of the target ends, after the `⚠ the target is unreachable` line, so a log shows how long it lasted.
+
 ## 0.4.0 (2026-11-23)
 
 Changed:

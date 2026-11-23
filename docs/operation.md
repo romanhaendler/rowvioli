@@ -59,6 +59,7 @@ KillMode=mixed        # SIGTERM to the worker only, so its run processes are not
   2026-11-12 14:03:03 ▶ raw_crm.contacts             started           run 18
   2026-11-12 14:03:05 ✘ raw_crm.contacts             failed      2.1s  62 % of the rows would be deleted
   2026-11-12 14:05:40 ⚠ the target is unreachable, connecting again every two seconds: …
+  2026-11-12 14:05:52 ✔ the target is reachable again after 12s
   2026-11-12 14:09:12   stopping, 1 run finishes
   ```
 
@@ -66,7 +67,7 @@ KillMode=mixed        # SIGTERM to the worker only, so its run processes are not
 
   Control characters in a table name or a reason are written as `?`.
 
-  A failure carries the reason of the status view; `worker lost` and `ended after max_seconds` are failures too. `the target is unreachable` is written once per outage. Run processes keep their stderr discarded, so no driver message from a source can carry a connection value into a log, and what a library writes to their stdout is dropped too. The line for an unreachable target keeps the driver's message as one line, like a reason, with the password of `ROWVIOLI_TARGET_URL` replaced by `***`.
+  A failure carries the reason of the status view; `worker lost` and `ended after max_seconds` are failures too. `the target is unreachable` is written once per outage, and `the target is reachable again after <seconds>s` once when it ends, so a log shows how long it lasted. `run` has neither line: it fails on an unreachable target. Run processes keep their stderr discarded, so no driver message from a source can carry a connection value into a log, and what a library writes to their stdout is dropped too. The line for an unreachable target keeps the driver's message as one line, like a reason, with the password of `ROWVIOLI_TARGET_URL` replaced by `***`.
 - **`rowvioli status` shows what is**, without `psql`. It prints the status view as a table; the `due` column says `now` or `in 20m`, so `ok` with an age above the maximum age is a table that is due and that nobody has taken yet (no worker runs). It computes nothing the view does not.
 - A worker has no checkout and no file that describes a source. A new source needs no change on any worker. `rowvioli list` run on a worker's machine, where there is no `sources/`, reads the source from the target with the worker's key.
 - Source passwords are not on the worker. They are inside the encrypted connections in the target and are decrypted when a run starts.
