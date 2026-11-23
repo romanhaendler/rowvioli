@@ -81,7 +81,7 @@ What you see (times shortened):
 created worker.key (keep it secret) and worker.pub
 the schema _rowvioli is ready in the target
 applied 1 sources with 1 tables
-2026-11-17 21:02:39 raw_try.customers ok after 0.5s: 3 inserted, 0 updated, 0 deleted
+2026-11-17 21:02:39 ✔ raw_try.customers            ok          0.5s  +3 ~0 -0
 source  table          target             max_age  age  due    status  reason
 try     customers.csv  raw_try.customers  1h       1s   in 1h  ok
  customer_no | name  | city
@@ -89,7 +89,7 @@ try     customers.csv  raw_try.customers  1h       1s   in 1h  ok
  1           | Anna  | Bonn
  2           | Ben   | Essen
  3           | Carla | Mainz
-2026-11-17 21:02:41 raw_try.customers ok after 0.2s: 1 inserted, 1 updated, 0 deleted
+2026-11-17 21:02:41 ✔ raw_try.customers            ok          0.2s  +1 ~1 -0
  _valid_from | _valid_to  | customer_no | name  |  city
 -------------+------------+-------------+-------+---------
  20:02:39    | 20:02:41   | 1           | Anna  | Bonn

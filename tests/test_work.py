@@ -1,5 +1,6 @@
 """`rowvioli work`, the order of loading, both limits, `max_seconds`, SIGTERM and an unreachable target
 (spec tests 9, 10, 11, 13, 14, 19)."""
+import fcntl
 import os
 import pty
 import re
@@ -7,13 +8,18 @@ import select
 import signal
 import socket
 import subprocess
+import sys
+import termios
 import time
 import uuid
 
 import psycopg
 import pytest
+from rowvioli import work
 from conftest import HOST, IMAGE, ROWVIOLI, _query, _wait, until
 from test_run import apply, ok, run
+
+COLOUR = {"NO_COLOR": "", "TERM": "xterm", "JOURNAL_STREAM": ""}  # the defaults, whatever the shell has set
 
 
 # a source view that takes `seconds` per row, to hold a run while it fills the staging table
@@ -227,7 +233,7 @@ def test_a_run_whose_target_restarts_ends_within_seconds_and_the_table_loads_aga
         until(lambda: _query(url, "select status from _rowvioli.status") == [("ok",)], timeout=30)
         assert sorted(_query(url, "select * from raw_erp.hanging")) == sorted(ready.source("select * from hanging"))
         err = said_after_sigterm(worker)
-        assert "raw_erp.hanging failed after" in err and "connection to the target lost" in err, err
+        assert re.search(r"✘ raw_erp\.hanging +failed +\d+\.\ds  connection to the target lost", err), err
         assert "the target is unreachable" in err and "SELECT" not in err, err  # a reason is one line
     finally:
         subprocess.run(["docker", "rm", "-fv", name], capture_output=True)
@@ -252,17 +258,17 @@ def test_work_says_its_start_and_what_it_loads_and_the_counts_equal_those_in_run
     ready.source("create table customers (id int primary key)")
     ready.source("insert into customers values (1), (2)")
     apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
-    worker = ready.start("work", "--slots", "3")
+    worker = ready.start("work", "--slots", "3", env=COLOUR)
     until(lambda: ready.target("select status from _rowvioli.status") == [("ok",)])
     db = ready.target("select current_database()")[0][0]
     err = said_after_sigterm(worker)
-    assert f"started with 3 slots on {db}" in err
+    assert re.match(rf"\033\[2m\d{{4}}-\d\d-\d\d \d\d:\d\d:\d\d\033\[0m   worker \S+ started with 3 slots on {db}\n", err)
     assert "~~~" not in err  # no mascot when stderr is a pipe
-    assert "raw_erp.customers started, run 1" in err
+    assert re.search(r"\033\[0m ▶ raw_erp\.customers +started +run 1\n", err)
     [(inserted, updated, deleted)] = ready.target("select inserted, updated, deleted from _rowvioli.runs")
-    assert re.search(rf"raw_erp.customers ok after \d+\.\d+s: {inserted} inserted, {updated} updated, "
-                     rf"{deleted} deleted", err)
-    assert re.match(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d ", err)
+    assert re.search(rf"\033\[0m \033\[32m✔ raw_erp\.customers +ok +\d+\.\ds  \+{inserted} ~{updated} -{deleted}\033\[0m\n",
+                     err)
+    assert "\r" not in err and not set(work.SPIN) & set(err)  # the status line never reaches a pipe
 
 
 def test_work_says_a_failure_with_the_reason_of_the_status(ready):
@@ -270,7 +276,7 @@ def test_work_says_a_failure_with_the_reason_of_the_status(ready):
     worker = ready.start("work")
     until(lambda: ready.target("select status from _rowvioli.status") == [("failed",)])
     [(reason,)] = ready.target("select reason from _rowvioli.status")
-    assert re.search(rf"raw_erp.missing failed after \d+\.\d+s: {re.escape(reason)}", said_after_sigterm(worker))
+    assert re.search(rf"✘ raw_erp\.missing +failed +\d+\.\ds  {re.escape(reason)}", said_after_sigterm(worker))
 
 
 def test_work_with_nothing_due_says_only_its_start(ready):
@@ -294,20 +300,20 @@ def test_work_on_sigterm_says_stopping_and_the_run_still_says_ok(ready):
     until(lambda: ready.target("select count(*) from _rowvioli.status where status = 'loading'") == [(1,)])
     err = said_after_sigterm(worker)
     assert "stopping, 1 run finishes" in err
-    assert "raw_erp.first ok after" in err
+    assert re.search(r"✔ raw_erp\.first +ok ", err)
 
 
 def test_a_run_ended_after_max_seconds_gives_a_failure_line(ready):
     slow(ready, "hanging", 30, 1)
     apply(ready, source(ready, "erp", "max_seconds = 2", '"public.hanging" = { key = ["id"] }'))
-    assert "raw_erp.hanging failed after 2.0s: ended after max_seconds = 2" in ready.run("run").stderr
+    assert re.search(r"✘ raw_erp\.hanging +failed +2\.0s  ended after max_seconds = 2", ready.run("run").stderr)
 
 
 def test_a_run_process_dying_before_its_claim_gives_a_line_with_its_exit_code(ready):
     ready.source("create table customers (id int primary key)")
     apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
     ready.target("alter table _rowvioli.runs add constraint broken check (false) not valid")
-    assert re.search(r"run process ended with exit code 1 before it claimed", ready.run("run", timeout=20).stderr)
+    assert re.search(r"✘ a run process ended with exit code 1 before it claimed", ready.run("run", timeout=20).stderr)
 
 
 def test_work_shows_the_mascot_before_its_start_line_at_a_terminal(ready):
@@ -324,3 +330,106 @@ def test_work_shows_the_mascot_before_its_start_line_at_a_terminal(ready):
         assert ".~~~~~~~.   .~~~~~~~." in out.split("started with")[0]
     finally:
         os.close(master)
+
+
+def at_a_terminal(ready, env, *until_texts):
+    """What a real worker writes to a pseudo-terminal it is the foreground process of, until every one of
+    `until_texts` is in it (30 s at most: the status line keeps the terminal busy)."""
+    master, slave = pty.openpty()
+    worker = subprocess.Popen([ROWVIOLI, "work", "--slots", "4"], cwd=ready.dir, env=ready._env(None) | env,
+                              stdout=subprocess.DEVNULL, stderr=slave, start_new_session=True,
+                              preexec_fn=lambda: fcntl.ioctl(slave, termios.TIOCSCTTY, 0))  # as a shell does
+    ready.started.append(worker)
+    os.close(slave)
+    try:
+        raw, deadline = b"", time.monotonic() + 30
+        while not all(t in raw.decode(errors="replace") for t in until_texts):
+            assert time.monotonic() < deadline, raw.decode(errors="replace")
+            if select.select([master], [], [], 1)[0]:
+                raw += os.read(master, 4096)
+        return raw.decode(errors="replace")
+    finally:
+        os.close(master)
+
+
+def one_ok_one_failed(ready):
+    ready.source("create table customers (id int primary key)")
+    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }\n"public.missing" = { key = ["id"] }'))
+
+
+def test_no_color_gives_the_same_lines_without_escape_codes(ready):
+    one_ok_one_failed(ready)
+    coloured, plain = (ready.run("run", "erp", env=COLOUR | e).stderr for e in ({}, {"NO_COLOR": "1"}))
+    assert "\033[31m✘ raw_erp.missing" in coloured and "\033" not in plain
+    same = lambda err: sorted(re.sub(r"\d", "0", re.sub(r"\033\[\d+m", "", err)).splitlines())  # times, runs
+    assert same(coloured) == same(plain), plain
+    assert re.search(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d ✘ raw_erp\.missing +failed +\d+\.\ds  \S", plain, re.M), plain
+
+
+def test_term_dumb_gives_no_escape_codes(ready):
+    one_ok_one_failed(ready)
+    err = ready.run("run", "erp", env=COLOUR | {"TERM": "dumb"}).stderr
+    assert "raw_erp.customers" in err and "\033" not in err, err
+
+
+def test_a_broken_stderr_pipe_does_not_change_the_exit_code(tmp_path):
+    r, w = os.pipe()
+    os.close(r)  # the reader is gone
+    code = "import sys; from rowvioli import work; work.say('x'); sys.exit(0)"
+    p = subprocess.run([sys.executable, "-c", code], stderr=w, capture_output=False, stdout=subprocess.PIPE, timeout=30)
+    os.close(w)
+    assert p.returncode == 0, p.returncode
+
+
+def test_say_without_a_stderr_does_not_raise(monkeypatch):
+    monkeypatch.setattr("sys.stderr", None)
+    work.say("x")
+
+
+def test_a_stderr_that_is_the_journal_gets_no_colour_and_any_other_does(ready, tmp_path):
+    one_ok_one_failed(ready)
+    for name, other in (("journal", 0), ("file", 1)):  # JOURNAL_STREAM is inherited: only stderr's own counts
+        with open(tmp_path / name, "w+") as f:
+            s = os.fstat(f.fileno())
+            subprocess.run([ROWVIOLI, "run", "erp"], cwd=ready.dir, stdout=subprocess.DEVNULL, stderr=f, timeout=60,
+                           env=ready._env(COLOUR | {"JOURNAL_STREAM": f"{s.st_dev}:{s.st_ino + other}"}))
+            f.seek(0)
+            err = f.read()
+        assert ("\033" in err) == bool(other) and "raw_erp.customers" in err, err
+
+
+def test_a_stderr_that_cannot_encode_the_marks_loses_no_line(ready):
+    ready.source("create table customers (id int primary key)")
+    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
+    r = ready.run("run", env=COLOUR | {"PYTHONIOENCODING": "ascii"})
+    assert r.returncode == 0 and re.search(r"\\u2714 raw_erp\.customers +ok ", r.stderr), r.stderr
+
+
+def test_work_at_a_terminal_shows_the_lines_and_a_status_line(ready):
+    one_ok_one_failed(ready)
+    out = at_a_terminal(ready, COLOUR | {"PYTHONIOENCODING": "utf-8"}, "✘", "✔")
+    assert "/4 slots" in out and re.search(r"\033\[0m ▶ raw_erp\.customers +started +run \d+", out), out
+    assert re.search(r"\r\033\[K\033\[2m\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\033\[0m \033\[32m✔ raw_erp\.customers +ok ", out), out
+
+
+def test_work_at_a_terminal_with_no_color_still_shows_the_status_line(ready):
+    one_ok_one_failed(ready)
+    out = at_a_terminal(ready, COLOUR | {"NO_COLOR": "1", "PYTHONIOENCODING": "utf-8"}, "✘", "✔")
+    assert "/4 slots" in out and "\033[3" not in out and "\033[2m" not in out, out
+
+
+def test_the_status_line_lists_the_longest_running_first_and_counts_what_does_not_fit():
+    runs = {i: {"claimed": f"raw_erp.t{i}", "started": 1000 - i * 10} for i in range(15)}  # t14 runs longest
+    line = work.status_line(15, runs, 1000, 100)
+    assert line[0] in work.SPIN and line[1:].startswith(" 15/15 slots  raw_erp.t14 ") and len(line) <= 100
+    shown = line.split("slots  ")[1].split(" · ")
+    *entries, more = shown
+    assert more.startswith("+") and len(entries) + int(more[1:]) == 15
+    assert entries[:2] == ["raw_erp.t14 140.0s", "raw_erp.t13 130.0s"]
+    assert all(re.fullmatch(r"raw_erp\.t\d+ \d+\.\ds", e) for e in entries)
+    wide = work.status_line(15, runs, 1000, 400)
+    assert "+" not in wide and wide.count(" · ") == 14
+    assert work.status_line(4, {}, 1000, 100)[1:] == " 0/4 slots  idle"
+    assert work.status_line(4, {"starting": None}, 1000, 100)[1:].rstrip() == " 1/4 slots"  # nothing claimed yet
+    assert len(work.status_line(4, {}, 1000, 5)) <= 5
+    assert not work.status_line(4, {"starting": None}, 1000, 100).endswith(" ")

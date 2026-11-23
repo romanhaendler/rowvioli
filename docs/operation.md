@@ -50,22 +50,28 @@ TimeoutStopSec=3600   # as long as max_seconds, so running tables can finish
 KillMode=mixed        # SIGTERM to the worker only, so its run processes are not ended with it
 ```
 
-- **A worker says what it does**, one line per event on stderr, each starting with local date and time. `run` writes the start and end lines of its runs, not the worker's start line. A worker with nothing to do is silent, and `rowvioli status` shows what is due when. Nothing is stored and nothing is configured: the lines are for a person at a terminal and for the log system you already have (journald, Docker), and what happened to a table stays in `_rowvioli.runs`. At a terminal the worker first shows its mascot; in a log there are only the lines.
+- **A worker says what it does**, one line per event on stderr, the same line wherever stderr goes: local date and time, a mark (`▶` started, `✔` ok, `✘` failed, `⚠` the target is unreachable), then the text. A run's line has columns: the target table, `started`, `ok` or `failed`, the seconds since its claim, then the counts (`+inserted ~updated -deleted`) or the reason. `run` writes the start and end lines of its runs, not the worker's start line. A worker with nothing to do writes no line, and `rowvioli status` shows what is due when. Nothing is stored and nothing is configured: the lines are for a person at a terminal and for the log system you already have (journald, Docker), and what happened to a table stays in `_rowvioli.runs`. At a terminal the worker first shows its mascot.
 
   ```
-  2026-11-12 14:03:00 worker mac:4711 started with 4 slots on dwh
-  2026-11-12 14:03:01 raw_shop.orders started, run 17
-  2026-11-12 14:03:01 raw_shop.orders ok after 0.4s: 0 inserted, 3 updated, 10 deleted
-  2026-11-12 14:03:05 raw_crm.contacts failed after 2.1s: 62 % of the rows would be deleted
-  2026-11-12 14:09:12 stopping, 1 run finishes
+  2026-11-12 14:03:00   worker mac:4711 started with 4 slots on dwh
+  2026-11-12 14:03:01 ▶ raw_shop.orders              started           run 17
+  2026-11-12 14:03:01 ✔ raw_shop.orders              ok          0.4s  +0 ~3 -10
+  2026-11-12 14:03:03 ▶ raw_crm.contacts             started           run 18
+  2026-11-12 14:03:05 ✘ raw_crm.contacts             failed      2.1s  62 % of the rows would be deleted
+  2026-11-12 14:05:40 ⚠ the target is unreachable, connecting again every two seconds: …
+  2026-11-12 14:09:12   stopping, 1 run finishes
   ```
+
+  The lines are coloured, in a pipe, a file and a container log too: the time dim, a `✔` line green, a `✘` line red, a `⚠` line yellow. `NO_COLOR=1` (or `TERM=dumb`) switches the colour off and leaves the lines as they are. Under cron, the mail or log file gets the colour codes unless `NO_COLOR=1` is set. A worker whose stderr is the systemd journal, as it is for a service by default, writes no colour: `journalctl` strips escape codes in its usual view, but the journal keeps them, and `journalctl -o json` hands such a message to a log shipper as an array of bytes. The legacy Windows console prints the escape codes as text; set `TERM=dumb` there, which switches off the colour and the status line.
+
+  At a terminal, while the worker is in its foreground, one status line moves under the lines: the slots in use and each run with its seconds so far, the longest-running first, with `+N` for the runs that do not fit the width (`rowvioli status` has them all), and `idle` when nothing runs. It has no colour, so `NO_COLOR` keeps it, and it never reaches a pipe or a file.
 
   A failure carries the reason of the status view; `worker lost` and `ended after max_seconds` are failures too. `the target is unreachable` is written once per outage. Run processes keep their stderr discarded, so no driver message from a source can carry a connection value into a log, and what a library writes to their stdout is dropped too. The line for an unreachable target keeps the driver's message as one line, like a reason, with the password of `ROWVIOLI_TARGET_URL` replaced by `***`.
 - **`rowvioli status` shows what is**, without `psql`. It prints the status view as a table; the `due` column says `now` or `in 20m`, so `ok` with an age above the maximum age is a table that is due and that nobody has taken yet (no worker runs). It computes nothing the view does not.
 - A worker has no checkout and no file that describes a source. A new source needs no change on any worker.
 - Source passwords are not on the worker. They are inside the encrypted connections in the target and are decrypted when a run starts.
 - Test and production are separate targets with their own workers, their own key pair and the same definition.
-- Whoever runs containers can build an image from the program and the drivers, starting from [examples/Dockerfile](../examples/Dockerfile). It is not required.
+- Whoever runs containers can build an image from the program and the drivers, starting from [examples/Dockerfile](../examples/Dockerfile). It is not required. Its log gets the coloured lines, which `docker logs` shows as colour; for a log collector that does not render them, set `NO_COLOR=1`. A container started with a terminal nobody watches (`docker run -t -d`, `tty: true` in Compose) gets the status line into its log ten times a second: leave the terminal off.
 
 ## The target
 

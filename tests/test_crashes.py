@@ -1,6 +1,7 @@
 """Killed runs and readers (spec tests 9, 10, 22). Runs are held at a step from the SQL side, then killed with -9."""
 import json
 import os
+import re
 import subprocess
 import threading
 from datetime import timedelta
@@ -235,5 +236,5 @@ def test_a_run_killed_after_its_claim_gives_a_worker_lost_line(slow):
         slow.kill_runs(worker)
         _, err = worker.communicate(timeout=20)
         holder.rollback()
-    assert "raw_erp.slow started" in err
-    assert "raw_erp.slow failed after" in err and err.rstrip().endswith("worker lost")
+    assert re.search(r"▶ raw_erp\.slow +started", err)
+    assert re.search(r"✘ raw_erp\.slow +failed +\d+\.\ds  worker lost(\033\[0m)?\n$", err), err  # the last line

@@ -202,7 +202,7 @@ After a changed key (or a key taken away) the old mirror has to go as well, the 
 **A column's type was tightened after the first load**, for example `columns = { amount = "decimal(10,2)" }` for a CSV column that arrived as text. The run fails and names the column, and the mirror stays as it is, since the program never converts a column:
 
 ```
-raw_shop.items failed after 0.1s: column amount has changed its type from text to numeric
+2026-11-12 14:03:05 ✘ raw_shop.items               failed      0.1s  column amount has changed its type from text to numeric
 ```
 
 The same happens to a mirror with a `json` column from before json arrived as `jsonb`. The mirror and its change log have the old type, so drop both. The next run builds anew with the new type, and the history begins there:
@@ -217,7 +217,7 @@ A table without a change log needs only the second statement. To keep the old ro
 **A numeric column needs more digits than the mirror holds**, for example after the source went from `numeric(12,2)` to `numeric(12,4)`. The mirror keeps its type and loads while the values fit; the first that does not fails the run:
 
 ```
-raw_shop.items failed after 0.1s: column amount holds a value that its type numeric(12,2) in raw_shop.items does not hold (1.2345)
+2026-11-12 14:03:05 ✘ raw_shop.items               failed      0.1s  column amount holds a value that its type numeric(12,2) in raw_shop.items does not hold (1.2345)
 ```
 
 Widen the column in the mirror and its change log. The history view reads the log, so it goes first, and the next run creates it again:

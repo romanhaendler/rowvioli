@@ -515,6 +515,8 @@ On 2026-11-12 the owner asked to see what a worker does (`.scratch/visibility/sp
 
 ## 37. A worker says what it does, and nothing keeps it
 
+> **Changed by decision 50.** Every line carries a mark (or a space) and colour wherever it goes, a run's line has columns, and at a terminal in the foreground a status line moves under the lines.
+
 **Decision.** `work` writes one line per event to stderr: start, a run's start and end, a failure, an unreachable target, stopping. `run` writes the start and end lines of its runs, not the worker's start line. Each begins with local date and time, and there is no setting for them. The lines are not stored. `rowvioli status` prints the status view as a table; the target stays the truth. At a terminal `work` first shows its mascot once; when stderr is not a terminal there are only the lines.
 
 **Why.** The target already holds everything (`status`, `runs`), but looking needed `psql`, and a worker that waits looked the same as one that hangs. The loop already hears each run's claim and answer, so the lines cost nothing new, and the log system the operator has (journald, Docker) is the right place for them. A second record would have to agree with `runs`.
@@ -700,6 +702,24 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 - *Altering it at all.* Even empty, `ALTER TABLE` of 300 columns took 3.5 s, against 5 ms for `CREATE TABLE AS` with casts (ticket 15); a 0.1.0 mirror of 300 `numeric(12,2)` columns took 32 s per unchanged run with an ALTER and a scan per column, 5 s without.
 
 **Evidence.** `tests/test_numeric.py`; the measurement in ticket 14.
+
+## Ninth round: the lines
+
+On 2026-11-23 the owner asked for the output to be coloured by default and visibly better in a container too.
+
+## 50. The same line everywhere, coloured; a terminal adds a status line
+
+**Decision.** An event line has one form wherever stderr goes, a terminal, a pipe, a file, a container log or the journal: local date and time to the second, a mark (`▶` started, `✔` ok, `✘` failed, `⚠` the target is unreachable, a space otherwise), then the text. A run's line has columns: the target table padded to 28 characters, `started`, `ok` or `failed`, the seconds since its claim, and the counts as `+inserted ~updated -deleted` or the reason. The lines are coloured by default, in a pipe and a file too: the time dim, a `✔` line green, a `✘` line red, a `⚠` line yellow. No colour when `NO_COLOR` is set and not empty, when `TERM` is `dumb`, or when stderr is the systemd journal, which `JOURNAL_STREAM` says by naming the device and inode of stderr itself. At a terminal that takes UTF-8, with the worker in its foreground, one status line moves under the lines ten times a second: a spinner, the slots in use, the runs with their seconds so far, the longest-running first, as many whole ones as fit the width and `+N` for the rest. It is wiped before every line and when the loop ends, and never reaches a pipe or a file. Output never ends a worker: without a stderr, with a closed one, or with one that cannot encode the marks, it loads on.
+
+**Why.** Two forms of each line, a marked one for a terminal and a plain one for a log, were two texts to keep in step, and the container, where workers run, got the plainer one. A mark and columns read at a glance in `docker logs` as at a terminal; the words `started`, `ok` and `failed` stay in the line for whoever greps or alerts on them. `docker logs`, `kubectl logs` and a terminal show the colour, and `NO_COLOR` is the convention for turning it off. The journal is the exception because escape codes are stored there: `journalctl` strips them in its usual view, but `journalctl -o json` gives such a message as an array of bytes, and `-o verbose` as `[blob data]`, so a log shipper reading the journal gets numbers. `JOURNAL_STREAM` alone is inherited by every child, whatever its stderr is, so only the comparison with stderr's own device and inode tells the journal (systemd.exec(5)). The status line shows that a waiting worker lives, without a query; it is not the waiting line decision 37 rejected, since it reaches no log and says only what this worker does. Nor is it the "Progress lines during a run" that decision 37 rejected: it says how long a run has taken, not how far it is, it is the worker's own clock, and it reaches no log.
+
+**Price.** The line format changed: whoever reads the lines by machine (`ok after 0.4s: 0 inserted, 3 updated, 10 deleted`) has to adapt. Escape codes reach files and log collectors that do not render them, unless `NO_COLOR=1`. A container started with a terminal nobody watches (`docker run -t`, `tty: true` in Compose) gets the status line into its log ten times a second. The legacy Windows console prints the escape codes as text; `TERM=dumb` is the way out, as it switches off the colour and the status line (`NO_COLOR=1` leaves the status line and the wipe). A terminal that stops reading (Ctrl+S, a stalled SSH session) fills its buffer ten times as fast as before, and the worker blocks in the write until it reads again. A stderr that cannot encode the marks shows them as `\u2714`.
+
+**Rejected.**
+- *Two forms, marked and coloured at a terminal, plain in a log* (the first build of this round). Two texts per line, and the container kept the plain one.
+- *Colour only with `FORCE_COLOR`.* An opt-in that nearly nobody sets; the default is what people see, and `NO_COLOR` is there for those who need none.
+- *A dashboard with a library (`rich`, `curses`).* A dependency and a second interface for what one line says; `rowvioli status` is the full view.
+- *One status line per slot.* Fifteen slots fill a screen, and a block of lines cannot be wiped reliably once the terminal scrolls; one line with `+N` stays one line.
 
 ## Corrections after the prototype
 

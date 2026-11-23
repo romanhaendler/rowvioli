@@ -1,5 +1,6 @@
 """`rowvioli run`: one table from the source to its mirror (spec tests 4 rest, 5, 6, 7, 8, 21)."""
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -346,5 +347,5 @@ def test_every_run_carries_the_hash_of_the_definition_applied_before_it(erp):
 def test_run_says_start_and_end_on_stderr_and_stdout_stays_one_answer(erp):
     r = erp.run("run")
     assert json.loads(r.stdout)["tables"]["raw_erp.customers"]["status"] == "ok"
-    assert "raw_erp.customers started, run 1" in r.stderr
-    assert "raw_erp.customers ok after" in r.stderr and "started with" not in r.stderr
+    assert re.search(r"▶ raw_erp\.customers +started +run 1\b", r.stderr)
+    assert re.search(r"✔ raw_erp\.customers +ok ", r.stderr) and "started with" not in r.stderr

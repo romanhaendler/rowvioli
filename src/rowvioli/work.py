@@ -33,9 +33,74 @@ MASCOT = """\
     |   |       |   |"""
 
 
-def say(text):
-    """One line on stderr: local date and time to the second, a space, the text. Nothing but scrubbed text."""
-    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {text}", file=sys.stderr, flush=True)
+SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+COLOURS = {"✔": "32", "✘": "31", "⚠": "33"}
+
+
+def colour():
+    """Whether the lines are coloured: wherever stderr goes, a pipe or a file too, unless NO_COLOR is set,
+    TERM is dumb, or stderr is the systemd journal."""
+    # shortcut: the legacy Windows console prints escape codes as text (TERM=dumb helps), upgrade if someone asks
+    if os.environ.get("NO_COLOR") or os.environ.get("TERM") == "dumb":
+        return False
+    try:  # JOURNAL_STREAM is inherited by children, so only stderr's own device and inode mean the journal
+        s = os.fstat(sys.stderr.fileno())
+    except (AttributeError, OSError, ValueError):
+        return False
+    return os.environ.get("JOURNAL_STREAM") != f"{s.st_dev}:{s.st_ino}"
+
+
+def live():
+    """Whether the status line is drawn: stderr is a terminal that takes UTF-8, TERM is not dumb, and the worker is
+    in its foreground (behind `rowvioli work &` the shell's prompt is not ours to paint over)."""
+    e = sys.stderr
+    try:
+        return (e.isatty() and os.environ.get("TERM") != "dumb" and (e.encoding or "").lower().startswith("utf")
+                and (not hasattr(os, "tcgetpgrp") or os.tcgetpgrp(e.fileno()) == os.getpgrp()))
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
+def out(text):
+    """Writes to stderr. Output never ends the worker: without a stderr, or with a closed one, the text is lost.
+    A mark stderr cannot encode comes out as \\u2714: Python writes stderr with backslashreplace."""
+    try:
+        sys.stderr.write(text)
+        sys.stderr.flush()
+    except (AttributeError, OSError, ValueError):
+        sys.stderr = None  # else Python fails again flushing the unflushed data at shutdown: exit code 120
+
+
+def say(text, mark=""):
+    """One line on stderr: local date and time to the second, a mark or a space, the text. Nothing but scrubbed
+    text. The same line everywhere; colour() adds colour, and at a live terminal it replaces the status line."""
+    when, body = time.strftime("%Y-%m-%d %H:%M:%S"), f"{mark or ' '} {text}"
+    if colour():
+        when, body = f"\033[2m{when}\033[0m", f"\033[{COLOURS[mark]}m{body}\033[0m" if mark in COLOURS else body
+    out(("\r\033[K" if live() else "") + f"{when} {body}\n")
+
+
+def width():
+    """The columns of the terminal stderr is on (stdout may be a pipe)."""
+    try:
+        return os.get_terminal_size(sys.stderr.fileno()).columns or 80  # 0: size unknown
+    except OSError:
+        return 80
+
+
+def status_line(slots, runs, now, width):
+    """What a person sees under the lines: a spinner, the slots in use, then the runs longest-running first,
+    each with its seconds so far; `+N` stands for those that do not fit."""
+    head = f"{SPIN[int(now * 10) % 10]} {len(runs)}/{slots} slots  "
+    # shortcut: the cut counts characters, not screen columns: wide (CJK) names can wrap, upgrade when someone has them
+    if not runs:
+        return (head + "idle")[:max(width, 0)]
+    entries = [f"{c['claimed']} {now - c['started']:.1f}s"
+               for c in sorted(filter(None, runs.values()), key=lambda c: c["started"])]  # None: not yet claimed
+    for n in range(len(entries), -1, -1):  # as many whole entries as fit
+        line = head + " · ".join(entries[:n] + ([f"+{len(entries) - n}"] if len(entries) > n else []))
+        if len(line) <= width or not n:
+            return line[:max(width, 0)].rstrip()
 
 
 def loop(slots, source="", table="", once=False):
@@ -56,39 +121,43 @@ def loop(slots, source="", table="", once=False):
     conn = target.connect()
     stopped = False
     if not once:
-        if sys.stderr.isatty():
-            print(MASCOT, file=sys.stderr, flush=True)
+        if sys.stderr and sys.stderr.isatty():
+            out(MASCOT + "\n")
         say(f"worker {worker} started with {slots} slots on {sql(conn, 'SELECT current_database()')[0][0]}")
-    while True:
-        try:
-            conn = conn or target.connect()
-            while ended:
-                record(conn, ended[0])
-                ended.pop(0)
-            claimable, busy = sql(conn, CLAIMABLE_AND_BUSY, [source, table])[0]
-            end_lost(conn, runs)
-        except adbc.Error as e:  # the target is unreachable: try again in two seconds (open point E11)
-            if once:
-                raise
-            if conn:
-                say("the target is unreachable, connecting again every two seconds: "
-                    + load.reason_line(load.target_secrets(), e, "asking the target"))
-            conn, claimable = None, 0
-        if stopping and not stopped:
-            stopped = True
-            say(f"stopping, {len(runs)} run{' finishes' if len(runs) == 1 else 's finish'}")
-        if (once and not runs and (crashed or not busy)) or (stopping and not runs):
-            if conn:
-                conn.close()
-            return answers, crashed
-        for _ in range(0 if stopping or (once and crashed) else min(claimable, slots - len(runs))):
-            p = subprocess.Popen([sys.executable, "-m", "rowvioli.load", worker, source, table],
-                                 # nothing unscrubbed on stderr: a driver may print a connection value there
-                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-                                 stdin=subprocess.PIPE)  # ends with the worker: the run's sign of its death
-            runs[p] = None
-            threading.Thread(target=pump, args=(p, lines), daemon=True).start()
-        crashed |= listen(runs, answers, ended, 2, lines)
+    try:
+        while True:
+            try:
+                conn = conn or target.connect()
+                while ended:
+                    record(conn, ended[0])
+                    ended.pop(0)
+                claimable, busy = sql(conn, CLAIMABLE_AND_BUSY, [source, table])[0]
+                end_lost(conn, runs)
+            except adbc.Error as e:  # the target is unreachable: try again in two seconds (open point E11)
+                if once:
+                    raise
+                if conn:
+                    say("the target is unreachable, connecting again every two seconds: "
+                        + load.reason_line(load.target_secrets(), e, "asking the target"), "⚠")
+                conn, claimable = None, 0
+            if stopping and not stopped:
+                stopped = True
+                say(f"stopping, {len(runs)} run{' finishes' if len(runs) == 1 else 's finish'}")
+            if (once and not runs and (crashed or not busy)) or (stopping and not runs):
+                if conn:
+                    conn.close()
+                return answers, crashed
+            for _ in range(0 if stopping or (once and crashed) else min(claimable, slots - len(runs))):
+                p = subprocess.Popen([sys.executable, "-m", "rowvioli.load", worker, source, table],
+                                     # nothing unscrubbed on stderr: a driver may print a connection value there
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                                     stdin=subprocess.PIPE)  # ends with the worker: the run's sign of its death
+                runs[p] = None
+                threading.Thread(target=pump, args=(p, lines), daemon=True).start()
+            crashed |= listen(runs, answers, ended, 2, lines, slots)
+    finally:  # no status line is left behind, whatever ends the loop
+        if live():
+            out("\r\033[K")
 
 
 def pump(p, lines):
@@ -100,23 +169,29 @@ def pump(p, lines):
         lines.put((p, ""))  # without the end marker the run would hold its slot for good
 
 
-def say_end(claim, outcome, text):
-    say(f"{claim['claimed']} {outcome} after {time.monotonic() - claim['started']:.1f}s: {text}")
+def say_run(claim, outcome, text):
+    """A run's line: its target table, `started`, `ok` or `failed`, the seconds since its claim, the text."""
+    secs = "" if outcome == "started" else f"{time.monotonic() - claim['started']:.1f}s"
+    say(f"{claim['claimed']:<28} {outcome:<7} {secs:>8}  {text}", {"started": "▶", "ok": "✔"}.get(outcome, "✘"))
 
 
-def listen(runs, answers, ended, seconds, lines):
+def listen(runs, answers, ended, seconds, lines, slots):
     """Reads what the run processes say, for `seconds` or until one ends, and kills a run that exceeds its
     `max_seconds`; its claim goes to `ended`. Returns True if one died before it claimed anything."""
     end = time.monotonic() + seconds
     while (now := time.monotonic()) < end:
+        if live():  # cut to the width: a wrapped line cannot be wiped with \r
+            out("\r\033[K" + status_line(slots, runs, now, width() - 1))
         for p, claim in runs.items():
             if claim and claim["deadline"] <= now:
                 p.kill()  # docs/target.md "Order when finishing": kill first, write the reason afterwards
                 claim["deadline"], claim["reason"] = math.inf, f"ended after max_seconds = {claim['max_seconds']}"
-                say_end(claim, "failed", claim["reason"])
+                say_run(claim, "failed", claim["reason"])
                 answers[claim["claimed"]] = claim["answer"] = {"status": "failed", "reason": claim["reason"]}
                 ended.append(claim)
         wake = min([end] + [c["deadline"] for c in runs.values() if c])
+        if live():  # only to move the status line
+            wake = min(wake, now + 0.1)
         try:
             p, line = lines.get(timeout=max(0, wake - now))
         except queue.Empty:
@@ -125,25 +200,24 @@ def listen(runs, answers, ended, seconds, lines):
             said = json.loads(line)
             if "claimed" in said:  # the clock for max_seconds starts here
                 runs[p] = said | {"deadline": time.monotonic() + said["max_seconds"], "started": time.monotonic()}
-                say(f"{said['claimed']} started, run {said['run']}")
+                say_run(runs[p], "started", f"run {said['run']}")
             elif "answer" not in runs[p]:  # a run killed after max_seconds may still have answered
                 answers[said.pop("table")] = runs[p]["answer"] = said
                 if said.get("reason") == "connection to the target lost":  # the run could not record it itself
                     ended.append(runs[p] | {"reason": said["reason"]})
                 if said["status"] == "ok":
-                    say_end(runs[p], "ok", f"{said['inserted']} inserted, {said['updated']} updated, "
-                                           f"{said['deleted']} deleted")
+                    say_run(runs[p], "ok", f"+{said['inserted']} ~{said['updated']} -{said['deleted']}")
                 else:
-                    say_end(runs[p], "failed", said["reason"])
+                    say_run(runs[p], "failed", said["reason"])
                 runs[p]["deadline"] = math.inf
             continue
         p.wait()  # end of its output: the process has ended
         claim = runs.pop(p)
         if claim and "answer" not in claim:  # it died after its claim, e.g. kill -9, or end_lost killed it
             answers[claim["claimed"]] = {"status": "failed", "reason": claim.get("reason", "worker lost")}
-            say_end(claim, "failed", answers[claim["claimed"]]["reason"])
+            say_run(claim, "failed", answers[claim["claimed"]]["reason"])
         if claim is None and p.returncode != 0:
-            say(f"a run process ended with exit code {p.returncode} before it claimed anything")
+            say(f"a run process ended with exit code {p.returncode} before it claimed anything", "✘")
         return claim is None and p.returncode != 0
     return False
 

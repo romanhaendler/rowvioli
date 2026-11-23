@@ -24,7 +24,7 @@ Naming something means "this, now". `run` without a name means "whatever is due"
 When `run` without a name loads nothing because tables wait out the pause after a failure, it says so on stderr, so that `{"tables": {}}` does not look broken. The answer on stdout and the exit code stay as they are:
 
 ```
-2026-11-15 14:44:49 1 table waits out its pause after a failure, the first until 14:45:49; `rowvioli run <source>` loads them now
+2026-11-15 14:44:49   1 table waits out its pause after a failure, the first until 14:45:49; `rowvioli run <source>` loads them now
 ```
 
 Every command that needs the target finds it in `ROWVIOLI_TARGET_URL`. A password with `@`, `/` or `:` must be percent-encoded there (`@` is `%40`), because this address is written by hand, unlike a source's connection, which `apply` encodes. A worker finds its private key through `ROWVIOLI_KEY_FILE`, and in `worker.key` in the current directory without it. `run`, `work` and `status` check what they need at start and name what is missing, for example `ROWVIOLI_TARGET_URL is not set`. A target address with a second `@` after the scheme fails before any connection (`ROWVIOLI_TARGET_URL has more than one @ after the scheme: a password with @, / or : must be percent-encoded`) and shows no part of the address. `run` and `work` also stop at the start when the key file cannot be opened, before any table is attempted. A missing one is named with its path and the way out; a directory or an unreadable file gives the system's reason:
