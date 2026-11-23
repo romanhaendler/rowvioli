@@ -21,7 +21,10 @@ NO_SCHEMA = "the target has no schema _rowvioli: run `rowvioli init` first"
 
 
 def check_address(url):
-    """Fails before connecting for a second @ in the address, which the driver would read as part of the host."""
+    """Fails before connecting for an address that is no postgres URL, or has a second @, which the driver would
+    read as part of the host. Never prints the address: it may hold a password."""
+    if not url.startswith(("postgresql://", "postgres://")):
+        raise SystemExit("ROWVIOLI_TARGET_URL must start with postgresql:// or postgres://")
     if url.split("://", 1)[-1].split("?", 1)[0].count("@") > 1:
         raise SystemExit("ROWVIOLI_TARGET_URL has more than one @ after the scheme: a password with @, / or : "
                          "must be percent-encoded")

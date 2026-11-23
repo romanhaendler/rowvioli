@@ -102,6 +102,9 @@ def check(conn, t, staged, mirror, log_columns):
             + (" with the mirror" if mirror else ""))
     if mirror:
         primary_key = [k for (k,) in sql(conn, PRIMARY_KEY, [t["mirror"]])]
+        if primary_key and not key:
+            raise Exception(f"the definition has no key any more, the mirror's primary key is {primary_key}: "
+                            "put the key back, or give the table another target_table")
         if primary_key != key:
             raise Exception(f"the key {key} differs from the mirror's primary key {primary_key}"
                             + (f"; the change log {t['name']}__log exists: {drop}" if log_columns else ""))

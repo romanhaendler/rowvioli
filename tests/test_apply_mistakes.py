@@ -155,6 +155,14 @@ def test_a_target_address_with_a_second_at_fails_before_connecting_and_shows_no_
         assert "127.0.0.1" not in r.stderr and "u:p" not in r.stderr, r.stderr
 
 
+@pytest.mark.parametrize("url", ["localhost", "mysql://u:secret@127.0.0.1/db", "u:secret@127.0.0.1/db"])
+def test_a_target_address_without_the_postgres_scheme_says_so_and_shows_no_part_of_it(rv, url):
+    for command in ("init", "status", "run"):
+        r = rv.run(command, env={"ROWVIOLI_TARGET_URL": url}, timeout=10)
+        assert r.returncode != 0 and "postgresql:// or postgres://" in r.stderr, r.stderr
+        assert "keepalives" not in r.stderr and "secret" not in r.stderr and "127.0.0.1" not in r.stderr, r.stderr
+
+
 def test_a_target_address_with_several_hosts_and_a_query_string_is_no_slip(rv):
     url = "postgresql://postgres:x@127.0.0.1:1,127.0.0.1:2/db?connect_timeout=1&application_name=a"
     r = rv.run("status", env={"ROWVIOLI_TARGET_URL": url}, timeout=20)
