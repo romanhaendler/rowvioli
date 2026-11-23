@@ -296,13 +296,16 @@ def test_a_run_whose_target_name_apply_gave_to_another_table_publishes_nothing(e
                                             "run loaded raw_erp.notes; nothing was published"}}
 
 
-def test_a_run_whose_target_name_changes_while_it_loads_publishes_nothing_and_the_next_run_loads_the_new_name(erp):
+@pytest.mark.parametrize("setting, now", [('target_table = "clients"', "raw_erp.clients"),
+                                          ('target_schema = "crm"', "crm.notes")])
+def test_a_run_whose_target_name_changes_while_it_loads_publishes_nothing_and_the_next_run_loads_the_new_name(
+        erp, setting, now):
     before = rows(erp.source, "select * from notes")
-    answer = applied_while_notes_loads(erp, '"public.notes" = { target_table = "clients" }\n')
-    assert answer == {"raw_erp.notes": {"status": "failed", "reason": "the target name changed to raw_erp.clients "
+    answer = applied_while_notes_loads(erp, f'"public.notes" = {{ {setting} }}\n')
+    assert answer == {"raw_erp.notes": {"status": "failed", "reason": f"the target name changed to {now} "
                                         "while this run loaded raw_erp.notes; nothing was published, the following "
-                                        "run loads raw_erp.clients"},
-                      "raw_erp.clients": {"status": "ok", "inserted": 4, "updated": 0, "deleted": 0}}
+                                        f"run loads {now}"},
+                      now: {"status": "ok", "inserted": 4, "updated": 0, "deleted": 0}}
     assert rows(erp.target, "select * from raw_erp.notes") == before
     assert erp.target("select status, reason from _rowvioli.status") == [("ok", None)]
 
