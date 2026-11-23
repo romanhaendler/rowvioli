@@ -401,6 +401,17 @@ def test_a_broken_stderr_pipe_does_not_change_the_exit_code(tmp_path):
     assert p.returncode == 0, p.returncode
 
 
+def test_a_message_the_program_stops_with_keeps_exit_code_1_on_a_broken_stderr_pipe(tmp_path):
+    env = {k: v for k, v in os.environ.items() if k != "ROWVIOLI_TARGET_URL"}
+    r, w = os.pipe()
+    os.close(r)  # the reader is gone
+    p = subprocess.run([ROWVIOLI, "status"], cwd=tmp_path, env=env, stderr=w, stdout=subprocess.PIPE, timeout=30)
+    os.close(w)
+    assert p.returncode == 1, p.returncode
+    p = subprocess.run([ROWVIOLI, "status"], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30)
+    assert (p.returncode, p.stderr) == (1, "ROWVIOLI_TARGET_URL is not set\n")
+
+
 def test_a_write_that_fails_once_loses_only_its_own_line():
     r, w = os.pipe()
     os.set_blocking(w, False)  # the file description is shared, so the worker's stderr is non-blocking too

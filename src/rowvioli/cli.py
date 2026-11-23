@@ -42,7 +42,18 @@ def main():
     try:
         command(a)
     except adbc.Error as e:  # the target refused or is unreachable: its message in one line, not a traceback
-        raise SystemExit(work.plain(load.reason_line(load.target_secrets(), e, "asking the target")))
+        stop(work.plain(load.reason_line(load.target_secrets(), e, "asking the target")))
+    except SystemExit as e:
+        if not isinstance(e.code, str):
+            raise
+        stop(e.code)
+
+
+def stop(message):
+    """Ends with the message on stderr and exit code 1, as SystemExit(message) does, but written by out(): Python's own
+    write stays in stderr's buffer, where a broken pipe fails it again at shutdown and makes the exit code 120."""
+    work.out(message + "\n")
+    raise SystemExit(1)
 
 
 def command(a):
