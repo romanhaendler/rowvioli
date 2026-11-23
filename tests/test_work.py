@@ -423,3 +423,23 @@ def test_say_writes_a_reason_with_control_characters_as_question_marks(capsys):
     assert err.endswith(" failed: bad ?[31mvalue???forged\n") and err.count("\n") == 1 and "\033" not in err
     work.say("one\u2028two\u2029three")  # str.splitlines() splits there
     assert capsys.readouterr().err.endswith(" one?two?three\n")
+
+
+def test_plain_replaces_exactly_the_c0_del_and_c1_characters_and_the_two_line_separators():
+    for code in (0x00, 0x1f, 0x7f, 0x9f, 0x2028, 0x2029):
+        assert work.plain(chr(code)) == "?", hex(code)
+    for code in (0x20, 0x7e, 0xa0):
+        assert work.plain(chr(code)) == chr(code), hex(code)
+
+
+def test_the_marks_are_green_red_and_yellow(monkeypatch, capsys):
+    monkeypatch.setattr(work, "colour", lambda: True)
+    for mark, code in (("✔", 32), ("✘", 31), ("⚠", 33)):
+        work.say("x", mark)
+        assert capsys.readouterr().err.endswith(f" \033[{code}m{mark} x\033[0m\n")
+
+
+def test_the_target_table_of_a_run_line_is_padded_to_28_characters(monkeypatch, capsys):
+    monkeypatch.setattr(work, "colour", lambda: False)
+    work.say_run({"claimed": "raw_erp.t", "started": time.monotonic()}, "started", "run 1")
+    assert f"▶ {'raw_erp.t':<28} started " in capsys.readouterr().err
