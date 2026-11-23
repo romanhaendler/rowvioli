@@ -16,6 +16,10 @@ Single-context: `GLOSSARY.md` at the root, decisions in `docs/decisions.md`. See
 
 Before a release: the built wheel in hostile set-ups and in the hands of personas. See `docs/agents/shakedown/README.md`.
 
+## Benchmarks
+
+The benchmarks in `bench/` are large and slow (10⁶ rows, minutes per run). They are not part of the test suite or of CI: run one only when the owner asks for it. A test that grows that large belongs in `bench/`, not in `tests/`.
+
 ## Choosing the model
 
 Before implementing anything, decide which model the work needs, and take the smallest that fits.

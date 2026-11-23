@@ -3,6 +3,7 @@ import json
 import math
 import os
 import queue
+import re
 import signal
 import socket
 import subprocess
@@ -33,9 +34,45 @@ MASCOT = """\
 '----'       |   |         |   |         |   |       '----'"""
 
 
-def say(text):
-    """One line on stderr: local date and time to the second, a space, the text. Nothing but scrubbed text."""
-    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {text}", file=sys.stderr, flush=True)
+COLOURS = {"✔": "32", "✘": "31", "⚠": "33"}
+
+
+def colour():
+    """Whether the lines are coloured: wherever stderr goes, a pipe or a file too, unless NO_COLOR is set,
+    TERM is dumb, or stderr is the systemd journal."""
+    # shortcut: the legacy Windows console prints escape codes as text (NO_COLOR=1 helps), upgrade if someone asks
+    if os.environ.get("NO_COLOR") or os.environ.get("TERM") == "dumb":
+        return False
+    try:  # JOURNAL_STREAM is inherited by children, so only stderr's own device and inode mean the journal
+        s = os.fstat(sys.stderr.fileno())
+    except (AttributeError, OSError, ValueError):
+        return False
+    return os.environ.get("JOURNAL_STREAM") != f"{s.st_dev}:{s.st_ino}"
+
+
+def out(text):
+    """Writes to stderr. Output never ends the worker: without a stderr, or with a closed one, the text is lost.
+    A mark stderr cannot encode comes out as \\u2714: Python writes stderr with backslashreplace."""
+    try:
+        sys.stderr.write(text)
+        sys.stderr.flush()
+    except (AttributeError, OSError, ValueError):
+        sys.stderr = None  # else Python fails again flushing the unflushed data at shutdown: exit code 120
+
+
+def plain(text):
+    """The text with every control character (C0, DEL, C1) as `?`: a table name or a reason quoting source data
+    cannot clear the screen, set the title or forge a line."""
+    return re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]", "?", text)  # 2028, 2029: splitlines() splits there
+
+
+def say(text, mark=""):
+    """One line on stderr: local date and time to the second, a mark or a space, the text. Nothing but scrubbed
+    text. The same line everywhere; colour() adds colour."""
+    when, body = time.strftime("%Y-%m-%d %H:%M:%S"), f"{mark or ' '} {plain(text)}"
+    if colour():
+        when, body = f"\033[2m{when}\033[0m", f"\033[{COLOURS[mark]}m{body}\033[0m" if mark in COLOURS else body
+    out(f"{when} {body}\n")
 
 
 def loop(slots, source="", table="", once=False):
@@ -56,8 +93,8 @@ def loop(slots, source="", table="", once=False):
     conn = target.connect()
     stopped = False
     if not once:
-        if sys.stderr.isatty():
-            print(MASCOT, file=sys.stderr, flush=True)
+        if sys.stderr and sys.stderr.isatty():
+            out(MASCOT + "\n")
         say(f"worker {worker} started with {slots} slots on {sql(conn, 'SELECT current_database()')[0][0]}")
     while True:
         try:
@@ -72,7 +109,7 @@ def loop(slots, source="", table="", once=False):
                 raise
             if conn:
                 say("the target is unreachable, connecting again every two seconds: "
-                    + load.reason_line(load.target_secrets(), e, "asking the target"))
+                    + load.reason_line(load.target_secrets(), e, "asking the target"), "⚠")
             conn, claimable = None, 0
         if stopping and not stopped:
             stopped = True
@@ -100,8 +137,10 @@ def pump(p, lines):
         lines.put((p, ""))  # without the end marker the run would hold its slot for good
 
 
-def say_end(claim, outcome, text):
-    say(f"{claim['claimed']} {outcome} after {time.monotonic() - claim['started']:.1f}s: {text}")
+def say_run(claim, outcome, text):
+    """A run's line: its target table, `started`, `ok` or `failed`, the seconds since its claim, the text."""
+    secs = "" if outcome == "started" else f"{time.monotonic() - claim['started']:.1f}s"
+    say(f"{claim['claimed']:<28} {outcome:<7} {secs:>8}  {text}", {"started": "▶", "ok": "✔"}.get(outcome, "✘"))
 
 
 def listen(runs, answers, ended, seconds, lines):
@@ -113,7 +152,7 @@ def listen(runs, answers, ended, seconds, lines):
             if claim and claim["deadline"] <= now:
                 p.kill()  # docs/target.md "Order when finishing": kill first, write the reason afterwards
                 claim["deadline"], claim["reason"] = math.inf, f"ended after max_seconds = {claim['max_seconds']}"
-                say_end(claim, "failed", claim["reason"])
+                say_run(claim, "failed", claim["reason"])
                 answers[claim["claimed"]] = claim["answer"] = {"status": "failed", "reason": claim["reason"]}
                 ended.append(claim)
         wake = min([end] + [c["deadline"] for c in runs.values() if c])
@@ -125,25 +164,24 @@ def listen(runs, answers, ended, seconds, lines):
             said = json.loads(line)
             if "claimed" in said:  # the clock for max_seconds starts here
                 runs[p] = said | {"deadline": time.monotonic() + said["max_seconds"], "started": time.monotonic()}
-                say(f"{said['claimed']} started, run {said['run']}")
+                say_run(runs[p], "started", f"run {said['run']}")
             elif "answer" not in runs[p]:  # a run killed after max_seconds may still have answered
                 answers[said.pop("table")] = runs[p]["answer"] = said
                 if said.get("reason") == "connection to the target lost":  # the run could not record it itself
                     ended.append(runs[p] | {"reason": said["reason"]})
                 if said["status"] == "ok":
-                    say_end(runs[p], "ok", f"{said['inserted']} inserted, {said['updated']} updated, "
-                                           f"{said['deleted']} deleted")
+                    say_run(runs[p], "ok", f"+{said['inserted']} ~{said['updated']} -{said['deleted']}")
                 else:
-                    say_end(runs[p], "failed", said["reason"])
+                    say_run(runs[p], "failed", said["reason"])
                 runs[p]["deadline"] = math.inf
             continue
         p.wait()  # end of its output: the process has ended
         claim = runs.pop(p)
         if claim and "answer" not in claim:  # it died after its claim, e.g. kill -9, or end_lost killed it
             answers[claim["claimed"]] = {"status": "failed", "reason": claim.get("reason", "worker lost")}
-            say_end(claim, "failed", answers[claim["claimed"]]["reason"])
+            say_run(claim, "failed", answers[claim["claimed"]]["reason"])
         if claim is None and p.returncode != 0:
-            say(f"a run process ended with exit code {p.returncode} before it claimed anything")
+            say(f"a run process ended with exit code {p.returncode} before it claimed anything", "✘")
         return claim is None and p.returncode != 0
     return False
 

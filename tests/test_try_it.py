@@ -28,7 +28,7 @@ def test_the_try_it_block_mirrors_and_shows_the_change_and_works_a_second_time(r
         r = subprocess.run(["bash", "-e", "-c", "\n".join(lines)], cwd=tmp_path, capture_output=True, text=True,
                            env=env, timeout=120)
         assert r.returncode == 0, r.stderr
-        assert "3 inserted, 0 updated" in r.stderr and "1 inserted, 1 updated" in r.stderr
+        assert "+3 ~0 -0" in r.stderr and "+1 ~1 -0" in r.stderr
     assert rv.target("select customer_no, city from raw_try.customers order by 1") == [
         ("1", "Cologne"), ("2", "Essen"), ("3", "Mainz"), ("4", "Essen")]
     assert rv.target("select count(*) from raw_try.customers__history where customer_no = '1'") == [(2,)]

@@ -515,6 +515,8 @@ On 2026-11-12 the owner asked to see what a worker does (`.scratch/visibility/sp
 
 ## 37. A worker says what it does, and nothing keeps it
 
+> **Changed by decision 52.** Every line carries a mark (or a space), is coloured unless that is switched off, wherever it goes, and a run's line has columns.
+
 **Decision.** `work` writes one line per event to stderr: start, a run's start and end, a failure, an unreachable target, stopping. `run` writes the start and end lines of its runs, not the worker's start line. Each begins with local date and time, and there is no setting for them. The lines are not stored. `rowvioli status` prints the status view as a table; the target stays the truth. At a terminal `work` first shows its mascot once; when stderr is not a terminal there are only the lines.
 
 **Why.** The target already holds everything (`status`, `runs`), but looking needed `psql`, and a worker that waits looked the same as one that hangs. The loop already hears each run's claim and answer, so the lines cost nothing new, and the log system the operator has (journald, Docker) is the right place for them. A second record would have to agree with `runs`.
@@ -725,6 +727,24 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 **Rejected.**
 - *Failing with a clearer reason.* The table would still never load.
 - *An option per table.* A rule to carry for one byte.
+
+## Ninth round: the lines
+
+On 2026-11-23 the owner asked for the output to be coloured by default and visibly better in a container too.
+
+## 52. The same line everywhere, coloured
+
+**Decision.** An event line has one form wherever stderr goes, a terminal, a pipe, a file, a container log or the journal: local date and time to the second, a mark (`▶` started, `✔` ok, `✘` failed, `⚠` the target is unreachable, a space otherwise), then the text. A run's line has columns: the target table padded to 28 characters, `started`, `ok` or `failed`, the seconds since its claim, and the counts as `+inserted ~updated -deleted` or the reason. The lines are coloured by default, in a pipe and a file too: the time dim, a `✔` line green, a `✘` line red, a `⚠` line yellow. No colour when `NO_COLOR` is set and not empty, when `TERM` is `dumb`, or when stderr is the systemd journal, which `JOURNAL_STREAM` says by naming the device and inode of stderr itself. Control characters in a table name or a reason are written as `?`. Output never ends a worker: without a stderr, with a closed one, or with one that cannot encode the marks, it loads on.
+
+**Why.** Two forms of each line, a marked one for a terminal and a plain one for a log, were two texts to keep in step, and the container, where workers run, got the plainer one. A mark and columns read at a glance in `docker logs` as at a terminal; the words `started`, `ok` and `failed` stay in the line for whoever greps or alerts on them. `docker logs`, `kubectl logs` and a terminal show the colour, and `NO_COLOR` is the convention for turning it off. The journal is the exception because escape codes are stored there: `journalctl` strips them in its usual view, but `journalctl -o json` gives such a message as an array of bytes, and `-o verbose` as `[blob data]`, so a log shipper reading the journal gets numbers. `JOURNAL_STREAM` alone is inherited by every child, whatever its stderr is, so only the comparison with stderr's own device and inode tells the journal (systemd.exec(5)).
+
+**Price.** The line format changed: whoever reads the lines by machine (`ok after 0.4s: 0 inserted, 3 updated, 10 deleted`) has to adapt. Escape codes reach files and log collectors that do not render them, unless `NO_COLOR=1`. The legacy Windows console prints the escape codes as text; `NO_COLOR=1` is the way out. A stderr that cannot encode the marks shows them as `\u2714`.
+
+**Rejected.**
+- *Two forms, marked and coloured at a terminal, plain in a log* (the first build of this round). Two texts per line, and the container kept the plain one.
+- *Colour only with `FORCE_COLOR`.* An opt-in that nearly nobody sets; the default is what people see, and `NO_COLOR` is there for those who need none.
+- *A dashboard with a library (`rich`, `curses`).* A dependency and a second interface for what one line says; `rowvioli status` is the full view.
+- *A status line that moves under the lines at a terminal* (built in this round and removed before the release). It shows only at a terminal in the foreground, where few workers run. It needed the terminal's width, a foreground check, a wipe on every way out and a writer thread so that a terminal that stops reading does not freeze the worker. `rowvioli status` shows what runs.
 
 ## Corrections after the prototype
 
