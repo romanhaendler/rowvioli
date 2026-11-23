@@ -653,6 +653,8 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 
 ## 46. A changed target name makes a table new again
 
+> **Changed by decision 53.** A table that is loading under the old name no longer finishes into the old mirror: its run fails and publishes nothing.
+
 **Decision.** `apply` resets `attempted_at`, `attempts`, `reason` and `loaded_at` of a table whose target schema or table changes. The table is `new` again: status shows no age and no old reason, it is due at the next run, and a first failure pauses one minute. `requested_at` stays. These are the only facts a worker wrote that `apply` touches. A table that is loading under the old name finishes into the old mirror, sets `loaded_at` and `attempts`, but not `attempted_at`: it stays new, and the next run loads the new name.
 
 **Why.** Under the new name no mirror exists yet, and the table kept its age, its attempts and its reason: a table last loaded under the old name sat out its `max_age` while `run` printed `{"tables": {}}`, and status described a mirror that does not exist.
@@ -745,6 +747,21 @@ On 2026-11-23 the owner asked for the output to be coloured by default and visib
 - *Colour only with `FORCE_COLOR`.* An opt-in that nearly nobody sets; the default is what people see, and `NO_COLOR` is there for those who need none.
 - *A dashboard with a library (`rich`, `curses`).* A dependency and a second interface for what one line says; `rowvioli status` is the full view.
 - *A status line that moves under the lines at a terminal* (built in this round and removed before the release). It shows only at a terminal in the foreground, where few workers run. It needed the terminal's width, a foreground check, a wipe on every way out and a writer thread so that a terminal that stops reading does not freeze the worker. `rowvioli status` shows what runs.
+
+## Tenth round: after the shakedown of 0.4.0
+
+## 53. A run publishes only under the target name its table has now
+
+**Decision.** The publishing transaction ends by setting `loaded_at` only where the table is still enabled and still has the run's target schema and table. If it is not, the run fails and nothing is published, with the reason `the target name changed to raw_erp.clients while this run loaded raw_erp.customers; nothing was published, the following run loads raw_erp.clients`, or `the table left the definition while this run loaded raw_erp.customers; nothing was published`. A renamed table is new (decision 46), so its next run starts at once and loads the new name. The check is the last statement before COMMIT, and its row lock makes an `apply` that comes in between wait until the COMMIT; an `apply` that came first is seen.
+
+**Why.** The table lock guards a table, and a run read its target name once, at its claim. An `apply` that gave the name to another table, by swapping two names or by replacing a table with another of the same name, made the other table new and due while the first was still loading, under a lock of its own: two runs on one target table, and the first published its rows into the other's mirror with status `ok`. Only the definition owns names (decision 39), so a run may publish only into a name its table still owns. A rename with no new owner fails the same way: publishing into a name nobody owns any more updates tables `apply` has just said are left behind, and the rule stays one sentence. Last in the transaction, so the run holds the row lock only for its last statements: `apply` never waits for a long publish.
+
+**Price.** A run that loses its name meanwhile reads its source for nothing, and its first run under the new name reads it again. The check comes after the mirror is written, so a run whose writes fail first on the other table's mirror (a mirror created meanwhile, a key that now collides) fails with that error instead of the reason above, and a run that lost its name may fail a check before publishing on the other table's mirror. Nothing is published in either case. A first run that loses its name may leave its schema created and empty.
+
+**Rejected.**
+- *Checking at the start of the publishing transaction with the row locked.* It would give the reason above in every case, but `apply` writes every table's row, so it would wait for every publish in progress.
+- *Letting a renamed table finish into the old mirror when nobody else took the name* (decision 46 before). A second rule, for a write nobody asked for.
+- *A table lock by name.* It would hold off the new owner's run, but not stop the old run from publishing afterwards.
 
 ## Corrections after the prototype
 

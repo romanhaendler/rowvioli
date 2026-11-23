@@ -1,6 +1,6 @@
 # 07: A run publishes into a target name that `apply` gave to another table meanwhile
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Model:** Opus
 
@@ -23,3 +23,7 @@ Path: table A loads into `raw.x`. An `apply` gives `raw.x` to table B (two table
 - [ ] The test from 1 is green; the mirror of B holds only B.
 - [ ] A rename with no new owner behaves as decision 46 decides after the change, and a test says which way.
 - [ ] `tests/test_apply.py`, `tests/test_run.py`, `tests/test_work.py`, `tests/test_crashes.py` green.
+
+## Comments
+
+Reachable and reproduced on 0.4.0: `apply` disables the old table (replaced) or renames it (swap), the new owner is new and due at once under its own lock, and the old run publishes after it with `ok`; `test_run.py` holds the old run at its source read with a lock in the source. The last statement of the publishing transaction now sets `loaded_at` only where the row is enabled and has the run's name, else the run fails and nothing is published; its row lock makes a later `apply` wait until COMMIT, and an earlier one is seen. A rename with no new owner fails the same way and its next run loads the new name at once (decision 53, which changes 46). Not done: a run whose writes fail first on the new owner's mirror gives that error instead of the reason.

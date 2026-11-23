@@ -4,7 +4,10 @@ import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+import psycopg
 import pytest
+
+from conftest import until
 
 SOURCE = """
 create table customers (customer_no int primary key, name text, city text);
@@ -253,6 +256,55 @@ def test_a_disabled_table_is_not_loaded_again_and_its_mirror_stays(erp):
     assert erp.target("select count(*) from _rowvioli.runs r join _rowvioli.tables t on t.id = r.table "
                       "where t.source_table = 'public.customers'") == [(1,)]
     assert rows(erp.target, "select * from raw_erp.customers") == rows(erp.source, "select * from customers")
+
+
+def applied_while_notes_loads(erp, tables):
+    """Loads raw_erp.notes, then holds its next run at reading the source while `tables` is applied and the
+    memos (same columns, other rows) are loaded. Returns that run's answer once the source lets it read on."""
+    erp.source("create table memos (txt text, n int)")
+    erp.source("insert into memos values ('m', 7), ('n', 8), ('o', 9)")
+    apply(erp, definition(erp, NOTES))
+    ok(erp)
+    erp.source("insert into notes values ('c', 3)")  # read by the held run, so that it would change the mirror
+    with psycopg.connect(erp.source_url) as holder:
+        holder.execute("lock table notes in access exclusive mode")
+        held = erp.start("run", "erp", "public.notes")
+        until(lambda: erp.source("select 1 from pg_locks where not granted and relation = 'notes'::regclass"))
+        apply(erp, definition(erp, tables))
+        if "public.memos" in tables:
+            ok(erp, "erp", "public.memos")
+        holder.rollback()
+    out, _ = held.communicate(timeout=30)
+    return json.loads(out)["tables"]
+
+
+@pytest.mark.parametrize("tables, notes_now", [
+    ('"public.memos" = { target_table = "notes" }\n', None),  # notes leaves the definition, memos takes its name
+    ('"public.notes" = { target_table = "memos" }\n"public.memos" = { target_table = "notes" }\n', "raw_erp.memos"),
+])
+def test_a_run_whose_target_name_apply_gave_to_another_table_publishes_nothing(erp, tables, notes_now):
+    answer = applied_while_notes_loads(erp, tables)
+    assert rows(erp.target, "select * from raw_erp.notes") == rows(erp.source, "select * from memos")
+    if notes_now:  # the next run of notes loads its new name
+        assert answer["raw_erp.notes"] == {"status": "failed", "reason": f"the target name changed to {notes_now} "
+                                           "while this run loaded raw_erp.notes; nothing was published, the following "
+                                           f"run loads {notes_now}"}
+        assert answer[notes_now]["status"] == "ok"
+        assert rows(erp.target, f"select * from {notes_now}") == rows(erp.source, "select * from notes")
+    else:
+        assert answer == {"raw_erp.notes": {"status": "failed", "reason": "the table left the definition while this "
+                                            "run loaded raw_erp.notes; nothing was published"}}
+
+
+def test_a_run_whose_target_name_changes_while_it_loads_publishes_nothing_and_the_next_run_loads_the_new_name(erp):
+    before = rows(erp.source, "select * from notes")
+    answer = applied_while_notes_loads(erp, '"public.notes" = { target_table = "clients" }\n')
+    assert answer == {"raw_erp.notes": {"status": "failed", "reason": "the target name changed to raw_erp.clients "
+                                        "while this run loaded raw_erp.notes; nothing was published, the following "
+                                        "run loads raw_erp.clients"},
+                      "raw_erp.clients": {"status": "ok", "inserted": 4, "updated": 0, "deleted": 0}}
+    assert rows(erp.target, "select * from raw_erp.notes") == before
+    assert erp.target("select status, reason from _rowvioli.status") == [("ok", None)]
 
 
 def test_a_source_with_reordered_columns_still_gives_a_correct_mirror_and_change_log(erp):

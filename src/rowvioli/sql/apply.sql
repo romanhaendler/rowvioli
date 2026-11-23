@@ -17,8 +17,8 @@ SELECT name, type, parallel, options, decode(connection, 'base64'), key_id, true
 UPDATE _rowvioli.sources SET enabled = false
  WHERE name NOT IN (SELECT x ->> 'name' FROM jsonb_array_elements($1::jsonb -> 'sources') x);
 
--- before the upsert, which overwrites the names it compares with. A table loading under the old name publishes into
--- the old mirror and sets loaded_at, but attempted_at stays null: it is new again and the next run loads the new name.
+-- before the upsert, which overwrites the names it compares with. A table loading under the old name publishes
+-- nothing: its run fails, since its row no longer gives it that name (decision 53), and the next run loads the new one.
 UPDATE _rowvioli.tables t SET attempted_at = NULL, attempts = 0, reason = NULL, loaded_at = NULL
   FROM jsonb_to_recordset($1::jsonb -> 'tables') AS x(source text, source_table text, target_schema text,
                                                      target_table text)
