@@ -47,3 +47,10 @@ starts from one reproduces it first.
 
 Five Sonnet agents and one Fable read (13 tool calls). Images pulled: none. Every container with the label
 `rowvioli-shakedown` was removed by its agent.
+
+## From the review of the fixes
+
+- A name given away and back to the same table by two applies during one run passes the check by name, and the run publishes under it. open
+- A table refused with "the table left the definition" and applied again shows the old reason until its next run. open
+- On Windows `out()` writes LF where the text layer would write CRLF. open
+- Ctrl+C during `say_waiting` (the end of `run` without names) is ignored. open

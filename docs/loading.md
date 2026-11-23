@@ -208,7 +208,7 @@ ALTER TABLE raw_erp.customers DROP COLUMN city;
 ALTER TABLE raw_erp.customers__log DROP COLUMN city;
 ```
 
-The next run is `ok`, and the log still replays to the mirror. The versions of rows that differed only in `city` now look alike in the history, and the values of `city` are gone from it. A table without a change log needs only the second statement.
+The next run is `ok`, and the log still replays to the mirror. The versions of rows that differed only in `city` now look alike in the history, and the values of `city` are gone from it. A table without a change log needs only the second statement. Not for a key column: dropping it drops the mirror's primary key, and a key column gone from the source is a changed key (above). A view of a consumer's own that reads `city` makes the `DROP` fail; drop that view first and create it again afterwards.
 
 **A column's type was tightened after the first load**, for example `columns = { amount = "decimal(10,2)" }` for a CSV column that arrived as text. The run fails and names the column, and the mirror stays as it is, since the program never converts a column:
 

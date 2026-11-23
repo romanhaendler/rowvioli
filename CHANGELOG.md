@@ -4,13 +4,13 @@
 
 Fixed:
 
-- A run whose target name `apply` changes while it loads, or whose table leaves the definition, fails and publishes nothing: `the target name changed to raw_erp.clients while this run loaded raw_erp.customers; nothing was published, the next run loads raw_erp.clients`. Before, it published into the old name, also when `apply` had given that name to another table, whose mirror then held the wrong rows with status `ok` (decision 53).
+- A run whose target name `apply` changes while it loads, or whose table leaves the definition, fails and publishes nothing: `the target name changed to raw_erp.clients while this run loaded raw_erp.customers; nothing was published, the next run loads raw_erp.clients`. Before, it published into the old name, also when `apply` had given that name to another table, whose mirror then held the wrong rows with status `ok` (decision 53). It holds once every worker runs this version: a worker of 0.4.0 still publishes under a name it lost.
 - A worker whose stderr fails once, on a full disk or a log stream that stalls, writes its lines again once the failure passes. Before, it stayed silent for good, and a later crash printed no traceback. A line that fails is lost (decision 52).
 
 Changed:
 
-- `rowvioli apply`, `apply --check` and `list` fail on a control character (C0, DEL, C1, U+2028, U+2029) in a source name, a source table, a key column, `target_schema` or `target_table`, and name the file, the setting and the name with the character as an escape such as `\x1b` (decision 39). A name already in a target keeps loading.
-- `rowvioli status` and the error messages of `rowvioli list` and of an unreachable or refusing target write a control character (escape, carriage return, DEL, C1) as `?`, as the lines of `work` do. A reason that quotes source data can no longer clear the terminal. What is stored and the JSON of `run` and `list` stay as they are.
+- `rowvioli apply`, `apply --check` and `list` fail on a control character (C0, DEL, C1, U+2028, U+2029) in a source name, a source table, a key column, `target_schema` or `target_table`, and name the file, the setting and the name with the character as an escape such as `\x1b` (decision 39). A name already in a target keeps loading until the definition is applied again, which `apply` refuses until the name is changed.
+- `rowvioli status` (every column), the lines of `rowvioli apply` and the error messages of `rowvioli list` and of an unreachable or refusing target write a control character (escape, carriage return, DEL, C1) as `?`, as the lines of `work` do. A reason that quotes source data can no longer clear the terminal. What is stored and the JSON of `run` and `list` stay as they are.
 - `rowvioli apply` accepts only ASCII digits in `max_age` and in `at`; an Arabic-Indic or full-width digit gets the usual message instead of the database's.
 - A target address that does not start with `postgresql://` or `postgres://` says so (without printing the address) instead of `invalid connection option`. A table that had a key and has none in the definition now fails with a reason that says so and names both ways out, instead of `the key [] differs from the mirror's primary key`.
 

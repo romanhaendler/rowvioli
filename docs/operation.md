@@ -41,20 +41,22 @@ To be set up once: the program with its connectors, for example `uv tool install
 
 ```ini
 # systemd service for a worker
+[Unit]
+StartLimitIntervalSec=0
+
 [Service]
 User=etl
 EnvironmentFile=/etc/rowvioli/env
 ExecStart=/home/etl/.local/bin/rowvioli work --slots 4
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=0
 # as long as max_seconds, so running tables can finish
 TimeoutStopSec=3600
 # SIGTERM to the worker only, so its run processes are not ended with it
 KillMode=mixed
 ```
 
-`ExecStart` needs the program's absolute path: `uv tool install` puts it into `~/.local/bin` of the user who installed it (`command -v rowvioli` shows where). `RestartSec` and the start limit are there because a worker started while the target is down exits with 1 at once (`Failed to connect: ...`, so a wrong address is seen at the first start); only a worker that has connected once retries every two seconds. Without them systemd restarts it five times within a second and then leaves the service failed, which a target that comes up a minute later does not undo.
+`ExecStart` needs the program's absolute path: `uv tool install` puts it into `~/.local/bin` of the user who installed it (`command -v rowvioli` shows where). `RestartSec` and `StartLimitIntervalSec=0`, which belongs under `[Unit]`, where systemd reads it, are there because a worker started while the target is down exits with 1 at once (`Failed to connect: ...`, so a wrong address is seen at the first start); only a worker that has connected once retries every two seconds. Without them systemd restarts it five times within a second and then leaves the service failed, which a target that comes up a minute later does not undo.
 
 - **A worker says what it does**, one line per event on stderr, the same line wherever stderr goes: local date and time, a mark (`▶` started, `✔` ok, `✘` failed, `⚠` the target is unreachable), then the text. A run's line has columns: the target table, `started`, `ok` or `failed`, the seconds since its claim, then the counts (`+inserted ~updated -deleted`) or the reason. `run` writes the start and end lines of its runs, not the worker's start line. A worker with nothing to do writes no line, and `rowvioli status` shows what is due when. Nothing is stored and nothing is configured: the lines are for a person at a terminal and for the log system you already have (journald, Docker), and what happened to a table stays in `_rowvioli.runs`. At a terminal the worker first shows its mascot.
 
@@ -146,7 +148,7 @@ The program creates no roles. Whoever can write the definition decides what is l
 
 On Windows the stop signal is Ctrl+Break instead of SIGTERM.
 
-Ctrl+C (SIGINT) is the opposite of SIGTERM, for `work` and for `run`: nothing waits. The program ends its run processes, writes one line, `stopped by Ctrl+C, 2 runs ended` (`1 run ended` for one), and exits with 130, without a traceback. It notices the signal within two seconds. Nothing is recorded: the tables of the ended runs close as `worker lost`, as after a hard kill, and are retried after the pause.
+Ctrl+C (SIGINT) is the opposite of SIGTERM, for `work` and for `run`: nothing waits. The run processes have a process group of their own, so at a terminal only the worker gets the signal. It ends its run processes, writes one line, `stopped by Ctrl+C, 2 runs ended` (`1 run ended` for one), and exits with 130, without a traceback. It notices the signal within two seconds, except while it connects again to an unreachable target: then once that attempt gives up. Nothing is recorded: the tables of the ended runs close as `worker lost`, as after a hard kill, and are retried after the pause. `run <source>` interrupted while it requests its tables, before its loop starts, still ends with Python's traceback, or with `canceling statement due to user request` and exit code 1. Ctrl+Z stops the worker alone: its runs go on, and it hears of them after `fg`.
 
 From 0.1.0, update every worker before applying new tables: a mirror that a new worker creates has `numeric(p,s)` where the source has it, and a worker of 0.1.0 fails on it with `has changed its type from numeric(10,2) to numeric`. Going back to 0.1.0 needs `ALTER TABLE ... ALTER <column> TYPE numeric` on such columns, in the mirror and its change log.
 
