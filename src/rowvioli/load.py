@@ -118,7 +118,15 @@ def load(conn, t):
     if mirror:  # under another key the mirror is replaced as a whole, and only its shrinkage counts
         check_delete_share(conn, t, rows_read, None if plan["key"] else counts)
     t["step"] = "publishing"
-    return publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, plan)
+    try:
+        return publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, plan)
+    except Exception as e:  # lock() bounds every wait after it (decision 54)
+        if not (t.get("locked") and getattr(e, "sqlstate", None) == "55P03"):  # lock_not_available
+            raise
+        raise Exception(f"{t['name']}, its change log and its history view were held by this run when an object it "
+                        "needed was in use (a table with a foreign key to it, or its row in _rowvioli.tables while "
+                        "apply ran), so the run did not wait for it: nothing was published, the next run tries "
+                        "again") from None
 
 
 def acting(stated, had, delivered, logged):
@@ -653,7 +661,10 @@ def publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, 
 def lock(conn, t):
     """Decision 54: opens the publishing transaction holding mirror, change log and history view, taken in one
     statement that does not wait and tried again for up to ten seconds. A run that waited for one while holding
-    another could deadlock with a consumer who reads them in another order (story 43)."""
+    another could deadlock with a consumer who reads them in another order (story 43). Every later wait for a lock in
+    the transaction ends after 50 ms, far below the second after which Postgres looks for a deadlock: the run never
+    waits while it holds what blocks the readers of the mirror (a consumer's table with a foreign key to it, the
+    table's row while an apply holds it)."""
     objects = ", ".join(n for n in (t["mirror"], t["log_table"], t["history"])
                         if sql(conn, "SELECT to_regclass($1) IS NOT NULL", [n])[0][0])
     end = time.monotonic() + 10
@@ -661,6 +672,8 @@ def lock(conn, t):
         sql(conn, "BEGIN")
         try:
             sql(conn, f"LOCK TABLE {objects} IN ACCESS EXCLUSIVE MODE NOWAIT")
+            sql(conn, "SET LOCAL lock_timeout = '50ms'")
+            t["locked"] = True
             return
         except Exception as e:
             sql(conn, "ROLLBACK")
@@ -859,8 +872,7 @@ def alter(conn, t, why, statement, table, columns=(), constraint=None, drop=True
     catalogue names it then. Every object is named with its schema, also one on the search path: the catalogue names
     them under an empty search path, while the change runs under the run's own, which a consumer's code it calls (a
     check constraint's function, an event trigger) may need."""
-    sql(conn, "SAVEPOINT alter")
-    sql(conn, "SET LOCAL lock_timeout = '50ms'")  # far below the second after which Postgres looks for a deadlock
+    sql(conn, "SAVEPOINT alter")  # under the lock_timeout of lock()
     try:
         sql(conn, statement)
         done = True
@@ -883,7 +895,6 @@ def alter(conn, t, why, statement, table, columns=(), constraint=None, drop=True
         elif named or not found:  # else only the history view, whose drop is stopped already with what is in its way
             detail = named or details["PG_DIAG_MESSAGE_DETAIL"].replace("\n", "; ")
             t.setdefault("blocked", []).append(f"{why}, but {detail}")
-    sql(conn, "SET LOCAL lock_timeout TO DEFAULT")
     return done
 
 
@@ -1036,12 +1047,11 @@ def record_columns(conn, t, delivered, mirror, log_columns, changes):
 
 
 def widen(conn, table, staged, existing):
-    """Decision 17: adds the source's columns the table lacks, under the lock publish took first (story 43); the
-    lock_timeout bounds a wait that lock leaves none for. Says whether it added one."""
+    """Decision 17: adds the source's columns the table lacks, under the lock publish took first (story 43). Says
+    whether it added one."""
     have = dict(existing)
     new = [(name, type) for name, type in staged if name not in have]
     for name, type in new:
-        sql(conn, "SET LOCAL lock_timeout = '10s'")
         try:
             sql(conn, f"ALTER TABLE {table} ADD COLUMN {quote(name)} {type}")
         except Exception as e:

@@ -584,3 +584,48 @@ def test_a_run_never_waits_for_a_lock_while_holding_one_and_gives_up_after_10s(e
     assert p.wait(timeout=30) == 0, p.stdout.read()
     assert columns(erp) == ["customer_no", "name"]
     log_replays(erp)
+
+
+IN_USE = ("raw_erp.customers, its change log and its history view were held by this run when an object it needed was "
+          "in use (a table with a foreign key to it, or its row in _rowvioli.tables while apply ran), so the run did not "
+          "wait for it: nothing was published, the next run tries again")
+
+
+def test_a_run_that_holds_the_mirror_waits_for_no_consumers_table_with_a_foreign_key_to_it(erp):  # ticket 15, B4
+    ok(erp)  # one rule for every wait after the lock, so readers of the mirror never wait long
+    erp.target("create schema reporting; create table reporting.orders (id int, customer_no int references "
+               "raw_erp.customers)")
+    erp.source("alter table customers drop column city; delete from customers where customer_no = 3")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    with psycopg.connect(erp.target_url) as consumer:  # the row the run deletes is checked against orders
+        consumer.execute("lock table reporting.orders in exclusive mode")
+        started = time.monotonic()
+        assert failed(erp).replace("***", "x") == IN_USE
+        assert time.monotonic() - started < 5
+    ok(erp)
+    log_replays(erp)
+
+
+def test_a_run_that_adds_a_column_does_not_wait_for_an_apply_while_it_holds_the_mirror(erp):  # ticket 15, S5
+    erp.source("create table pause (seconds float); insert into pause values (0);"
+               "create function slow(g int) returns int language plpgsql as $$ begin perform pg_sleep(seconds) "
+               "from pause; return g; end $$;"
+               "create view slow_customers as select slow(customer_no) as customer_no, name from customers")
+    apply(erp, definition(erp, '"public.slow_customers" = { key = ["customer_no"], target_table = "customers" }\n'))
+    ok(erp)
+    erp.source("create or replace view slow_customers as select slow(customer_no) as customer_no, name, city "
+               "from customers; update pause set seconds = 0.5")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    loading = erp.start("run")
+    until(lambda: erp.target("select status from _rowvioli.status") == [("loading",)])
+    with psycopg.connect(erp.target_url) as applying:  # the table's row, as an apply holds it until it commits
+        applying.execute("select from _rowvioli.tables for update")
+        # the run gave up and rolled back, and waits to store its reason, holding nothing (the rows take 1.5 s to read)
+        until(lambda: erp.target("select 1 from pg_stat_activity where query like 'UPDATE _rowvioli.tables SET reason%'"
+                                 " and wait_event_type = 'Lock'"), timeout=5)
+    assert loading.wait(timeout=30) == 1
+    assert erp.target("select reason from _rowvioli.runs where status = 'failed'")[0][0].replace("***", "x") == IN_USE
+    erp.source("update pause set seconds = 0")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    assert columns(erp) == ["customer_no", "name", "city"]
