@@ -19,10 +19,13 @@ def connector(type, where=""):
     if not found:
         installed = ", ".join(sorted({e.name for e in entry_points(group="rowvioli.connectors")}))
         raise SystemExit(f'connector "{type}" is not installed{where}; installed: {installed}')
+    entry = next(iter(found))
     try:
-        return next(iter(found)).load()
+        return entry.load()
     except (ImportError, OSError) as e:  # a shipped connector without its extra, or without the library it loads
-        raise SystemExit(f'connector "{type}" cannot be loaded{where}: {e}')
+        extra = isinstance(e, ModuleNotFoundError) and entry.value == f"rowvioli.connectors.{type}" and type != "postgres"
+        raise SystemExit(f'connector "{type}" cannot be loaded{where}: {e}'
+                         + (f'; pip install "rowvioli[{type}]" installs it' if extra else ""))
 
 
 def known_options(type, table, options, known=()):

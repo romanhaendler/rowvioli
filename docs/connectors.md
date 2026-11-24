@@ -62,7 +62,7 @@ The reasons are in decision 38. It is the project's rule, not legal advice. For 
 | Shipped | `pip install rowvioli[odbc]` (extras: `file`, `odbc`, `rest`) | `type = "odbc"` | The connectors in the table above. The core stays small, heavy dependencies come only on request. |
 | Separate package | `pip install rowvioli-weather` | `type = "weather"` | Everything else. The package registers through an entry point. |
 
-Installing connectors on the workers is the operator's task.
+Installing connectors on the workers is the operator's task. A shipped connector whose extra is missing fails the run, and `rowvioli list`, with the extra to install: `connector "file" cannot be loaded on worker etl-02:4711: No module named 'duckdb'; pip install "rowvioli[file]" installs it`.
 
 ## A custom connector, complete
 

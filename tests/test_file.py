@@ -620,3 +620,19 @@ def test_excel_and_json_go_through_every_change_of_shape_a_csv_goes_through(file
     assert files.target(f"select amount {text}, memo {text} from raw_files.t order by id {text}") == [
         ("10", "a"), ("20", "b"), (None, "c")]
     log_replays(files, "raw_files.t")
+
+
+def test_without_its_extra_the_file_connector_says_which_to_install(files):
+    """A package that stands for DuckDB's absence, as on a worker installed without `rowvioli[file]`."""
+    missing = files.dir / "missing" / "duckdb"
+    missing.mkdir(parents=True)
+    (missing / "__init__.py").write_text("raise ModuleNotFoundError(\"No module named 'duckdb'\", name='duckdb')\n")
+    env = {"PYTHONPATH": str(missing.parent)}
+    load(files, '"customers_csv.csv" = { sep = ";" }\n')
+    files.target("update _rowvioli.tables set requested_at = now()")
+    said = "No module named 'duckdb'; pip install \"rowvioli[file]\" installs it"
+    r = files.run("run", "files", env=env)
+    [reason] = [t["reason"] for t in json.loads(r.stdout)["tables"].values()]
+    assert reason.startswith('connector "file" cannot be loaded on worker ') and reason.endswith(said), reason
+    r = files.run("list", "files", env=env)
+    assert r.returncode == 1 and r.stderr == f'connector "file" cannot be loaded: {said}\n', r.stderr
