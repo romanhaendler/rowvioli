@@ -103,3 +103,32 @@ def test_a_table_without_a_key_proves_nothing_and_a_gone_column_stops_as_before(
     erp.source("alter table people rename column city to town")
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert failed(erp).startswith("column city is missing in the source")
+
+
+TYPES = ("select attrelid::regclass::text, format_type(atttypid, atttypmod) from pg_attribute where attname = 'points' "
+         "and attrelid in ('raw_erp.people'::regclass, 'raw_erp.people__log'::regclass) order by 1")
+
+
+@pytest.mark.parametrize("wide", [False, True])
+def test_A27_renamed_and_retyped_in_its_family_is_a_rename_and_the_type_goes_by_the_values(erp, wide):
+    people(erp)
+    erp.source("alter table people add column score integer; update people set score = id % 7")
+    again(erp)
+    erp.source("alter table people rename column score to points; alter table people alter points type bigint")
+    if wide:  # a row changed otherwise is left out of the proof, and its value needs the wider type
+        erp.source("update people set points = 5000000000, name = 'big' where id = 1")
+    again(erp)
+    assert columns(erp, PEOPLE)[-1] == "points" and "score" not in columns(erp, f"{PEOPLE}__log")
+    assert erp.target(TYPES) == [("raw_erp.people", "bigint" if wide else "integer"),
+                                 ("raw_erp.people__log", "bigint" if wide else "integer")]
+    assert erp.target(f"select _op, id, points from {PEOPLE}__log {THIS_RUN}") == ([("U", 1, 5000000000)] if wide else [])
+    log_replays(erp, PEOPLE)
+
+
+def test_A27_renamed_into_another_family_is_a_drop_and_an_add(erp):
+    people(erp)
+    erp.source("alter table people add column score integer; update people set score = id % 7")
+    again(erp)
+    erp.source("alter table people rename column score to points; alter table people alter points type text")
+    again(erp)
+    gone_and_come(erp, "score", "points")
