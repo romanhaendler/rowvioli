@@ -12,6 +12,7 @@ from test_checks import MIRROR, failed
 from test_columns import LAST, heard, listen
 from test_history import LOADED_AT, again
 from test_run import apply, definition, erp, ok, rows  # noqa: F401 (erp is a fixture)
+from test_secrets import lab
 
 
 def columns(rv, table="raw_erp.customers"):
@@ -150,11 +151,24 @@ def test_D6_a_view_on_the_history_view_stops_a_change_of_any_column_and_is_named
     erp.source("alter table customers drop column city")  # a column the view does not read
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
-    assert reason.startswith("the columns of raw_erp.customers change, but view names depends on view "
+    assert reason.startswith("the columns of raw_erp.customers change, but view public.names depends on view "
                              "raw_erp.customers__history: change or drop that"), reason
     assert columns(erp) == ["customer_no", "name", "city"]
     erp.target("drop view public.names")  # the way out
     again(erp)
+    log_replays(erp)
+
+
+def test_a_consumers_event_trigger_that_needs_the_search_path_sees_the_run_change_columns(erp):
+    ok(erp)  # a trigger on every change of a table's definition, whose function finds its table on the search path
+    erp.target("create table public.changes (tag text);"
+               "create function public.note() returns event_trigger language plpgsql as "
+               "$$ begin insert into changes values (tg_tag); end $$;"
+               "create event trigger note on ddl_command_end execute function public.note()")
+    erp.source("alter table customers drop column city")
+    again(erp)
+    assert columns(erp) == ["customer_no", "name"]
+    assert ("ALTER TABLE",) in erp.target("select tag from public.changes")
     log_replays(erp)
 
 
@@ -167,11 +181,12 @@ def test_a_stop_names_every_object_in_the_way_through_the_layers_so_one_round_of
     erp.source("alter table customers drop column city")
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
-    assert reason == ("the columns of raw_erp.customers change, but view v1 depends on view "
-                      "raw_erp.customers__history; view v2 depends on view v1; view v3 depends on view v2; and column "
-                      "city is gone from the source and would leave the mirror raw_erp.customers, but materialized "
-                      "view m depends on column city of table raw_erp.customers; view w depends on column city of "
-                      "table raw_erp.customers: change or drop that, and the ne***t run goes on"), reason
+    assert reason == ("the columns of raw_erp.customers change, but view public.v1 depends on view "
+                      "raw_erp.customers__history; view public.v2 depends on view public.v1; view public.v3 depends "
+                      "on view public.v2; and column city is gone from the source and would leave the mirror "
+                      "raw_erp.customers, but materialized view public.m depends on column city of table "
+                      "raw_erp.customers; view public.w depends on column city of table raw_erp.customers: change or "
+                      "drop that, and the ne***t run goes on"), reason
     assert columns(erp) == ["customer_no", "name", "city"]
     erp.target("drop view public.v3, public.v2, public.v1, public.w; drop materialized view public.m")  # one round
     again(erp)
@@ -412,6 +427,71 @@ def test_A19_a_new_source_column_named_like_a_retired_one_stops_until_a_person_r
     again(erp)
     assert columns(erp) == ["customer_no", "name", "city", f"city__{run}"]
     log_replays(erp)
+
+
+def test_a_source_column_named_like_a_retired_one_that_goes_and_comes_back_continues_its_log_column(erp):
+    erp.source("alter table customers add column city__2024 text")  # a column of the source, retired by no run
+    erp.source("update customers set city__2024 = 'old' where customer_no = 1")
+    ok(erp)
+    erp.source("alter table customers drop column city__2024")
+    again(erp)
+    erp.source("alter table customers add column city__2024 text")
+    erp.source("update customers set city__2024 = 'new' where customer_no = 2")
+    again(erp)
+    assert columns(erp) == ["customer_no", "name", "city", "city__2024"]
+    assert [c for c in columns(erp, "raw_erp.customers__log") if c.startswith("city")] == ["city", "city__2024"]
+    assert erp.target("select customer_no, city__2024 from raw_erp.customers__history where _valid_to is null "
+                      "order by 1") == [(1, None), (2, "new"), (3, None)]
+    log_replays(erp)
+
+
+def test_a_retired_column_whose_comment_a_person_removed_stops_with_the_text_to_put_back(erp):
+    ok(erp)
+    erp.source("alter table customers drop column city")
+    again(erp)
+    erp.source("alter table customers add column city integer")
+    again(erp)
+    [(run,)] = erp.target("select max(run) from _rowvioli.runs")
+    erp.target(f"comment on column raw_erp.customers__log.city__{run} is null")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    put_back = f"""COMMENT ON COLUMN "raw_erp"."customers__log"."city__{run}" IS '{{"retired": "city"}}'"""
+    reason = failed(erp)
+    assert reason == (f"the comment on column city__{run} of the change log raw_erp.customers__log, which says that it "
+                      f"keeps the old values of city, is missing or unreadable: put it back, {put_back}"), reason
+    erp.target(put_back)
+    again(erp)
+    erp.source(f"alter table customers add column city__{run} text")  # and the comment keeps the retired name taken
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp).startswith(f"column city__{run} of the source has the name under which the change log keeps "
+                                  "the old values of city")
+
+
+@pytest.mark.parametrize("catalog", [None, "data", "definition"])
+def test_a_connector_of_ones_own_that_says_it_has_no_catalog_leaves_a_column_it_stops_delivering_empty(erp, catalog):
+    env = {"ROWVIOLI_TEST_CATALOG": catalog} if catalog else {}
+    lab(erp, 'records = [{ n = 1, city = "Bonn" }, { n = 2, city = "Ulm" }]')
+    assert erp.run("run", env=env).returncode == 0
+    lab(erp, "records = [{ n = 1 }, { n = 2 }]")  # one run of the source leaves the column out
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert erp.run("run", env=env).returncode == 0
+    # without a word the connector has a catalog, as a database source: the column went; with "definition" it was
+    # taken out of the definition's columns, which the connector delivers
+    assert ("city" in columns(erp, "raw_lab.numbers")) == (catalog == "data")
+    assert erp.target("select n, city from raw_lab.numbers__history where _valid_to is null order by n") == [
+        (1, None), (2, None)]
+    if catalog != "data":
+        assert erp.target('select "by" from _rowvioli.columns__log where "column" = \'city\' and target_table = '
+                          "'numbers' order by _run desc limit 1") == [(catalog or "source",)]
+    log_replays(erp, "raw_lab.numbers")
+
+
+def test_a_connector_of_ones_own_that_says_another_catalog_fails_naming_it(erp):
+    lab(erp, 'records = [{ n = 1, city = "Bonn" }]')
+    assert erp.run("run", env={"ROWVIOLI_TEST_CATALOG": "none"}).returncode == 1
+    assert erp.target("select reason from _rowvioli.runs where status = 'failed'") == [(
+        'connector "testing" says catalog = \'none\', which is neither "data" nor "definition"; without the entry '
+        "the source has a catalog of its own",)]
+    assert erp.target("select to_regclass('raw_lab.numbers')") == [(None,)]
 
 
 def follow(rv, reason):

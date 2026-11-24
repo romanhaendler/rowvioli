@@ -91,18 +91,20 @@ def load(conn, t):
     delivered = staged = sql(conn, COLUMNS, ["pg_temp._stage"])
     mirror = sql(conn, COLUMNS, [t["mirror"]])  # empty before the first run
     log_columns = sql(conn, COLUMNS, [t["log_table"]])
-    # decision 54: a file has no column that goes; one its data lack this run is empty. One a change log lacks, or
-    # every one without a change log, is not known to be from the source, and check() stops it rather than empty a
-    # person's column. One the definition says is renamed to a column the data have is renamed. REST
-    # delivers every column under `columns`, even one no row has: the definition is its catalog, and a column taken
-    # out of it goes as one a database drops
-    stated = {old for new, old in (t["options"].get("renamed") or {}).items()
-              if new in dict(staged) and new not in dict(mirror)}
-    if t["type"] == "file" and (missing := [(n, type) for n, type in mirror if n not in dict(staged)
-                                            and n not in stated and n in dict(log_columns)]):
+    # decision 54: a connector whose catalog is its data (a file) has no column that goes; one its data lack this run
+    # is empty. One a change log lacks, or every one without a change log, is not known to be from the source, and
+    # check() stops it rather than empty a person's column. One the definition says is renamed to a column the data
+    # have is renamed. REST delivers every column under `columns`, even one no row has: the definition is its catalog,
+    # and a column taken out of it goes as one a database drops
+    had, logged = dict(mirror), dict(log_columns)
+    # decision 54: a rename the definition states acts once its old column is gone and its new one has come
+    renamed = {new: old for new, old in (t["options"].get("renamed") or {}).items() if old in had
+               and old not in dict(staged) and new in dict(staged) and new not in had and (not logged or old in logged)}
+    if t["catalog"] == "data" and (missing := [(n, type) for n, type in mirror if n not in dict(staged)
+                                            and n not in renamed.values() and n in logged]):
         sql(conn, "ALTER TABLE _stage " + ", ".join(f"ADD {quote(n)} {type}" for n, type in missing))
         staged = sql(conn, COLUMNS, ["pg_temp._stage"])
-    plan = check(conn, t, staged, mirror, log_columns)
+    plan = check(conn, t, staged, mirror, log_columns, renamed)
     staged, plan["widen"], plan["followed"] = fit(conn, t, staged, mirror, log_columns, plan["renamed"])
     t["step"] = "comparing with the mirror"
     # decision 54: the steps that write a row per row, named to the worker in case they outlast max_seconds
@@ -121,15 +123,17 @@ def load(conn, t):
     return publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, plan)
 
 
-def check(conn, t, staged, mirror, log_columns):
+def check(conn, t, staged, mirror, log_columns, renamed):
     """Step 4 (docs/loading.md "Checks before publishing") and the plan (decision 54): what the run does to the columns
     besides adding the new ones, which publish adds. Every stop a rule makes is here, before anything is written. The
     plan: `gone`, the mirror's columns that leave it and stay in the change log, `retired`, the change log's columns
     that keep their values under another name as one of another family comes, old name to new, and `key` when the
     mirror's primary key is not the definition's: the primary key it `was`, whether the change is `by` the definition
     or the primary key was changed by hand and is put back, and whether a change `log` exists. `renamed`, new name to
-    old, the columns that keep their values and history under another name, and `proven`, the note of each one the
-    data proved. `unpinned`, the retired ones whose pin under `columns` was taken out."""
+    old, the columns that keep their values and history under another name, the stated ones given and the proven ones
+    added, and `proven`, the note of each one the
+    data proved. `unpinned`, the retired ones whose pin under `columns` was taken out. `moved`, the names the retired
+    and renamed columns have after the run, old name to new."""
     types, logged, had = dict(staged), dict(log_columns), dict(mirror)
     key = t["key"] or []
     if key:  # first: the change log's own columns are never what a way out below renames
@@ -142,10 +146,7 @@ def check(conn, t, staged, mirror, log_columns):
                                 f"key cannot have it{freed}")
     way =("rename that column of the change log and drop its history view, which the next run creates again: "
            f"ALTER TABLE {t['log_table']} RENAME COLUMN {{}} TO <another name>; DROP VIEW {t['history']}")
-    # decision 54: a rename the definition states acts once its old column is gone and its new one has come
-    renamed = {new: old for new, old in (t["options"].get("renamed") or {}).items() if old in had
-               and old not in types and new in types and new not in had and (not log_columns or old in logged)}
-    for new, old in renamed.items():
+    for new, old in renamed.items():  # the renames the definition states that act in this run (load)
         stated = f"column {old} is renamed {new} in the table's definition"
         if family(had[old]) != family(types[new]):
             raise Exception(f"{stated}, but {had[old]} and {types[new]} are types of two families, so their values "
@@ -153,11 +154,11 @@ def check(conn, t, staged, mirror, log_columns):
         if new in logged:
             raise Exception(f"{stated}, but the change log has a column {new} already: " + way.format(quote(new)))
     # the key after the renames: Postgres renames a column inside the primary key by itself (decision 54)
-    moved = {old: new for new, old in renamed.items()}
-    primary_key = [moved.get(k, k) for (k,) in sql(conn, PRIMARY_KEY, [t["mirror"]])] if mirror else []
+    renamed_to = {old: new for new, old in renamed.items()}
+    primary_key = [renamed_to.get(k, k) for (k,) in sql(conn, PRIMARY_KEY, [t["mirror"]])] if mirror else []
     plan = {"renamed": renamed, "proven": {}, "gone": [], "retired": {}, "key": {}, "unpinned": []}
     # nothing is proven without a catalog, a key or a change log, nor joined by a key of another family, which stops below
-    if t["key"] and t["log"] and log_columns and t["type"] not in ("file", "rest") \
+    if t["key"] and t["log"] and log_columns and not t["catalog"] \
             and set(primary_key) == set(t["key"]) \
             and all(family(had[renamed.get(k, k)]) == family(types[k]) for k in t["key"]):
         proofs = proven(conn, t, mirror, staged, log_columns, renamed)
@@ -185,7 +186,7 @@ def check(conn, t, staged, mirror, log_columns):
             changed = f"column {name} has changed its type from {type} to {types[name]}"
             # where the definition names the columns it is the catalog. CSV, Excel and JSON deliver every other column
             # as text or jsonb, so another family there is a pin taken out; a type the file brings itself can flip
-            if t["type"] == "file" and name not in t["pinned"]:
+            if t["catalog"] == "data" and name not in t["pinned"]:
                 if name in t["own_types"]:
                     raise Exception(f"{changed}; a source without a catalog guesses its types, so pin it under "
                                     "columns in the table's definition; where its pin was taken out, a person drops it "
@@ -204,12 +205,14 @@ def check(conn, t, staged, mirror, log_columns):
                                 f"the mirror and the next run brings it again: "
                                 f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
             plan["gone"].append(name)
+    said = comments(conn, t)  # decision 54: a retired column is known by its comment, never by its name
+    retired = {n: was for n, text in said.items() if (was := retirement(text))}
     for name, type in staged:
         if name not in logged or name in had and name not in plan["gone"]:
             continue
-        if (retired := re.fullmatch(r"(.+)__\d+", name)) and retired[1] in logged:
+        if name in retired:
             raise Exception(f"column {name} of the source has the name under which the change log keeps the old "
-                            f"values of {retired[1]}: " + way.format(quote(name)))
+                            f"values of {retired[name]}: " + way.format(quote(name)))
         if family(logged[name]) == family(type):
             continue
         new = f"{name}__{t['run']}"
@@ -227,29 +230,28 @@ def check(conn, t, staged, mirror, log_columns):
                             f"ALTER {kind} {table} RENAME COLUMN {quote(n)} TO <a shorter name>" for n in long
                             for kind, table in ([("TABLE", t["mirror"])] if n in had else [])
                             + [("TABLE", t["log_table"]), ("VIEW", t["history"])]))
+    # a change log that exists is complete, and the program never ends one: a run that would leave it behind its mirror,
+    # or lay a new mirror's history over it, fails, before the key is looked at
+    if log_columns and not (key and t["log"] and mirror):
+        why = ("this run would not write to it (log = false or no key)" if not (key and t["log"])
+               else "its mirror is missing")
+        raise Exception(f"the definition has no key any more, the mirror's primary key is {primary_key}: put the key "
+                        "back, or give the table another target_table; to load it without a key, drop the change log "
+                        f"{t['name']}__log with its history view (DROP TABLE {t['log_table']} CASCADE) and the mirror"
+                        if primary_key and not key else
+                        f"the change log {t['name']}__log exists and {why}: drop it with its history view "
+                        f"(DROP TABLE {t['log_table']} CASCADE), or rename both" + (" with the mirror" if mirror else ""))
     if mirror:
-        if primary_key and not key and log_columns:  # the program does not end a change log
-            raise Exception(f"the definition has no key any more, the mirror's primary key is {primary_key}: "
-                            "put the key back, or give the table another target_table; to load it without a key, "
-                            f"drop the change log {t['name']}__log with its history view "
-                            f"(DROP TABLE {t['log_table']} CASCADE) and the mirror")
         if set(primary_key) != set(key):  # the same columns in another order are the same key (story 20)
             # decision 54: the key the last run recorded is the definition's, so a person changed the primary key
             recorded = sql(conn, 'SELECT "column", "key" FROM _rowvioli.columns WHERE id = $1', [t["id"]])
             # without a record (a program that kept none), the comment on _op names the key the change log was
             # written under, which is the definition's where a person changed the primary key
             keys = None if recorded or not log_columns else stretches(conn, t)
-            hand = {moved.get(c, c) for c, k in recorded if k is not None} == set(key) if recorded else \
-                {moved.get(c, c) for c in keys[-1]["key"]} == set(key) if keys else \
+            hand = {renamed_to.get(c, c) for c, k in recorded if k is not None} == set(key) if recorded else \
+                {renamed_to.get(c, c) for c in keys[-1]["key"]} == set(key) if keys else \
                 before_the_record(conn, t, primary_key, key, log_columns, renamed)
             plan["key"] = {"was": primary_key, "by": "hand" if hand else "definition", "log": bool(log_columns)}
-    # a change log that exists is complete: a run that would leave it behind its mirror, or lay a new mirror's
-    # history over it, fails
-    why = ("this run would not write to it (log = false or no key)" if not (key and t["log"])
-           else "its mirror is missing" if not mirror else None)
-    if log_columns and why:
-        raise Exception(f"the change log {t['name']}__log exists and {why}: drop it with its history view "
-                        f"(DROP TABLE {t['log_table']} CASCADE), or rename both" + (" with the mirror" if mirror else ""))
     # decision 54: one branch over a change log written under two keys gives wrong rows, so the record says them
     if log_columns and stretches(conn, t) is None and (noted := sql(
             conn, """SELECT substr(note, strpos(note, $2) + length($2)) FROM _rowvioli.columns__log WHERE id = $1
@@ -257,12 +259,22 @@ def check(conn, t, staged, mirror, log_columns):
         raise Exception(f"the comment on column _op of the change log {t['name']}__log, which says the keys it was "
                         "written under, is missing or unreadable, and the key has changed: put it back, "
                         f"COMMENT ON COLUMN {t['log_table']}._op IS {literal(noted[0][0])}")
+    # the same for a retired column's comment, whose text the record noted when the run retired it
+    for name, note in sql(conn, 'SELECT "column", note FROM _rowvioli.columns WHERE id = $1 AND target_schema = $2 '
+                                "AND target_table = $3 AND NOT mirror AND strpos(note, $4) > 0",
+                          [t["id"], t["schema"], t["table"], RETIRED_NOTE]):
+        if name in said and name not in retired:
+            text = json.dumps(json.JSONDecoder().raw_decode(note.partition(RETIRED_NOTE)[2])[0])
+            raise Exception(f"the comment on column {name} of the change log {t['name']}__log, which says that it "
+                            f"keeps the old values of {retirement(text)}, is missing or unreadable: put it back, "
+                            f"COMMENT ON COLUMN {t['log_table']}.{quote(name)} IS {literal(text)}")
     if key:
         names =", ".join(quote(k) for k in key)
         if sql(conn, f"SELECT 1 FROM _stage WHERE {' OR '.join(quote(k) + ' IS NULL' for k in key)} LIMIT 1"):
             raise Exception(f"a key column of ({names}) is null")
         if sql(conn, f"SELECT 1 FROM _stage GROUP BY {names} HAVING count(*) > 1 LIMIT 1"):
             raise Exception(f"a key combination of ({names}) occurs twice")
+    plan["moved"] = plan["retired"] | {old: new for new, old in renamed.items()}  # the names carry_out gives
     return plan
 
 
@@ -314,8 +326,8 @@ def proven(conn, t, mirror, staged, log_columns, renamed):
     pairs = [(old, new) for old in gone for new in come if family(had[old]) == family(types[new])]
     if not pairs:
         return {}
-    moved = {old: new for new, old in renamed.items()}
-    on = " AND ".join(f"s.{quote(k)} = m.{quote(moved.get(k, k))}" for k in t["key"])
+    renamed_to = {old: new for new, old in renamed.items()}
+    on = " AND ".join(f"s.{quote(k)} = m.{quote(renamed_to.get(k, k))}" for k in t["key"])
     other = [n for n in types if n in had and family(had[n]) == family(types[n])]
     unchanged = ("WHERE ROW({}) IS NOT DISTINCT FROM ROW({})".format(
         *(", ".join(f"{a}.{quote(n)}" for n in other) for a in "ms")) if other else "")
@@ -370,10 +382,10 @@ def fit(conn, t, staged, mirror, log_columns, renamed):
     they are checked and published in, the widenings as (table, column under its new name, type), and the change
     log's columns among them that follow a type a person widened in the mirror, under the plan's lock."""
     types, had = dict(staged), dict(mirror)
-    moved = {old: new for new, old in renamed.items()}
+    renamed_to = {old: new for new, old in renamed.items()}
     # not one the source retires: that log column takes another name in this run
     followed = {n: into for n, type in log_columns if (into := had.get(n)) and into != type
-                and family(into) == family(type) == family(types.get(moved.get(n, n), into))
+                and family(into) == family(type) == family(types.get(renamed_to.get(n, n), into))
                 and wider(type, into) == into}
     log_columns = [(n, followed.get(n, type)) for n, type in log_columns]
     pairs = [(table, name, into) for table, columns in ((t["mirror"], mirror), (t["log_table"], log_columns))
@@ -382,8 +394,8 @@ def fit(conn, t, staged, mirror, log_columns, renamed):
     # only a target that does not hold the staged type already needs the scan
     widened = [(table, name, wider(into, types[name]))
                for table, name, into in misfits(conn, [p for p in pairs if wider(p[2], types[p[1]]) != p[2]])]
-    follow = [(t["log_table"], moved.get(n, n), into) for n, into in followed.items()
-              if (t["log_table"], moved.get(n, n)) not in {w[:2] for w in widened}]
+    follow = [(t["log_table"], renamed_to.get(n, n), into) for n, into in followed.items()
+              if (t["log_table"], renamed_to.get(n, n)) not in {w[:2] for w in widened}]
     widened += follow
     # the staging table is not altered: the target's type applies on insert, where it now changes no value. A column
     # back in its family takes the change log's type (cases A12)
@@ -421,6 +433,10 @@ def stage(conn, t):
     """Opens the connection, calls the connector and fills the TEMP staging table chunk by chunk. Returns the
     number of rows read."""
     connector = contract.connector(t["type"], f" on worker {t['worker']}")
+    t["catalog"] = getattr(connector, "catalog", None)  # the source's own, unless the connector says otherwise
+    if t["catalog"] not in (None, "data", "definition"):  # else a rule would take it for neither and act by halves
+        raise Exception(f'connector "{t["type"]}" says catalog = {t["catalog"]!r}, which is neither "data" nor '
+                        '"definition"; without the entry the source has a catalog of its own')
     sql(conn, "UPDATE _rowvioli.runs SET driver_version = $2 WHERE run = $1",
         [t["run"], getattr(connector, "driver_version", None)])
     try:
@@ -541,14 +557,14 @@ def diff(conn, t, staged, mirror, plan):
     return {"inserted": counts.get("I", 0), "updated": counts.get("U", 0), "deleted": counts.get("D", 0)}
 
 
-def publish(conn, t, staged, delivered, mirror, log, rows_read, counts, plan):
+def publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, plan):
     """Step 6, one transaction in the order of decision 54: the plan, new columns, mirror, change log and its view,
     the columns table, loaded_at, attempts and the run's row. Raises, so nothing is published, when the table's row
     no longer gives it this target name."""
     names = ", ".join(quote(c) for c, _ in staged)
     logged = ", ".join(quote(c) for c in [*dict(staged), *(plan["retired"].get(c, c) for c in plan["gone"])])
     new = not mirror
-    moved = plan["retired"] | {o: n for n, o in plan["renamed"].items()}  # the names carry_out gives
+    moved = plan["moved"]
     if new:
         # in a transaction of its own under a lock on its name, because two first runs of a source race on
         # IF NOT EXISTS; the one-number lock never counts as a table lock
@@ -592,10 +608,10 @@ def publish(conn, t, staged, delivered, mirror, log, rows_read, counts, plan):
     if t["key"] and plan["key"]:  # once the old rows are gone, which may hold the new key twice
         sql(conn, f"ALTER TABLE {t['mirror']} ADD PRIMARY KEY ({', '.join(quote(k) for k in t['key'])})")
     if t["key"] and t["log"]:  # the change log's columns under the names the plan gave them
-        write_log(conn, t, staged, [(moved.get(n, n), type) for n, type in log], logged)
+        write_log(conn, t, staged, [(moved.get(n, n), type) for n, type in log_columns], logged)
     if t["long"]:
         say(long=None)
-    record_columns(conn, t, delivered, mirror, log, changes)
+    record_columns(conn, t, delivered, mirror, log_columns, changes)
     # the table lock guards the table, not its name, which an apply may have given to another table meanwhile
     # (decision 53). Last, so the row lock that holds off an apply until COMMIT is taken after every wait on a mirror
     if not sql(conn, """UPDATE _rowvioli.tables SET loaded_at = now(), attempts = 0
@@ -645,22 +661,24 @@ DROPS_WITH = """
       FROM pg_attribute a WHERE attrelid = $1::regclass AND attname = $2"""
 
 
-# the grants on a view but its owner's, as (privilege, column or None, grantee, grant option)
+# the grants on a view but its owner's, as (privilege, column or None, grantee, grant option, grantor or None for the
+# owner), in the order Postgres keeps them, which gives a grantee its grant option before it passes the grant on
 GRANTS = """
-    SELECT a.privilege_type, NULL::text, CASE a.grantee WHEN 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END,
-           a.is_grantable FROM pg_class r, aclexplode(r.relacl) a WHERE r.oid = to_regclass($1) AND a.grantee <> r.relowner
-    UNION ALL
     SELECT a.privilege_type, c.attname::text, CASE a.grantee WHEN 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END,
-           a.is_grantable FROM pg_attribute c, aclexplode(c.attacl) a WHERE c.attrelid = to_regclass($1)"""
+           a.is_grantable, nullif(a.grantor, r.relowner)::regrole::text
+      FROM pg_class r CROSS JOIN LATERAL (SELECT NULL::name AS attname, 0 AS attnum, r.relacl AS acl UNION ALL
+                                          SELECT attname, attnum, attacl FROM pg_attribute WHERE attrelid = r.oid) c,
+           aclexplode(c.acl) WITH ORDINALITY a WHERE r.oid = to_regclass($1) AND a.grantee <> r.relowner
+     ORDER BY c.attnum, a.ordinality"""
 
 
 def carry_out(conn, t, plan):
     """Decision 54, under the lock: the history view goes, since Postgres alters no column a view reads (write_log
     creates it again and gives its grants again, a renamed column's under its new name), then the plan. Returns what
     the columns table says beyond the catalogue (decision 54)."""
-    renamed = {old: new for new, old in plan["renamed"].items()}
-    t["grants"] = [(p, renamed.get(c, c), *rest) for p, c, *rest in sql(conn, GRANTS, [t["history"]])]
-    alter(conn, t, f"the columns of {t['name']} change", f"DROP VIEW IF EXISTS {t['history']}")
+    renamed_to = {old: new for new, old in plan["renamed"].items()}
+    t["grants"] = [(p, renamed_to.get(c, c), *rest) for p, c, *rest in sql(conn, GRANTS, [t["history"]])]
+    alter(conn, t, f"the columns of {t['name']} change", f"DROP VIEW IF EXISTS {t['history']}", t["history"])
     changes = {}
     logged = dict(sql(conn, COLUMNS, [t["log_table"]]))
     keys = stretches(conn, t) if logged else None  # while the columns it names have those names
@@ -671,9 +689,11 @@ def carry_out(conn, t, plan):
         changes[old], changes[new] = {"by": by}, {"was": old, "by": by, "note": plan["proven"].get(new)}
     for old, new in plan["retired"].items():
         sql(conn, f"ALTER TABLE {t['log_table']} RENAME COLUMN {quote(old)} TO {quote(new)}")
-        changes[new] = {"was": old}
+        text = json.dumps({"retired": old})  # the change log says it of itself, as of its keys
+        sql(conn, f"COMMENT ON COLUMN {t['log_table']}.{quote(new)} IS {literal(text)}")
+        changes[new] = {"was": old, "note": RETIRED_NOTE + text}
     # decision 54: the comment on _op names the key columns of every stretch, renamed and retired ones by their new names
-    moved = plan["retired"] | {o: n for n, o in plan["renamed"].items()}
+    moved = plan["moved"]
     if moved and keys:
         if (named := [{**k, "key": [moved.get(c, c) for c in k["key"]]} for k in keys]) != keys:
             note = KEYS_NOTE + keys_of_log(conn, t, named)
@@ -687,11 +707,14 @@ def carry_out(conn, t, plan):
             [(name,)] = sql(conn, "SELECT conname FROM pg_constraint WHERE conrelid = $1::regclass AND contype = 'p'",
                             [t["mirror"]])
             dropped = alter(conn, t, f"the key of {t['name']} would change from ({', '.join(was)}) to "
-                                     f"({', '.join(key)})", f"ALTER TABLE {t['mirror']} DROP CONSTRAINT {quote(name)}")
+                                     f"({', '.join(key)})", f"ALTER TABLE {t['mirror']} DROP CONSTRAINT {quote(name)}",
+                            t["mirror"], constraint=name)
         # Postgres leaves NOT NULL behind, also where LIKE copied it; a column still in a key it refuses to free
         if (loose := [c for c in was if c not in key]) and (not was or dropped):
-            for table in [t["mirror"], t["log_table"]] if plan["key"]["log"] else [t["mirror"]]:
-                sql(conn, f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(c)} DROP NOT NULL" for c in loose))
+            for table, named in [(t["mirror"], {}), (t["log_table"], plan["retired"])][:2 if plan["key"]["log"] else 1]:
+                # one retired in this run has its new name in the change log already
+                sql(conn, f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(named.get(c, c))} DROP NOT NULL"
+                                                              for c in loose))
         if by == "definition" and plan["key"]["log"]:  # a stretch of the change log begins under the new key
             [(now,)] = sql(conn, "SELECT to_json(now()) #>> '{}'")  # ISO 8601, whatever the DateStyle
             keys = (stretches(conn, t) or [{"key": was}]) + [{"from": now, "key": key}]
@@ -702,7 +725,7 @@ def carry_out(conn, t, plan):
         changes[name] = {"note": f"{note} went with it" if note else None}
         alter(conn, t, f"column {name} " + ("has another type in the source" if name in plan["retired"]
                                          else "is gone from the source") + f" and would leave the mirror {t['name']}",
-              f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
+              f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}", t["mirror"], [name])
     for name in plan["unpinned"]:  # decision 54: a type the definition gave, and took back
         changes[name]["by"] = changes[plan["retired"][name]]["by"] = "definition"
     for table in (t["mirror"], t["log_table"]):  # decision 54, one ALTER per table, so it is rewritten at most once
@@ -714,7 +737,7 @@ def carry_out(conn, t, plan):
             with long(f"widening {table}, {columns}; raise max_seconds once, until a run has widened it"):
                 alter(conn, t, f"{table} would be widened {why}, {columns}",
                       f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(n)} TYPE {type}" for n, type in widened),
-                      table, [n for n, _ in widened])
+                      table, [n for n, _ in widened], drop=False)
     if t.get("blocked"):
         raise Exception("; and ".join(t["blocked"]) + ": change or drop that, and the next run goes on")
     return changes
@@ -722,18 +745,32 @@ def carry_out(conn, t, plan):
 
 KEYS_NOTE = "the change log's keys: "  # the note in the columns table of a change of key, before the comment's text
 # (the reader's versions may come first)
+RETIRED_NOTE = "the change log's comment: "  # the note of a retired column, before its comment's text
+
+
+def comments(conn, t):
+    """Decision 54: what the change log says of itself, the comment on each of its columns by name (None for none):
+    on _op its keys, on a retired column whose old values it keeps. Empty without a change log."""
+    return dict(sql(conn, "SELECT attname, col_description(attrelid, attnum) FROM pg_attribute WHERE attrelid = "
+                          "to_regclass($1) AND attnum > 0 AND NOT attisdropped", [t["log_table"]]))
+
+
+def retirement(text):
+    """The column whose old values a change log's column keeps, as its comment says it, or None."""
+    try:
+        was = json.loads(text)["retired"]
+        return was if isinstance(was, str) else None
+    except Exception:  # no comment, or one the program did not write
+        return None
 
 
 def stretches(conn, t):
     """Decision 54: the keys the change log was written under, as the comment on its column _op says them, a list of
     {"key": [...]} with "from", the moment it began, on every one but the first. None without a readable comment, also
     for one that names a column the change log lacks: such a change log has had one key."""
-    [(text, names)] = sql(conn, "SELECT col_description(to_regclass($1), (SELECT attnum FROM pg_attribute WHERE attrelid "
-                                "= to_regclass($1) AND attname = '_op')), (SELECT json_agg(attname) FROM pg_attribute "
-                                "WHERE attrelid = to_regclass($1) AND attnum > 0 AND NOT attisdropped)::text",
-                          [t["log_table"]])
+    said = comments(conn, t)
     try:
-        keys, names = json.loads(text), json.loads(names)
+        keys, names = json.loads(said.get("_op")), list(said)
         if keys and all(isinstance(k["key"], list) and k["key"] and all(c in names for c in k["key"])
                         and ("from" in k) == (i > 0) and (not i or datetime.fromisoformat(k["from"]))
                         for i, k in enumerate(keys)):
@@ -750,24 +787,33 @@ def keys_of_log(conn, t, keys):
     return text
 
 
-# what Postgres refuses a change of type of columns $2 (a JSON list) of table $1 for, which its detail names one of: the
-# views and materialized views, rules, triggers, policies, publications and generated columns on them, and the views on
-# those views, layer by layer, as the detail of a DROP says them. The last field: the history view $3, whose drop the plan
-# makes and names what is in its way
+# what Postgres refuses a change of table $1 for: of its columns $2 (a JSON list), of all of it for none, or of its
+# constraint $4; with $5 a drop, else a change of type. A drop is refused for every object that depends on what it drops
+# or on what goes with it (the index of a constraint or of a column), a change of type for the views and materialized
+# views, rules, triggers, policies, publications and generated columns on the columns, and both for the views on those
+# views, layer by layer, as the detail of a DROP says them. Read from the catalogue, which takes no lock on them. The last
+# field: the history view $3, whose drop the plan makes and names what is in its way
 IN_THE_WAY = """
-    WITH RECURSIVE on_it(rel, describe, what) AS (
+    WITH RECURSIVE it(classid, objid, objsubid) AS (
+        SELECT 'pg_class'::regclass, attrelid, attnum::int FROM pg_attribute
+         WHERE attrelid = $1::regclass AND attname IN (SELECT json_array_elements_text($2::json))
+        UNION SELECT 'pg_class'::regclass, $1::regclass::oid, 0 WHERE $2::text = '[]' AND $4::text IS NULL
+        UNION SELECT 'pg_constraint'::regclass, oid, 0 FROM pg_constraint WHERE conrelid = $1::regclass AND conname = $4
+        UNION
+        SELECT d.classid, d.objid, 0 FROM it JOIN pg_depend d ON (d.refclassid, d.refobjid) = (it.classid, it.objid)
+           AND it.objsubid IN (0, d.refobjsubid) AND d.deptype IN ('a', 'i') AND $5),
+    on_it(rel, describe, what) AS (
         SELECT CASE WHEN r.rulename = '_RETURN' THEN r.ev_class END,
                CASE WHEN r.rulename = '_RETURN' THEN pg_describe_object('pg_class'::regclass, r.ev_class, 0)
                     WHEN g.oid IS NOT NULL THEN pg_describe_object('pg_class'::regclass, g.adrelid, g.adnum)
                     ELSE pg_describe_object(d.classid, d.objid, 0) END,
-               pg_describe_object(d.refclassid, d.refobjid, d.refobjsubid)
-          FROM pg_depend d JOIN pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
+               pg_describe_object(it.classid, it.objid, it.objsubid)
+          FROM it JOIN pg_depend d ON (d.refclassid, d.refobjid) = (it.classid, it.objid)
+           AND it.objsubid IN (0, d.refobjsubid) AND d.deptype = 'n'
           LEFT JOIN pg_rewrite r ON d.classid = 'pg_rewrite'::regclass AND r.oid = d.objid
           LEFT JOIN pg_attrdef g ON d.classid = 'pg_attrdef'::regclass AND g.oid = d.objid
-         WHERE d.refclassid = 'pg_class'::regclass AND d.refobjid = $1::regclass AND d.deptype = 'n'
-           AND d.classid IN ('pg_rewrite'::regclass, 'pg_trigger'::regclass, 'pg_policy'::regclass,
-                             'pg_publication_rel'::regclass, 'pg_attrdef'::regclass)
-           AND a.attname IN (SELECT json_array_elements_text($2::json))
+         WHERE $5 OR d.classid IN ('pg_rewrite'::regclass, 'pg_trigger'::regclass, 'pg_policy'::regclass,
+                                   'pg_publication_rel'::regclass, 'pg_attrdef'::regclass)
         UNION
         SELECT CASE WHEN r.rulename = '_RETURN' THEN r.ev_class END,
                CASE WHEN r.rulename = '_RETURN' THEN pg_describe_object('pg_class'::regclass, r.ev_class, 0)
@@ -779,17 +825,22 @@ IN_THE_WAY = """
     SELECT describe, what, coalesce(rel = to_regclass($3), false) FROM on_it ORDER BY describe, what"""
 
 
-def alter(conn, t, why, statement, table=None, columns=()):
+def alter(conn, t, why, statement, table, columns=(), constraint=None, drop=True):
     """A change Postgres refuses while a consumer's object depends on it: the reason says what would have changed,
     then Postgres's detail, which names the object (decision 54). Kept in `t["blocked"]` while carry_out goes on, so
-    that the stop names every object in the way and one round of work clears it. For a type changed on `columns` of
-    `table` Postgres names one object, and the catalogue gives all. Says whether the change was made.
+    that the stop names every object in the way and one round of work clears it. The change is of `columns` of `table`,
+    of all of it for none, or of its `constraint`: a drop, else a change of type, for which Postgres names one object,
+    and the catalogue gives all (IN_THE_WAY). Says whether the change was made.
     A drop locks what depends on what it drops before it refuses: a consumer who reads such a view while the run holds
-    the mirror waits for the run, so the run does not wait for the view, which would be a deadlock (story 43)."""
+    the mirror waits for the run, so the run does not wait for the view, which would be a deadlock (story 43); the
+    catalogue names it then. Every object is named with its schema, also one on the search path: the catalogue names
+    them under an empty search path, while the change runs under the run's own, which a consumer's code it calls (a
+    check constraint's function, an event trigger) may need."""
     sql(conn, "SAVEPOINT alter")
     sql(conn, "SET LOCAL lock_timeout = '50ms'")  # far below the second after which Postgres looks for a deadlock
     try:
         sql(conn, statement)
+        done = True
     except Exception as e:
         details = {k.decode(): v.decode() for k, v in getattr(e, "details", None) or []}
         state = details.get("PG_DIAG_SQLSTATE")
@@ -797,29 +848,29 @@ def alter(conn, t, why, statement, table=None, columns=()):
         if state not in ("2BP01", "0A000", "55P03") or state != "55P03" and "PG_DIAG_MESSAGE_DETAIL" not in details:
             raise
         sql(conn, "ROLLBACK TO SAVEPOINT alter")
+        done = False
+        sql(conn, "SET LOCAL search_path = ''")  # pg_describe_object then names every object with its schema
+        found = sql(conn, IN_THE_WAY, [table, json.dumps(columns), t["history"], constraint, drop])
+        sql(conn, "ROLLBACK TO SAVEPOINT alter")  # the search path as it was
+        named = "; ".join(f"{d} depends on {w}" for d, w, history in found if not history)
         if state == "55P03":
-            t.setdefault("blocked", []).append(f"{why}, but an object that depends on it was in use, so Postgres did "
-                                               "not name it; the next run does")
-            return False
-        detail = details["PG_DIAG_MESSAGE_DETAIL"].replace("\n", "; ")
-        if state == "0A000" and columns:
-            found = sql(conn, IN_THE_WAY, [table, json.dumps(columns), t["history"]])
-            if not (named := "; ".join(f"{d} depends on {w}" for d, w, history in found if not history)) and found:
-                return False  # only the history view, whose drop is stopped already with what is in its way
-            detail = named or detail
-        t.setdefault("blocked", []).append(f"{why}, but {detail}")
-        return False
+            t.setdefault("blocked", []).append(f"{why}, but {named}, in use, so the run did not wait for it" if named
+                                               else f"{why}, but an object that depends on it was in use, so "
+                                                    "Postgres did not name it; the next run does")
+        elif named or not found:  # else only the history view, whose drop is stopped already with what is in its way
+            detail = named or details["PG_DIAG_MESSAGE_DETAIL"].replace("\n", "; ")
+            t.setdefault("blocked", []).append(f"{why}, but {detail}")
     sql(conn, "SET LOCAL lock_timeout TO DEFAULT")
-    return True
+    return done
 
 
-def write_log(conn, t, staged, log, names):
+def write_log(conn, t, staged, log_columns, names):
     """After the mirror is published, in the same transaction: a log that exists gets the diff, a new one begins
     with the whole mirror, so that replaying a log from the last change of key always gives the mirror. The history
     view is created when missing and replaced when the log got a column; otherwise it is not touched, so takes no
     lock."""
-    if log:
-        widened = widen(conn, t["log_table"], staged, log)
+    if log_columns:
+        widened = widen(conn, t["log_table"], staged, log_columns)
         rows = f"SELECT _op, {names} FROM _diff"
     else:
         sql(conn, f"CREATE TABLE {t['log_table']} (_run bigint, _op text, _loaded_at timestamptz, LIKE {t['mirror']})")
@@ -829,7 +880,7 @@ def write_log(conn, t, staged, log, names):
     # now() is the transaction's moment, the one that goes into tables.loaded_at
     sql(conn, f"INSERT INTO {t['log_table']} (_run, _loaded_at, _op, {names}) SELECT $1, now(), * FROM ({rows}) r",
         [t["run"]])
-    if log and not widened and sql(conn, "SELECT to_regclass($1) IS NOT NULL", [t["history"]])[0][0]:
+    if log_columns and not widened and sql(conn, "SELECT to_regclass($1) IS NOT NULL", [t["history"]])[0][0]:
         return
     columns = ", ".join(quote(c) for c, _ in sql(conn, COLUMNS, [t["log_table"]])
                         if c not in ("_run", "_op", "_loaded_at"))
@@ -851,21 +902,37 @@ def write_log(conn, t, staged, log, names):
               FROM ONLY {t['log_table']}{' WHERE ' + ' AND '.join(cut) if cut else ''}) h
          WHERE _op <> 'D'""")
     sql(conn, f"CREATE OR REPLACE VIEW {t['history']} AS" + "\n        UNION ALL".join(branches))
-    for privilege, column, grantee, option in t.pop("grants", []):  # those carry_out found before it dropped the view
-        sql(conn, f"GRANT {privilege}{f' ({quote(column)})' if column else ''} ON {t['history']} TO {grantee}"
-                  + (" WITH GRANT OPTION" if option else ""))
+    for privilege, column, grantee, option, grantor in t.pop("grants", []):  # those carry_out found before the drop
+        # decision 54: a grant a grantee passed on comes back from it, given as that role; Postgres 14 to 17 take no
+        # other grantor than the current role (GRANTED BY). Where the run's role may not act as it, or the grantor may
+        # no longer reach the view (USAGE on its schema), the grant is the run's role's own
+        grant = (f"GRANT {privilege}{f' ({quote(column)})' if column else ''} ON {t['history']} TO {grantee}"
+                 + (" WITH GRANT OPTION" if option else ""))
+        if grantor:
+            sql(conn, "SAVEPOINT grantor")
+            try:
+                sql(conn, f"SET LOCAL ROLE {grantor}")
+                sql(conn, grant)
+                sql(conn, "RESET ROLE")
+                continue
+            except Exception as e:
+                if getattr(e, "sqlstate", None) != "42501":  # insufficient_privilege
+                    raise
+                sql(conn, "ROLLBACK TO SAVEPOINT grantor")  # the role too
+        sql(conn, grant)
 
 
-def record_columns(conn, t, delivered, mirror, log, changes):
+def record_columns(conn, t, delivered, mirror, log_columns, changes):
     """Decision 54, last in publishing, in its transaction: what the columns of mirror and change log are now
-    against what `_rowvioli.columns` says, as rows of `columns__log` with this transaction's moment. `mirror` and `log`
-    are the columns as the run found them, so that what differs from the record without this run is by hand.
+    against what `_rowvioli.columns` says, as rows of `columns__log` with this transaction's moment. `mirror` and
+    `log_columns` are the columns as the run found them, so that what differs from the record without this run is by
+    hand.
     `changes` gives fields of the plan by column name (`was`, `note`, `by`). Notifies on `rowvioli_schema` when
     anything but a first fill was recorded."""
-    def state(mirror, log):
-        return {**{n: (type, False) for n, type in log if n not in ("_run", "_op", "_loaded_at")},
+    def state(mirror, log_columns):
+        return {**{n: (type, False) for n, type in log_columns if n not in ("_run", "_op", "_loaded_at")},
                 **{n: (type, True) for n, type in mirror}}
-    found = state(mirror, log)
+    found = state(mirror, log_columns)
     now = state(sql(conn, COLUMNS, [t["mirror"]]), sql(conn, COLUMNS, [t["log_table"]]))
     # the primary key's order, not the definition's: the same columns in another order are the same key (story 20)
     key = {k: i + 1 for i, (k,) in enumerate(sql(conn, PRIMARY_KEY, [t["mirror"]]))}
@@ -899,25 +966,24 @@ def record_columns(conn, t, delivered, mirror, log, changes):
         rows.append(row)
     if not rows:
         return
+    # whether another reader than the last successful run's gave these columns, perhaps, and not the source
+    [(differs, note)] = sql(conn, """
+        SELECT (l.program_version, l.driver_version) IS DISTINCT FROM (c.program_version, c.driver_version),
+               format('program %s to %s, driver %s to %s', coalesce(l.program_version, 'none'),
+                      coalesce(c.program_version, 'none'), coalesce(l.driver_version, 'none'),
+                      coalesce(c.driver_version, 'none'))
+          FROM _rowvioli.runs c LEFT JOIN LATERAL (SELECT program_version, driver_version FROM _rowvioli.runs
+                WHERE "table" = c."table" AND status = 'ok' AND run < c.run ORDER BY run DESC LIMIT 1) l ON true
+         WHERE c.run = $1""", [t["run"]])
     pinned = t["pinned"]  # a type the definition gives (decision 54)
-    for r in rows:
+    for r in rows:  # the cause: what the plan says, else the definition where it gives the column, else the reader
         if (r["target_schema"], r["target_table"]) == (t["schema"], t["table"]):
             r.update(changes.get(r["column"], {}))
             # REST's columns are all the definition's, also one taken out of it; a retired one is by its name's cause
-            if r["by"] == "source" and (t["type"] == "rest" or r["column"] in pinned or r["was"] in pinned):
+            if r["by"] == "source" and (t["catalog"] == "definition" or r["column"] in pinned or r["was"] in pinned):
                 r["by"] = "definition"
-    if any(r["by"] == "source" for r in rows):  # another reader gave these columns, perhaps, not the source
-        [(differs, note)] = sql(conn, """
-            SELECT (l.program_version, l.driver_version) IS DISTINCT FROM (c.program_version, c.driver_version),
-                   format('program %s to %s, driver %s to %s', coalesce(l.program_version, 'none'),
-                          coalesce(c.program_version, 'none'), coalesce(l.driver_version, 'none'),
-                          coalesce(c.driver_version, 'none'))
-              FROM _rowvioli.runs c LEFT JOIN LATERAL (SELECT program_version, driver_version FROM _rowvioli.runs
-                    WHERE "table" = c."table" AND status = 'ok' AND run < c.run ORDER BY run DESC LIMIT 1) l ON true
-             WHERE c.run = $1""", [t["run"]])
-        for r in rows:
-            if differs and r["by"] == "source":
-                r.update({"by": "reader", "note": "; ".join(filter(None, [note, r["note"]]))})
+        if r["by"] == "source" and differs:
+            r.update({"by": "reader", "note": "; ".join(filter(None, [note, r["note"]]))})
     x = """jsonb_to_recordset($1::jsonb) AS x(op text, target_schema text, target_table text, "column" text,
                 type text, source_type text, "key" int, mirror boolean, was text, "by" text, note text)"""
     payload = json.dumps(rows)
@@ -1047,7 +1113,21 @@ CONSTRAINT = re.compile(r'duplicate key value violates unique constraint "[^"]*"
                         r'"[^"]*"(?: on table "[^"]*")?'
                         r'|null value in column "[^"]*" of relation "[^"]*" violates not-null constraint'
                         r'|new row for relation "[^"]*" violates check constraint "[^"]*"'
-                        r'|conflicting key value violates exclusion constraint "[^"]*"')
+                        r'|conflicting key value violates exclusion constraint "[^"]*"'
+                        # and those of a change of a table that re-checks its rows (a widening, a new primary key)
+                        r'|check constraint "[^"]*" of relation "[^"]*" is violated by some row'
+                        r'|column "[^"]*" of relation "[^"]*" contains null values'
+                        r'|could not create (?:unique index|exclusion constraint) "[^"]*"')
+
+
+# the classes of SQLSTATE whose messages Postgres writes with names and no value of a row, and which an operator needs
+# while publishing: a lost connection, a feature, a transaction's state, a dependent object, a deadlock, a missing right
+# or object, resources such as a full disk, a limit, an object in use, a cancel, a system error. A constraint's message
+# (class 23) is known by its words (CONSTRAINT)
+NAMES = {"08", "0A", "25", "2B", "40", "42", "53", "54", "55", "57", "58"}
+# but an object that does not exist, whose name a cast of a row's value makes (`relation "Anna" does not exist` of a
+# check constraint's ::regclass, a column, a type or role, a function): the run's own statements name what is there
+UNDEFINED = {"42P01", "42703", "42704", "42883"}
 
 
 def raised_by_a_consumer(e, step):
@@ -1056,16 +1136,21 @@ def raised_by_a_consumer(e, step):
     that may hold a row (`raise exception 'bad row %', NEW`, `relation "Anna" does not exist` of an EXECUTE), or None
     for any other. Told by a function's frame in the context the driver gives, in its fields for a statement and in its
     text for a source's rows, whatever the function's language, and by the SQLSTATE only RAISE and ASSERT give;
-    Postgres's own messages of a violated constraint keep their names."""
+    Postgres's own messages of a violated constraint keep their names. While publishing, an error of the target outside
+    the classes of NAMES is withheld too: a function in C or in a language that names no frame (a consumer's trigger,
+    constraint or column) gives no other sign, and Postgres's own message of a value (`date field value out of range:
+    2000-13-01`) can hold a row's, as can one of an object that does not exist (UNDEFINED)."""
     details = {k.decode(): v.decode(errors="replace") for k, v in getattr(e, "details", None) or []}
     text = str(e)
     state = details.get("PG_DIAG_SQLSTATE") or ((odbc := ODBC_STATE.search(text)) and odbc[1])
     function = FRAME.search(details.get("PG_DIAG_CONTEXT") or text.partition("\nCONTEXT:  ")[2])
     message = details.get("PG_DIAG_MESSAGE_PRIMARY") or WRAPPER.sub("", text).split("\n")[0]
-    if not function and state not in ("P0001", "P0004") or CONSTRAINT.fullmatch(message):  # raise_exception, assert
+    raised = state in ("P0001", "P0004")  # raise_exception, assert
+    if not (function or raised or step == "publishing" and state and (state[:2] not in NAMES or state in UNDEFINED)) \
+            or CONSTRAINT.fullmatch(message):
         return None
     where = "source" if step == "reading the source" else "target"
-    return (f"{f'function {function[1]}' if function else 'a function'} raised an error"
+    return (f"{f'function {function[1]}' if function else 'a function' if raised else 'a statement'} raised an error"
             f"{f' (SQLSTATE {state})' if state else ''} in the {where}; its message may hold a row's values, so it is "
             f"left out here: the {where}'s server log has it")
 

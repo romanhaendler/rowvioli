@@ -14,6 +14,7 @@ from ..contract import known_options, version
 
 # the reader's version, so that columns another one delivers are recorded as by = reader (decision 54)
 driver_version = version("httpx")
+catalog = "definition"  # an API has no catalog: the columns are those named under `columns` (decision 54)
 
 TYPES = {"text": pa.string(), "int8": pa.int64(), "float8": pa.float64(), "bool": pa.bool_(), "date": pa.date32(),
          "timestamp": pa.timestamp("us"), "timestamptz": pa.timestamp("us", tz="UTC")}

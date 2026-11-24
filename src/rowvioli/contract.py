@@ -1,6 +1,9 @@
 """The connector contract (decision 27): a module with `read(connection, table, options)` that returns an iterator of
-Arrow batches, and optionally `tables(connection)` for `rowvioli list` and `driver_version`, a string recorded with
-every run. Connectors register as modules in the entry point group `rowvioli.connectors` under their `type`; the
+Arrow batches, and optionally `tables(connection)` for `rowvioli list`, `driver_version`, a string recorded with
+every run, and `catalog` for a source without one of its own (decision 54): "data" where the columns are what the
+data of one run hold, so that a column they lack is empty and never goes (file), or "definition" where they are
+what the table names under `columns`, so that every change of them is the definition's (rest). Nothing is proven a
+rename for either; without the entry the source has a catalog, as a database has. Connectors register as modules in the entry point group `rowvioli.connectors` under their `type`; the
 shipped ones do the same."""
 import importlib.metadata
 from importlib.metadata import entry_points

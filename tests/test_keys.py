@@ -269,6 +269,22 @@ def test_a_column_of_an_old_key_retired_in_the_change_log_is_renamed_in_the_comm
     log_replays(erp)
 
 
+def test_a_column_of_the_old_key_retired_in_the_run_the_key_changes_keeps_its_values_and_frees_its_not_null(erp):
+    ok(erp)
+    first = erp.target(LOADED_AT)[0][0]
+    apply(erp, definition(erp, '"public.customers" = { key = ["name"] }\n'))
+    erp.source("alter table customers alter column customer_no type text")  # in the same run: goes and comes
+    seam = again(erp)
+    [(run,)] = erp.target("select max(run) from _rowvioli.runs")
+    assert primary_key(erp) == ["name"]
+    assert [k["key"] for k in comment(erp)] == [[f"customer_no__{run}"], ["name"]]
+    erp.source("insert into customers values ('9', 'Zed', 'Ulm')")  # a row the retired column has no value for
+    again(erp)
+    assert erp.target(f"select customer_no__{run}, customer_no, _valid_from, _valid_to from raw_erp.customers__history "
+                      "where name = 'Anna' order by _valid_from") == [(1, None, first, seam), (None, "1", seam, None)]
+    log_replays(erp)
+
+
 def test_mirror_change_log_and_history_view_renamed_by_hand_after_a_change_of_key_keep_the_history(erp):  # cases E6
     ok(erp)
     moments = [(erp.target(LOADED_AT)[0][0], rows(erp.target, MIRROR))]

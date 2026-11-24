@@ -345,6 +345,26 @@ def test_a_message_a_consumers_trigger_raises_on_the_target_is_withheld_and_the_
                              "hold a row's values, so it is left out here: the target's server log has it")
 
 
+def test_a_message_from_a_consumers_function_in_c_that_names_no_frame_is_withheld_while_publishing(erp):
+    ok(erp)  # make_date is C: its message has the value its arguments make of the row, and no frame says whose it is
+    erp.target("alter table raw_erp.customers add constraint c check (make_date(2000, length(name) + 8, 1) < now())")
+    erp.source("update customers set name = 'Anna2' where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = withheld(erp)
+    assert reason == ("a statement raised an error (SQLSTATE 22008) in the target; its message may hold a row's values, "
+                      "so it is left out here: the target's server log has it"), reason
+
+
+def test_an_object_a_cast_of_a_rows_value_does_not_find_is_withheld_while_publishing(erp):
+    ok(erp)  # ::regclass names the value it did not find, and no frame says whose code cast it
+    erp.target("alter table raw_erp.customers add constraint c check (name not like '%2' or name::regclass is not null)")
+    erp.source("update customers set name = 'Anna2' where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = withheld(erp)
+    assert reason == ("a statement raised an error (SQLSTATE 42P01) in the target; its message may hold a row's values, "
+                      "so it is left out here: the target's server log has it"), reason
+
+
 @pytest.mark.parametrize("statement", ["raise exception 'bad name Secret %', n",
                                        "execute format('select from %I', 'Secret' || n)"])
 def test_a_message_a_function_in_a_source_view_raises_is_withheld(erp, statement):

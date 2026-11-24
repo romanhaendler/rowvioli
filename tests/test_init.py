@@ -6,7 +6,7 @@ import pytest
 
 from test_checks import failed
 from test_columns_go_and_come import log_replays
-from test_history import LOADED_AT, MIRROR, again, at
+from test_history import LOADED_AT, LOG_FALSE, MIRROR, again, at
 from test_keys import primary_key
 from test_run import apply, definition, erp, ok, rows  # noqa: F401 (erp is a fixture)
 
@@ -27,6 +27,12 @@ def test_init_twice_leaves_the_same_schema_and_meta(rv):
     assert second.returncode == 0, second.stderr
     assert rv.target(SHAPE) == shape
     assert rv.target("select schema_version, max_running from _rowvioli.meta") == [(4, 20)]
+
+
+def test_the_columns_table_and_its_log_are_read_by_the_tables_id_through_an_index(rv):  # every run reads them so
+    rv.run("init")
+    assert rv.target("select tablename from pg_indexes where schemaname = '_rowvioli' and tablename like 'columns%%' "
+                     "and indexdef like '%%(id)' order by 1") == [("columns",), ("columns__log",)]
 
 
 def test_init_keeps_what_is_there(rv):
@@ -209,6 +215,22 @@ def test_a_key_changed_before_the_upgrade_that_nothing_in_the_target_tells_stops
     assert primary_key(erp) == ["customer_no"]
     assert erp.target(KEY_LOG + " and \"column\" = 'customer_no'") == [("I", "customer_no", 1, "hand")]
     log_replays(erp)
+
+
+def test_a_change_log_a_run_would_not_write_to_stops_first_also_where_nothing_tells_who_changed_the_key(erp):
+    ok(erp)
+    erp.target(HAND)
+    apply(erp, definition(erp, LOG_FALSE))  # the definition changed, and the change log is ended
+    released(erp)
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp).replace("***", "x")  # the source's password is x, and the reason hides it
+    assert reason == ('the change log raw_erp.customers__log exists and this run would not write to it (log = false or '
+                      'no key): drop it with its history view (DROP TABLE "raw_erp"."customers__log" CASCADE), or '
+                      "rename both with the mirror")
+    erp.target('DROP TABLE "raw_erp"."customers__log" CASCADE')  # the way out, after which the definition's key holds
+    again(erp)
+    assert primary_key(erp) == ["customer_no"]
+    assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
 
 
 def test_init_on_an_empty_target_prints_only_that_it_is_ready(rv):
