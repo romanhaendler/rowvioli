@@ -25,3 +25,6 @@ Spec: `.scratch/schema-changes/spec.md`. Decided by the owner on 2026-11-24, aft
 - [ ] The existing tests pass or are changed to the new behaviour.
 
 ## Comments
+
+- Not tested here: the ODBC connector's `driver_version` (`arrow-odbc <version>`); its assertion is in `tests/test_odbc.py`, which needs an ODBC driver manager and runs only in `tests/odbc/run.sh`.
+- Item 5: both ways out worked in the test (the type put back with a cast, and the drop). The reason names the drop, as the other stops do, because it works whatever values a person wrote into the column; putting the type back fails when one does not cast.
