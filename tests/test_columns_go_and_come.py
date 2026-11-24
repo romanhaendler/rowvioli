@@ -1,8 +1,11 @@
 """A column goes and comes back: the mirror follows the source, the change log keeps what was (spec tests, stage 2;
 the numbers are those of `.scratch/schema-changes/cases.md`)."""
+import time
+
 import psycopg
 import pytest
 
+from conftest import until
 from test_checks import MIRROR, failed
 from test_columns import LAST
 from test_history import LOADED_AT, again
@@ -273,3 +276,27 @@ def test_A23_a_column_that_finds_postgres_1600_used_up_by_dropped_ones_stops_and
     assert failed(erp) == ('column phone cannot be added to "raw_erp"."customers": Postgres counts the columns once '
                            "dropped from a table towards its 1600; rewrite the table to free them, by dump and "
                            "restore")
+
+
+def test_a_run_never_waits_for_a_lock_while_holding_one_and_gives_up_after_10s(erp):  # stories 43, 44
+    ok(erp)
+    erp.source("alter table customers drop column city")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    with psycopg.connect(erp.target_url) as consumer:  # a consumer joining history and mirror, history first
+        consumer.execute("select * from raw_erp.customers__history")
+        started = time.monotonic()
+        assert failed(erp).startswith("raw_erp.customers, its change log or its history view stayed in use for 10 s, "
+                                      "so its columns could not change")
+        assert time.monotonic() - started >= 10
+        consumer.rollback()
+        erp.target("update _rowvioli.tables set requested_at = now()")
+        consumer.execute("select * from raw_erp.customers__history")
+        p = erp.start("run")
+        until(lambda: erp.target("select 1 from _rowvioli.runs where status = 'running'"))
+        time.sleep(1)  # the run tries its lock meanwhile
+        consumer.execute("set local lock_timeout = '2s'")
+        consumer.execute("select * from raw_erp.customers")  # the run holds nothing it would wait on
+        consumer.commit()
+    assert p.wait(timeout=30) == 0, p.stdout.read()
+    assert columns(erp) == ["customer_no", "name"]
+    log_replays(erp)
