@@ -224,13 +224,25 @@ def test_the_first_fill_notifies_nobody(erp):
 
 def test_one_right_on_the_history_view_is_all_an_auditor_needs(erp):
     ok(erp)
+    first = erp.target("select loaded_at from _rowvioli.tables")[0][0]
+    erp.source("alter table customers drop column city")
+    again(erp)
+    [(run,)] = erp.target("select max(run) from _rowvioli.runs")
     erp.target("create role auditor login password 'a'")
     try:
         erp.target("grant usage on schema _rowvioli to auditor")
         erp.target("grant select on _rowvioli.columns__history to auditor")
         url = erp.target_url.replace("postgres:x", "auditor:a")
         with psycopg.connect(url) as c:
-            assert c.execute("select count(*) from _rowvioli.columns__history").fetchone()[0] == 3
+            assert c.execute("select count(*) from _rowvioli.columns__history").fetchone()[0] == 4
+            # what changed, and why, and the listener's recipe of docs/target.md
+            changed = c.execute("""SELECT _valid_from, _run, _op, "column", type, mirror, was, "by", note
+                                     FROM _rowvioli.columns__history
+                                    WHERE target_schema = 'raw_erp' AND target_table = 'customers' AND _valid_from > %s
+                                    ORDER BY _valid_from, "column" """, [first]).fetchall()
+            assert [r[1:] for r in changed] == [(run, "U", "city", "text", False, None, "source", None)]
+            assert c.execute("""SELECT _op, "column", type, mirror, was, "by", note FROM _rowvioli.columns__history
+                                 WHERE _run = %s""", [run]).fetchall() == [r[2:] for r in changed]
     finally:
         erp.target("drop owned by auditor")
         erp.target("drop role auditor")
