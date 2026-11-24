@@ -719,7 +719,10 @@ def record_columns(conn, t, delivered, mirror, log, changes):
         row = dict(target_schema=t["schema"], target_table=t["table"], column=name, type=type,
                    source_type=delivered.get(name, last), key=key.get(name), mirror=in_mirror, was=None, note=None)
         if (before := old.get(name)) is None:
-            row.update(op="I", by="found" if not old else "source" if name not in found else "hand")
+            # a first fill finds what is there; what this run changed in a mirror it found has its cause (story 45)
+            untouched = not mirror or found.get(name) == (type, in_mirror) and name not in changes
+            row.update(op="I", by=("found" if untouched else "source") if not old
+                       else "source" if name not in found else "hand")
         else:
             hand = found.get(name) != (before["type"], before["mirror"]) \
                 or changes.get(name, {}).get("by") == "hand"  # a primary key put back: the record knew the key
