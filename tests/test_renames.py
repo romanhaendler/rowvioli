@@ -204,6 +204,21 @@ def test_C9_a_key_column_renamed_with_renamed_stays_the_key_and_the_comment_on_o
     log_replays(erp, "raw_erp.customers")
 
 
+def test_C9_a_key_column_renamed_in_the_run_that_changes_the_key_keeps_its_was(erp):
+    ok(erp)
+    first = erp.target(LOADED_AT)[0][0]
+    erp.source("alter table customers rename column customer_no to id")
+    apply(erp, definition(erp, '"public.customers" = { key = ["id", "name"], renamed = { id = "customer_no" } }\n'))
+    second = again(erp)
+    assert primary_key(erp) == ["id", "name"]
+    assert [k["key"] for k in comment(erp)] == [["id"], ["id", "name"]]
+    assert erp.target(f'select _op, "column", was from _rowvioli.columns__log {THIS_RUN} order by "column"') == [
+        ("D", "customer_no", None), ("I", "id", "customer_no"), ("U", "name", None)]
+    assert erp.target("select name, _valid_from, _valid_to from raw_erp.customers__history where id = 1 "
+                      "order by _valid_from") == [("Anna", first, second), ("Anna", second, None)]
+    log_replays(erp, "raw_erp.customers")
+
+
 def test_renamed_in_the_definition_renames_the_mirror_of_a_table_without_a_change_log(erp):
     people(erp, table='{ key = ["id"], log = false }')
     erp.source("alter table people rename column city to town")

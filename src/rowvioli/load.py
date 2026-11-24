@@ -558,7 +558,7 @@ def carry_out(conn, t, plan):
             [(now,)] = sql(conn, "SELECT to_json(now()) #>> '{}'")  # ISO 8601, whatever the DateStyle
             keys = (stretches(conn, t) or [{"key": was}]) + [{"from": now, "key": key}]
             note = KEYS_NOTE + keys_of_log(conn, t, keys)
-        changes.update({c: {"by": by, "note": note} for c in {*was, *key}})
+        changes.update({c: {**changes.get(c, {}), "by": by, "note": note} for c in {*was, *key}})  # a rename keeps was
     for name in plan["gone"]:
         [(note,)] = sql(conn, DROPS_WITH, [t["mirror"], name])
         changes[name] = {"note": f"{note} went with it" if note else None}
