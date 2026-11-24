@@ -295,7 +295,7 @@ def test_a_first_run_after_the_upgrade_ended_while_it_reads_the_change_log_under
     erp.source("update customers set name = 'Anna2' where customer_no = 1")  # a U the other key never saw
     again(erp)
     erp.target(HAND)
-    apply(erp, definition(erp, table.format(2)))  # the definition no longer tells
+    apply(erp, definition(erp, table.format(3)))  # the definition no longer tells
     released(erp)
     holder = psycopg.connect(erp.target_url)
     holder.execute("lock table raw_erp.customers__log in access exclusive mode")
@@ -303,7 +303,7 @@ def test_a_first_run_after_the_upgrade_ended_while_it_reads_the_change_log_under
     reason = failed(erp)
     holder.close()
     assert reason.replace("***", "x") == (
-        "ended after max_seconds = 2 while reading the change log raw_erp.customers__log under the definition's key "
+        "ended after max_seconds = 3 while reading the change log raw_erp.customers__log under the definition's key "
         "and the primary key, to tell which of them wrote it; raise max_seconds once, until a run has told it")
     apply(erp, definition(erp, table.format(30)))
     again(erp)
