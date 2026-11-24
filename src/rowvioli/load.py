@@ -663,9 +663,10 @@ def carry_out(conn, t, plan):
         if was:
             [(name,)] = sql(conn, "SELECT conname FROM pg_constraint WHERE conrelid = $1::regclass AND contype = 'p'",
                             [t["mirror"]])
-            alter(conn, t, f"the key of {t['name']} would change from ({', '.join(was)}) to ({', '.join(key)})",
-                  f"ALTER TABLE {t['mirror']} DROP CONSTRAINT {quote(name)}")
-        if loose := [c for c in was if c not in key]:  # Postgres leaves NOT NULL behind, also where LIKE copied it
+            dropped = alter(conn, t, f"the key of {t['name']} would change from ({', '.join(was)}) to "
+                                     f"({', '.join(key)})", f"ALTER TABLE {t['mirror']} DROP CONSTRAINT {quote(name)}")
+        # Postgres leaves NOT NULL behind, also where LIKE copied it; a column still in a key it refuses to free
+        if (loose := [c for c in was if c not in key]) and (not was or dropped):
             for table in [t["mirror"], t["log_table"]] if plan["key"]["log"] else [t["mirror"]]:
                 sql(conn, f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(c)} DROP NOT NULL" for c in loose))
         if by == "definition" and plan["key"]["log"]:  # a stretch of the change log begins under the new key
@@ -726,44 +727,67 @@ def keys_of_log(conn, t, keys):
     return text
 
 
-# the views and materialized views on columns $2 (a JSON list) of table $1, and those on them, layer by layer, as
-# Postgres's detail of a DROP says them; not the history view $3, which the plan drops itself
-VIEWS_ON = """
-    WITH RECURSIVE on_it(view, what) AS (
-        SELECT r.ev_class, pg_describe_object('pg_class'::regclass, d.refobjid, d.refobjsubid)
-          FROM pg_depend d JOIN pg_rewrite r ON r.oid = d.objid JOIN pg_attribute a ON a.attrelid = d.refobjid
-                                                                    AND a.attnum = d.refobjsubid
-         WHERE d.classid = 'pg_rewrite'::regclass AND d.refobjid = $1::regclass AND r.ev_class <> d.refobjid
-           AND a.attname IN (SELECT json_array_elements_text($2::json)) AND r.ev_class IS DISTINCT FROM to_regclass($3)
+# what Postgres refuses a change of type of columns $2 (a JSON list) of table $1 for, which its detail names one of: the
+# views and materialized views, rules, triggers, policies, publications and generated columns on them, and the views on
+# those views, layer by layer, as the detail of a DROP says them. The last field: the history view $3, whose drop the plan
+# makes and names what is in its way
+IN_THE_WAY = """
+    WITH RECURSIVE on_it(rel, describe, what) AS (
+        SELECT CASE WHEN r.rulename = '_RETURN' THEN r.ev_class END,
+               CASE WHEN r.rulename = '_RETURN' THEN pg_describe_object('pg_class'::regclass, r.ev_class, 0)
+                    WHEN g.oid IS NOT NULL THEN pg_describe_object('pg_class'::regclass, g.adrelid, g.adnum)
+                    ELSE pg_describe_object(d.classid, d.objid, 0) END,
+               pg_describe_object(d.refclassid, d.refobjid, d.refobjsubid)
+          FROM pg_depend d JOIN pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
+          LEFT JOIN pg_rewrite r ON d.classid = 'pg_rewrite'::regclass AND r.oid = d.objid
+          LEFT JOIN pg_attrdef g ON d.classid = 'pg_attrdef'::regclass AND g.oid = d.objid
+         WHERE d.refclassid = 'pg_class'::regclass AND d.refobjid = $1::regclass AND d.deptype = 'n'
+           AND d.classid IN ('pg_rewrite'::regclass, 'pg_trigger'::regclass, 'pg_policy'::regclass,
+                             'pg_publication_rel'::regclass, 'pg_attrdef'::regclass)
+           AND a.attname IN (SELECT json_array_elements_text($2::json))
         UNION
-        SELECT r.ev_class, pg_describe_object('pg_class'::regclass, o.view, 0)
-          FROM on_it o JOIN pg_depend d ON d.refclassid = 'pg_class'::regclass AND d.refobjid = o.view
-          JOIN pg_rewrite r ON r.oid = d.objid WHERE d.classid = 'pg_rewrite'::regclass AND r.ev_class <> o.view)
-    SELECT string_agg(format('%s depends on %s', pg_describe_object('pg_class'::regclass, view, 0), what), '; '
-                      ORDER BY view::regclass::text, what) FROM on_it"""
+        SELECT CASE WHEN r.rulename = '_RETURN' THEN r.ev_class END,
+               CASE WHEN r.rulename = '_RETURN' THEN pg_describe_object('pg_class'::regclass, r.ev_class, 0)
+                    ELSE pg_describe_object('pg_rewrite'::regclass, r.oid, 0) END,
+               pg_describe_object('pg_class'::regclass, o.rel, 0)
+          FROM on_it o JOIN pg_depend d ON d.refclassid = 'pg_class'::regclass AND d.refobjid = o.rel
+          JOIN pg_rewrite r ON r.oid = d.objid
+         WHERE d.classid = 'pg_rewrite'::regclass AND r.ev_class <> o.rel AND o.rel IS DISTINCT FROM to_regclass($3))
+    SELECT describe, what, coalesce(rel = to_regclass($3), false) FROM on_it ORDER BY describe, what"""
 
 
 def alter(conn, t, why, statement, table=None, columns=()):
     """A change Postgres refuses while a consumer's object depends on it: the reason says what would have changed,
     then Postgres's detail, which names the object (decision 54). Kept in `t["blocked"]` while carry_out goes on, so
     that the stop names every object in the way and one round of work clears it. For a type changed on `columns` of
-    `table` Postgres names one view, and the catalogue gives all."""
+    `table` Postgres names one object, and the catalogue gives all. Says whether the change was made.
+    A drop locks what depends on what it drops before it refuses: a consumer who reads such a view while the run holds
+    the mirror waits for the run, so the run does not wait for the view, which would be a deadlock (story 43)."""
     sql(conn, "SAVEPOINT alter")
+    sql(conn, "SET LOCAL lock_timeout = '50ms'")  # far below the second after which Postgres looks for a deadlock
     try:
         sql(conn, statement)
     except Exception as e:
         details = {k.decode(): v.decode() for k, v in getattr(e, "details", None) or []}
-        # dependent_objects_still_exist, and feature_not_supported for a type a view's column holds
-        if details.get("PG_DIAG_SQLSTATE") not in ("2BP01", "0A000") or "PG_DIAG_MESSAGE_DETAIL" not in details:
+        state = details.get("PG_DIAG_SQLSTATE")
+        # dependent_objects_still_exist, feature_not_supported for a type a view's column holds, lock_not_available
+        if state not in ("2BP01", "0A000", "55P03") or state != "55P03" and "PG_DIAG_MESSAGE_DETAIL" not in details:
             raise
         sql(conn, "ROLLBACK TO SAVEPOINT alter")
+        if state == "55P03":
+            t.setdefault("blocked", []).append(f"{why}, but an object that depends on it was in use, so Postgres did "
+                                               "not name it; the next run does")
+            return False
         detail = details["PG_DIAG_MESSAGE_DETAIL"].replace("\n", "; ")
-        if details["PG_DIAG_SQLSTATE"] == "0A000" and columns:
-            [(views,)] = sql(conn, VIEWS_ON, [table, json.dumps(columns), t["history"]])
-            if not views and t.get("blocked"):  # only the history view, whose drop is stopped already
-                return
-            detail = views or detail
+        if state == "0A000" and columns:
+            found = sql(conn, IN_THE_WAY, [table, json.dumps(columns), t["history"]])
+            if not (named := "; ".join(f"{d} depends on {w}" for d, w, history in found if not history)) and found:
+                return False  # only the history view, whose drop is stopped already with what is in its way
+            detail = named or detail
         t.setdefault("blocked", []).append(f"{why}, but {detail}")
+        return False
+    sql(conn, "SET LOCAL lock_timeout TO DEFAULT")
+    return True
 
 
 def write_log(conn, t, staged, log, names):

@@ -1,10 +1,13 @@
 """The columns of every mirror, kept like rows: `_rowvioli.columns`, its log and its history (spec tests, stage 1)."""
+import concurrent.futures
 import importlib.metadata
 import json
+import time
 
 import psycopg
 import pytest
 
+from conftest import until
 from test_checks import failed
 from test_history import again
 from test_run import apply, definition, erp, ok  # noqa: F401 (erp is a fixture)
@@ -191,6 +194,31 @@ def listen(rv):
 
 def heard(c):
     return [json.loads(n.payload) for n in c.notifies(timeout=1, stop_after=1)]
+
+
+def test_a_run_stopped_by_a_consumers_view_never_waits_for_it_while_holding_the_mirror(erp):  # story 43
+    ok(erp)
+    erp.target("create view public.cities as select city from raw_erp.customers")
+    # a consumer's event trigger holds the run before its drop of the column, with the mirror locked
+    erp.target("create function public.slow() returns event_trigger language plpgsql as $$ begin "
+               "perform pg_sleep(2); end $$; create event trigger slow on ddl_command_start when tag in ('ALTER TABLE') "
+               "execute function public.slow()")
+    erp.source("alter table customers drop column city")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    worker = erp.start("run")
+    until(lambda: erp.target("select 1 from pg_stat_activity where wait_event = 'PgSleep' and query like '%DROP COLUMN%'"))
+    time.sleep(1.3)  # the consumer comes late enough that its own check for a deadlock would find one, at 1 s
+
+    def read():  # holds the view and waits for the mirror
+        with psycopg.connect(erp.target_url, autocommit=True) as c:
+            return c.execute("select count(*) from public.cities").fetchone()
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        consumer = pool.submit(read)
+        worker.communicate(timeout=20)
+        assert consumer.result(timeout=20) == (3,)
+    reason = erp.target("select reason from _rowvioli.runs order by run desc limit 1")[0][0]
+    assert reason.startswith("column city is gone from the source and would leave the mirror raw_erp.customers, but "
+                             "an object that depends on it was in use"), reason
 
 
 def test_a_run_that_changes_columns_notifies_on_commit_and_one_that_fails_does_not(erp):
