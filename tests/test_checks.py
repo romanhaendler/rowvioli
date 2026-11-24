@@ -288,3 +288,23 @@ def test_a_table_without_a_key_is_emptied_the_same_way(erp):
     erp.target("update _rowvioli.tables set requested_at = now()")
     ok(erp)
     assert rows(erp.target, MIRROR) == []
+
+
+@pytest.mark.parametrize("value, said", [('my "secret": value', 'invalid input syntax for type integer: "***"'),
+                                         ("3000000000", 'value "***" is out of range for type integer')])
+def test_a_value_postgres_quotes_in_its_message_stays_out_of_the_reason(erp, value, said):  # decision 54, item 8
+    erp.source("create table texts (k int, n text)")
+    erp.source("insert into texts values (1, %s)", [value])
+    erp.source("create view quoting as select k, n::int as n from texts")
+    apply(erp, definition(erp, '"public.quoting" = {}\n'))
+    reason = failed(erp)  # x is the harness's password, which a reason hides
+    assert reason.endswith(said.replace("x", "***")) and "secret" not in reason and "3000000000" not in reason, reason
+
+
+def test_a_name_postgres_quotes_in_its_message_stays_in_the_reason(erp):
+    ok(erp)
+    erp.target("alter table raw_erp.customers add constraint c check (name <> 'Anna2')")
+    erp.source("update customers set name = 'Anna2' where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    assert reason.endswith('new row for relation "customers" violates check constraint "c"'), reason

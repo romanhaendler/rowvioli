@@ -165,7 +165,7 @@ GRANT SELECT, INSERT ON _rowvioli.columns__log TO worker;
 the schema _rowvioli is ready in the target
 ```
 
-A worker of 0.4.1 refuses version 4 (`the target has schema version 4, this program works with version 3`) and every command of the new version but `init` and `status` refuses version 3, so stop the old workers before `init` and start the new ones after the grants. A target that `init` builds new is of version 4 and prints nothing more than that it is ready. The first run after the upgrade records every table's columns as `found`; a table that was stuck on a missing column or a changed type resolves by itself if it has a change log.
+A worker of 0.4.1 refuses version 4 (`the target has schema version 4, this program works with version 3`) and every command of the new version but `init` and `status` refuses version 3, so stop the old workers before `init` and start the new ones after the grants. A target that `init` builds new is of version 4 and prints nothing more than that it is ready. The first run after the upgrade records every table's columns as `found`, but what it changes, which it records by its cause (`reader`, since the version before recorded none) and notifies; a table that was stuck on a missing column or a changed type resolves by itself if it has a change log.
 
 From 0.1.0, update every worker before applying new tables: a mirror that a new worker creates has `numeric(p,s)` where the source has it, and a worker of 0.1.0 fails on it with `has changed its type from numeric(10,2) to numeric`. Going back to 0.1.0 needs `ALTER TABLE ... ALTER <column> TYPE numeric` on such columns, in the mirror and its change log.
 

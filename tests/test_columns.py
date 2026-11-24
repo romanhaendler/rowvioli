@@ -99,6 +99,40 @@ def test_a_type_widened_by_hand_in_the_mirror_is_followed_in_the_change_log_and_
     replays(erp)
 
 
+def test_a_type_widened_by_hand_stops_naming_a_consumers_view_on_the_history_view(erp):  # stories 40, 43
+    erp.source("create table prices (id int primary key, amount numeric(10,2))")
+    erp.source("insert into prices values (1, 1.50)")
+    apply(erp, definition(erp, '"public.prices" = { key = ["id"] }\n'))
+    ok(erp)
+    erp.target("create view public.amounts as select amount from raw_erp.prices__history")
+    erp.target("alter table raw_erp.prices alter column amount type numeric(12,2)")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    assert reason.startswith("the columns of raw_erp.prices change, but view amounts depends on view "
+                             "raw_erp.prices__history: change or drop that"), reason
+    assert erp.target("select format_type(atttypid, atttypmod) from pg_attribute where attname = 'amount' "
+                      "and attrelid = 'raw_erp.prices__log'::regclass") == [("numeric(10,2)",)]
+    erp.target("drop view public.amounts")  # the way out
+    again(erp)
+    assert erp.target("select format_type(atttypid, atttypmod) from pg_attribute where attname = 'amount' "
+                      "and attrelid = 'raw_erp.prices__log'::regclass") == [("numeric(12,2)",)]
+    replays(erp)
+
+
+def test_a_type_widened_by_hand_stops_at_a_consumers_view_on_the_change_log_with_its_cause(erp):  # story 40
+    erp.source("create table prices (id int primary key, amount numeric(10,2))")
+    erp.source("insert into prices values (1, 1.50)")
+    apply(erp, definition(erp, '"public.prices" = { key = ["id"] }\n'))
+    ok(erp)
+    erp.target("create view public.amounts as select amount from raw_erp.prices__log")
+    erp.target("alter table raw_erp.prices alter column amount type numeric(12,2)")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    assert reason.startswith('"raw_erp"."prices__log" would be widened to follow the mirror, which a person widened, '
+                             'column amount to numeric(12,2), but rule _RETURN on view amounts depends on column '
+                             '"amount"'), reason
+
+
 def test_a_column_a_person_added_to_the_change_log_is_recorded_as_hand_and_not_in_the_mirror(erp):
     ok(erp)
     erp.target("alter table raw_erp.customers__log add column memo text")

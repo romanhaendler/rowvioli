@@ -2,7 +2,7 @@
 
 **Blocked by:** 07, 09
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 **Model:** Opus
 
@@ -44,3 +44,13 @@ Spec: `.scratch/schema-changes/spec.md`; the tickets beside this one; decision 5
 - [ ] The whole suite passes.
 
 ## Comments
+
+Implementer (branch `sc-10`), what is not done or not tested:
+
+- Item 5: the tests of D6, G6 and H3 passed at their first run, since the behaviour was there; none was seen red.
+- Item 10 has no new test, since the ticket asks for none: the path a changed message takes (Arrow's `The string '1.5e400' cannot be represented as decimal256`, which before kept its value) is not run at the seam.
+- Item 4 is tested with a CSV only; a REST source takes the same check in `stage()`. A Postgres source cuts a long name itself, so `tests/test_run.py` keeps its test of that, renamed.
+- Item 3: a log column followed after a widening by hand is altered under the reason `... would be widened for values of the source`, the text the source's widenings have; only a consumer's view on that log column would show it.
+- Item 11, left: the `moved` dicts (the one in `check()` is taken before the proofs, so it is not the same dict, and a helper for two uses saves nothing); the `renamed` test in `load()` and `check()` (their conditions differ, and merging moves code between them); the two stops of `check()` for one rule (merging changes a reason). Done: a literal quoted in one place, `way` and `drop` bound once, `payload`, and `MIGRATIONS` carrying their grants.
+- Item 7 covered `src/`; `tests/test_types.py` still has a comment `# decision 20` meaning the spec's item.
+- Found on the way, not in this ticket: a run reads and deletes the rows of a consumer's child table of a mirror (`CREATE TABLE ... () INHERITS (mirror)`): the diff and the publish read the mirror without `ONLY`, so the child's rows are `D` in the change log and gone (seen in a probe run). `cases.md` G6 says only that a gone column leaves the children.

@@ -9,7 +9,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from rowvioli.connectors import file
 from test_columns_go_and_come import log_replays
 
 CUSTOMERS = [(1, "Anna", 2.5), (2, "Ben", None), (3, "Cleo", 10.0)]
@@ -370,21 +369,23 @@ def test_a_value_a_type_under_columns_does_not_take_names_table_column_and_type_
         "select reason from _rowvioli.tables union all select reason from _rowvioli.runs"))
 
 
-def test_a_value_a_type_under_columns_does_not_take_in_a_later_read_of_a_pattern_is_named_the_same(tmp_path):
-    # among several files of the second read, where DuckDB fails only once batches are read
-    for i in range(file.FILES_PER_READ + 10):
-        (tmp_path / f"o_{i:02}.csv").write_text(f"id;n\n{i};{'secret-value' if i == file.FILES_PER_READ + 5 else i}\n")
-    with pytest.raises(Exception) as e:
-        list(file.read({"path": str(tmp_path)}, "o_*.csv", {"sep": ";", "columns": {"n": "integer"}}))
-    assert str(e.value) == "o_*.csv: column n is not integer in every row; change the value in the file, or its type " \
-                           "under columns"
+def test_a_value_a_type_under_columns_does_not_take_in_a_later_read_of_a_pattern_is_named_the_same(files):
+    # among several files of the second read (50 files are read at once), where DuckDB fails only once batches are read
+    for i in range(60):
+        (files.dir / "files" / f"o_{i:02}.csv").write_text(f"id;n\n{i};{'secret-value' if i == 55 else i}\n")
+    code, answer = load(files, '"o_*.csv" = { sep = ";", columns = { n = "integer" }, target_table = "o" }\n')
+    assert code == 1
+    [(reason,)] = files.target("select reason from _rowvioli.status")
+    assert reason.rstrip(".") == (  # the error crosses Arrow's stream, which ends it with a period
+        "o_*.csv: column n is not integer in every row; change the value in the file, or its type under columns")
 
 
-def test_a_value_a_reader_option_of_duckdb_does_not_take_is_named_without_the_value(tmp_path):
-    (tmp_path / "o.csv").write_text("id;n\n1;secret-value\n")
-    with pytest.raises(Exception) as e:
-        list(file.read({"path": str(tmp_path)}, "o.csv", {"sep": ";", "types": {"n": "INTEGER"}}))
-    assert str(e.value) == "o.csv: a value in the file does not convert to the type its column is read as"
+def test_a_value_a_reader_option_of_duckdb_does_not_take_is_named_without_the_value(files):
+    (files.dir / "files" / "o.csv").write_text("id;n\n1;secret-value\n")
+    code, answer = load(files, '"o.csv" = { sep = ";", column_types = { n = "INTEGER" } }\n')
+    assert code == 1
+    assert files.target("select reason from _rowvioli.status") == [
+        ("o.csv: a value in the file does not convert to the type its column is read as",)]
 
 
 def test_a_json_file_whose_later_rows_differ_from_its_first_arrives_whole(files):
@@ -449,11 +450,29 @@ def test_a_csv_header_with_one_name_twice_arrives_with_the_second_numbered(files
     assert files.target("select * from raw_files.twice") == [("1", "2", "3")]
 
 
-def test_two_names_equal_in_their_first_63_bytes_fail_with_the_cut_name_twice(files):  # cases A20, as it is today
-    (files.dir / "files" / "long.csv").write_text(f"{'c' * 63}x;{'c' * 63}y\n1;2\n")
+@pytest.mark.parametrize("long", ["c" * 64, "ä" * 32])  # bytes, not characters
+def test_A20_a_column_name_longer_than_63_bytes_fails_the_run_and_names_the_column(files, long):
+    (files.dir / "files" / "long.csv").write_text(f"{'d' * 63};{long}\n1;2\n")
     code, answer = load(files, '"long.csv" = {}\n')
     assert code == 1
-    assert f'column "{"c" * 63}" specified more than once' in answer["raw_files.long"]["reason"]
+    assert answer["raw_files.long"]["reason"] == (
+        f"column {long} of the source is longer than 63 bytes, the most Postgres keeps of a name: give it a shorter "
+        "name in the source")
+    assert files.target("select to_regclass('raw_files.long')") == [(None,)]
+    # a name of 63 bytes, also of characters of two bytes, loads whole
+    (files.dir / "files" / "long.csv").write_text(f"{'d' * 63};{'ä' * 31}d\n1;2\n")
+    code, answer = load(files, '"long.csv" = {}\n')
+    assert code == 0, answer
+    assert [c for c, _ in types(files, "long")] == ["d" * 63, "ä" * 31 + "d"]
+
+
+def test_A20_two_names_equal_in_their_first_63_bytes_fail_and_name_both(files):
+    (files.dir / "files" / "long.csv").write_text(f"k;{'c' * 63}y;{'c' * 63}z\n0;1;2\n")
+    code, answer = load(files, '"long.csv" = {}\n')
+    assert code == 1
+    assert answer["raw_files.long"]["reason"] == (
+        f"columns {'c' * 63}y and {'c' * 63}z of the source are equal in their first 63 bytes, the most Postgres "
+        "keeps of a name: give them names in the source that differ there")
 
 
 def test_a_csv_without_a_header_gets_column0_and_up_and_keeps_its_first_line(files):  # cases F8, as it is today

@@ -86,9 +86,18 @@ def test_a_column_a_person_added_to_the_mirror_is_never_dropped_and_stops_the_ru
     erp.target("alter table raw_erp.customers add column memo text")
     erp.target("update raw_erp.customers set memo = 'mine'")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    assert failed(erp).startswith("column memo of the mirror is not in the change log, so it is not known to be "
-                                  "from the source; drop it from the mirror")
+    # the way out keeps the values: a column added to the change log too would leave the mirror and its values with it
+    assert failed(erp) == ("column memo of the mirror is not in the change log, so it is not known to be from the "
+                           "source; drop it from the mirror, after copying its values into a table of your own if "
+                           "they are to be kept: CREATE TABLE <a table of yours> AS SELECT \"customer_no\", \"memo\" "
+                           'FROM "raw_erp"."customers"; ALTER TABLE "raw_erp"."customers" DROP COLUMN "memo"')
     assert erp.target("select distinct memo from raw_erp.customers") == [("mine",)]
+    erp.target('CREATE TABLE public.my_memos AS SELECT "customer_no", "memo" FROM "raw_erp"."customers"; '
+               'ALTER TABLE "raw_erp"."customers" DROP COLUMN "memo"')  # the way out as the reason says it
+    again(erp)
+    assert erp.target("select distinct memo from public.my_memos") == [("mine",)]
+    assert columns(erp) == ["customer_no", "name", "city"]
+    log_replays(erp)
 
 
 def test_a_table_stuck_on_a_column_missing_in_the_source_resolves_with_the_first_run(erp):  # story 45, cases E12
@@ -122,6 +131,43 @@ def test_A6_a_gone_column_a_consumers_view_reads_stops_the_run_naming_the_view_a
     erp.target("drop view reporting.by_city")  # the way out
     again(erp)
     assert columns(erp) == ["customer_no", "name"]
+    log_replays(erp)
+
+
+def test_D6_a_view_on_the_history_view_stops_a_change_of_any_column_and_is_named(erp):  # story 41
+    ok(erp)
+    erp.target("create view public.names as select customer_no, name from raw_erp.customers__history")
+    erp.source("alter table customers drop column city")  # a column the view does not read
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    assert reason.startswith("the columns of raw_erp.customers change, but view names depends on view "
+                             "raw_erp.customers__history: change or drop that"), reason
+    assert columns(erp) == ["customer_no", "name", "city"]
+    erp.target("drop view public.names")  # the way out
+    again(erp)
+    log_replays(erp)
+
+
+def test_G6_a_column_gone_from_a_mirror_that_is_a_parent_leaves_its_children_too(erp):
+    ok(erp)
+    erp.target("create table public.branch () inherits (raw_erp.customers)")
+    erp.source("alter table customers drop column city")
+    again(erp)
+    assert columns(erp, "public.branch") == ["customer_no", "name"]
+    log_replays(erp)
+
+
+def test_H3_several_changes_in_one_run_are_published_together_with_one_record_each(erp):  # story 44
+    ok(erp)
+    erp.source("alter table customers drop column city")
+    erp.source("alter table customers add column phone text")
+    erp.source("alter table customers alter column customer_no type bigint")
+    erp.source("insert into customers values (3000000000, 'Dora', '0228')")
+    loaded_at = again(erp)
+    assert erp.target(LAST) == [("U", "city", False, "source", None), ("U", "customer_no", True, "source", None),
+                                ("I", "phone", True, "source", None)]
+    assert erp.target("select distinct _loaded_at from _rowvioli.columns__log where _run = "
+                      "(select max(run) from _rowvioli.runs)") == [(loaded_at,)]
     log_replays(erp)
 
 

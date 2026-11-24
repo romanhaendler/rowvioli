@@ -5,6 +5,10 @@ shipped ones do the same."""
 import importlib.metadata
 from importlib.metadata import entry_points
 
+# the metadata of an Arrow field whose type the file brings itself (Parquet), not a catalog nor a pin: it can change
+# from one file to the next, so a change of its family stops (decision 54)
+OWN_TYPE = {b"rowvioli:own_type": b"true"}
+
 
 def connector(type, where=""):
     """The connector module registered under `type`. Refuses if none is installed; `where` names the worker."""

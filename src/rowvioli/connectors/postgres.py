@@ -5,7 +5,7 @@ import pyarrow as pa
 from ..contract import known_options, version
 from ..target import quote
 
-# the reader's version, so that columns another one delivers are recorded as by = reader (decision 11)
+# the reader's version, so that columns another one delivers are recorded as by = reader (decision 54)
 driver_version = version("adbc-driver-postgresql")
 
 
@@ -33,12 +33,11 @@ def read(connection, table, options):
 
 def _cast(table, column, field):
     """A numeric's text as a decimal. Arrow's message for one that is none (`The string 'nan' is not a valid
-    decimal256 number`) holds the value, which would end up in the status view and the log: the column instead."""
+    decimal256 number`) holds the value, which would end up in the status view and the log: the column instead, for
+    any failed cast, so that no wording of Arrow's can show a value."""
     try:
         return column.storage.cast(field.type)
-    except pa.ArrowInvalid as e:
-        if "is not a valid" not in str(e):
-            raise
+    except pa.ArrowInvalid:
         raise Exception(f"{table}: column {field.name} has a value no decimal holds, such as NaN or Infinity; cast it "
                         "in a view of the source") from None
 

@@ -36,10 +36,11 @@ def test_a_foreign_connector_installed_through_the_entry_point_loads_a_table(erp
     assert rows(erp.target, "select * from raw_lab.numbers") == [(7,), (8,)]
 
 
-def test_a_foreign_connector_gets_a_list_named_columns_as_written(erp):
-    lab(erp, 'columns = ["ab", "cd"]')
+@pytest.mark.parametrize("given, delivered", [('["ab", "cd"]', [("ab",), ("cd",)]), ("[7, 8, 9]", [(7,), (8,), (9,)])])
+def test_a_foreign_connector_gets_a_list_named_columns_as_written(erp, given, delivered):
+    lab(erp, f"columns = {given}")
     ok(erp, "lab")
-    assert rows(erp.target, "select * from raw_lab.numbers") == [("ab",), ("cd",)]
+    assert rows(erp.target, "select * from raw_lab.numbers") == delivered
 
 
 @pytest.mark.parametrize("version", ["1.2.3", None])

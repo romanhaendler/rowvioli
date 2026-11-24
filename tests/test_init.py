@@ -1,5 +1,7 @@
+import json
 import re
 
+import psycopg
 import pytest
 
 from test_run import erp  # noqa: F401 (a fixture)
@@ -81,6 +83,30 @@ def test_init_from_version_3_prints_the_grants_a_worker_needs_and_they_are_enoug
         r = erp.run("run", env=url)
         assert r.returncode == 0, r.stdout + r.stderr
     assert erp.target("select mirror from _rowvioli.columns where \"column\" = 'city'") == [(False,)]
+
+
+@pytest.mark.parametrize("change", ["drop column city", "alter column city type integer using length(city)"])
+def test_the_first_run_after_the_upgrade_records_what_it_changed_by_its_cause_and_notifies(erp, change):  # story 45
+    assert erp.run("run").returncode == 0
+    # as the released version leaves a target: no columns table, no comment on _op
+    erp.target("comment on column raw_erp.customers__log._op is null")
+    version_3(erp)
+    assert erp.run("init").returncode == 0
+    listener = psycopg.connect(erp.target_url, autocommit=True)
+    listener.execute("listen rowvioli_schema")
+    erp.source(f"alter table customers {change}")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert erp.run("run").returncode == 0
+    [(run,)] = erp.target("select max(run) from _rowvioli.runs")
+    # the program before recorded no versions, so what the run changed is the reader's (decision 54)
+    recorded = {c: (mirror, by) for c, mirror, by in erp.target(
+        'select "column", mirror, "by" from _rowvioli.columns__log where _run = %s', [run])}
+    assert recorded == {"customer_no": (True, "found"), "name": (True, "found"),
+                        **({"city": (False, "reader")} if change.startswith("drop") else
+                           {"city": (True, "reader"), f"city__{run}": (False, "reader")})}
+    assert [json.loads(n.payload) for n in listener.notifies(timeout=1, stop_after=1)] == [
+        {"schema": "raw_erp", "table": "customers", "run": run}]
+    listener.close()
 
 
 def test_init_on_an_empty_target_prints_only_that_it_is_ready(rv):

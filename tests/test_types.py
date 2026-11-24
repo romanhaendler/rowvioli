@@ -159,7 +159,7 @@ def test_a_table_stuck_on_a_changed_type_resolves_with_the_first_run(erp):  # st
                                           ("real", "double precision")])
 def test_a_type_of_any_family_widened_by_hand_in_the_mirror_is_followed_in_the_change_log(erp, before, wide):
     amounts(erp, before, "(1, '1')" if before != "date" else "(1, '2024-01-01')")
-    erp.target(f"alter table raw_erp.amounts alter a type {wide}")  # decision 20
+    erp.target(f"alter table raw_erp.amounts alter a type {wide}")  # by hand, within its family
     again(erp)
     assert types(erp, "a") == [wide, wide]
     assert erp.target(RECORD, ["a"]) == [(wide, before, "hand")]
@@ -258,6 +258,18 @@ def test_F4_a_guessed_type_that_flips_to_another_family_stops_with_the_hint_to_p
     assert files.target("select n from raw_files.counts order by id") == [(42,), (43,)]
 
 
+def test_F4_a_parquet_column_that_flips_to_json_stops_with_the_hint_to_pin_it_as_well(files):
+    parquet(files, [42, 43], pa.int64())
+    assert load(files, COUNTS)[0] == 0
+    parquet(files, ["42", '{"n": 43}'], pa.json_())  # Parquet's JSON, a type the file brings itself too
+    code, answer = load(files, COUNTS)
+    assert code == 1
+    assert answer["raw_files.counts"]["reason"].startswith(
+        "column n has changed its type from bigint to jsonb; a source without a catalog guesses its types, so pin it "
+        "under columns"), answer
+    assert files.target("select n from raw_files.counts order by id") == [(42,), (43,)]
+
+
 def test_F4_a_pin_taken_out_of_a_parquet_column_stops_and_the_drop_it_names_brings_the_file_s_type(files):
     # Parquet's own types can flip, so the run cannot tell a pin taken out; the drop is the way to the file's type
     parquet(files, [42, 43], pa.int64())
@@ -271,6 +283,17 @@ def test_F4_a_pin_taken_out_of_a_parquet_column_stops_and_the_drop_it_names_brin
     run = max_run(files)
     assert files.target(f"select n__{run} from raw_files.counts__log where _run < {run} order by id") == [
         ("42",), ("43",)]
+    log_replays(files, "raw_files.counts")
+
+
+def test_a_pin_taken_out_of_a_csv_column_read_by_a_pattern_without_an_extension_goes_back_to_text(files):
+    (files.dir / "files" / "counts_1.csv").write_text("id;n\n1;42\n2;7\n")
+    table = '"counts_*" = {{ key = ["id"], sep = ";", target_table = "counts"{} }}\n'
+    assert load(files, table.format(', columns = { n = "integer" }'))[0] == 0
+    code, answer = load(files, table.format(""))
+    assert code == 0, answer
+    assert types(files, "n", "raw_files.counts") == ["text", "text"]
+    assert files.target(RECORD, ["n"]) == [("text", "text", "definition")]
     log_replays(files, "raw_files.counts")
 
 

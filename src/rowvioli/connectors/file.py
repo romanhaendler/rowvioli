@@ -17,10 +17,10 @@ from pathlib import Path
 import duckdb
 import pyarrow as pa
 
-from ..contract import version
+from ..contract import OWN_TYPE, version
 from ..target import quote
 
-# the reader's version, so that columns another one delivers are recorded as by = reader (decision 11)
+# the reader's version, so that columns another one delivers are recorded as by = reader (decision 54)
 driver_version = version("duckdb")
 
 READERS = {".csv": "read_csv", ".xlsx": "read_xlsx", ".parquet": "read_parquet", ".json": "read_json",
@@ -107,9 +107,8 @@ def read(connection, table, options):
 
     def uncast(e):
         """DuckDB's message for a value a cast does not take holds the value, which would end up in the status view
-        and the log: the reason names the column instead, found by trying each cast. Any other error as it is."""
-        if isinstance(e, OSError) and not str(e).startswith("Conversion Error"):
-            return e
+        and the log: the reason names the column instead, found by trying each cast whatever the message says. Any
+        other error as it is."""
         for group in groups:
             part = rows(group, cast=False)
             for c, t in columns.items():
@@ -117,6 +116,8 @@ def read(connection, table, options):
                         .fetchall():
                     return Exception(f"{table}: column {c} is not {t} in every row; change the value in the file, or "
                                      "its type under columns")
+        if isinstance(e, OSError) and not str(e).startswith("Conversion Error"):  # not a cast's, such as a lost file
+            return e
         return Exception(f"{table}: a value in the file does not convert to the type its column is read as")
     # a few files per read, one read after the other: DuckDB opened up to 600 files of one list at once, and a
     # union of more than 333 files is too deep for it
@@ -128,8 +129,10 @@ def read(connection, table, options):
         raise uncast(e) from None
     # DuckDB hands JSON over as text; as Arrow's json it becomes jsonb. Not by arrow_lossless_conversion: that
     # turns a hugeint into bytes and a boolean into a number
-    schema = pa.schema([f.with_type(pa.json_()) if str(t) == "JSON" else f
-                        for f, t in zip(batches.schema, result.types)])
+    fields = [f.with_type(pa.json_()) if str(t) == "JSON" else f for f, t in zip(batches.schema, result.types)]
+    # a Parquet file's JSON is its own type too
+    schema = pa.schema([f.with_metadata(OWN_TYPE) if reader == "read_parquet" and f.name not in columns else f
+                        for f in fields])
 
     def keep_open():  # the reader needs the connection until the last batch
         try:
