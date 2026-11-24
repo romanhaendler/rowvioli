@@ -10,6 +10,7 @@ from test_apply import CRM, ENV, ERP, NO_TARGET, check
     ('parallel = 4', 'parallel = 4\ntimzone = "UTC"', "timezone"),
     ('"dbo.Notes"     = {}', '"dbo.Notes"     = { targt_table = "n" }', "target_table"),
     ('"dbo.Notes"     = {}', '"dbo.Notes"     = { max_agee = "5m" }', "max_age"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { rename = { a = "b" } }', "renamed"),
 ])
 def test_a_setting_one_or_two_edits_off_fails_apply_check_and_names_the_setting(rv, old, new, setting):
     r = check(rv, {"erp.toml": ERP.replace(old, new)})
@@ -21,6 +22,18 @@ def test_a_setting_one_or_two_edits_off_fails_apply_check_and_names_the_setting(
 def test_a_plural_of_a_setting_is_a_typo(rv, typo):
     r = check(rv, {"erp.toml": ERP.replace('"dbo.Notes"     = {}', f'"dbo.Notes"     = {{ {typo} }}')})
     assert r.returncode != 0 and "did you mean" in r.stderr, r.stderr
+
+
+@pytest.mark.parametrize("old, new, said", [
+    ('parallel = 4', 'parallel = 4\nrenamed = { a = "b" }', "renamed belongs to a table, not to the source"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { renamed = "a" }', "renamed must be a table"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { renamed = { a = 1 } }', 'renamed must be a table of new = "old"'),
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { renamed = { a = "c", b = "c" } }', "each old one once"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { renamed = { a = "c\\u0007" } }', "renamed c\\x07 holds a control"),
+])
+def test_renamed_is_a_table_setting_of_new_and_old_column_names(rv, old, new, said):
+    r = check(rv, {"erp.toml": ERP.replace(old, new)})
+    assert r.returncode != 0 and said in r.stderr, r.stderr
 
 
 def test_a_short_option_is_no_typo(rv):
