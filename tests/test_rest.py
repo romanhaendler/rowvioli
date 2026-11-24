@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 from rowvioli.connectors import rest
+from test_columns_go_and_come import columns, log_replays
 
 TOKEN = "Marke-0815-geheim"
 READINGS = [
@@ -221,15 +222,17 @@ def test_a_type_mismatch_names_table_column_and_type_but_not_the_value(api):
     assert "abc" not in reason(api) + r.stdout + r.stderr
 
 
-def test_a_column_absent_from_every_row_fails_the_run_naming_it_and_keeps_the_mirror(api):
-    load(api, 'a = { key = ["station"], path = "/readings", columns = { station = "text" } }')
-    before = api.target("select * from raw_weather.a")
-    api.target("update _rowvioli.tables set options = jsonb_set(options, '{path}', '\"/renamed\"'), "
-               "requested_at = now()")
+def test_F1_a_column_absent_from_every_row_of_an_answer_or_left_out_of_columns_is_empty_and_stays(api):
+    load(api, 'a = { key = ["station"], path = "/readings", columns = { station = "text", n = "int8" } }')
+    api.target("update _rowvioli.tables set requested_at = now()")
     r, _ = load(api, 'a = { key = ["station"], path = "/renamed", columns = { station = "text", n = "int8" } }')
-    assert r.returncode == 1
-    assert "n" in reason(api) and "absent" in reason(api)
-    assert api.target("select * from raw_weather.a") == before
+    assert r.returncode == 0, r.stdout
+    assert api.target("select station, n from raw_weather.a order by 1") == [("a", None), ("b", None)]
+    api.target("update _rowvioli.tables set requested_at = now()")
+    r, _ = load(api, 'a = { key = ["station"], path = "/renamed", columns = { station = "text" } }')
+    assert r.returncode == 0, r.stdout
+    assert columns(api, "raw_weather.a") == ["station", "n"]
+    log_replays(api, "raw_weather.a")
 
 
 def test_a_column_present_as_null_stays_null(api):

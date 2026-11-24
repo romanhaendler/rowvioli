@@ -73,10 +73,7 @@ def read(connection, table, options):
         if rows == previous:  # an API that ignores the page would otherwise be asked until max_seconds
             raise Exception(f"{table}: {path} answered page {page} like page {page - 1}, so it does not page")
         previous = rows
-        for name in columns:
-            if rows and not any(name in r for r in rows):
-                raise Exception(f"{table}: column {name} is absent from every row of the answer")
-        arrays = []
+        arrays = []  # a column absent from every row is empty, as an API that leaves out null fields means it
         for name, type in columns.items():
             try:
                 values = [r.get(name) for r in rows]
