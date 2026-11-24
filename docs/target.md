@@ -257,7 +257,7 @@ SELECT classid AS source, count(*) FROM pg_locks
    AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
  GROUP BY classid;
 
--- 3. If the total is below max_running: take the lock of a table that never loaded, else of
+-- 3. If the total is below max_running: take the lock of a table never tried, else of
 --    the most overdue table, whose source is below its parallel, and count the attempt.
 SELECT pg_try_advisory_lock(:source, :table);
 UPDATE _rowvioli.tables SET attempted_at = now(), attempts = attempts + 1, reason = NULL WHERE id = :table;

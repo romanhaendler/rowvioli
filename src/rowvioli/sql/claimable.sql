@@ -1,4 +1,4 @@
--- The claimable tables, the never loaded first, then the most overdue: due, not loading, and within `parallel` per
+-- The claimable tables, the never tried first, then the most overdue: due, not loading, and within `parallel` per
 -- source and `max_running` in total, counted from the table locks held in this database (docs/target.md "How
 -- Postgres counts"). Asked by the worker to know how many run processes to start, and by the claim under the counting
 -- lock (decision 34). $1 and $2 narrow it to a source and a source table; '' means all.
@@ -8,9 +8,10 @@ WITH held AS (
        AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())),
 due AS (
     SELECT st.id, st.source_id, src.parallel - (SELECT count(*) FROM held h WHERE h.source_id = st.source_id) AS free,
-           -- most overdue: the time since due_at measured in max_ages; none for a table never loaded, which would
-           -- count as 0 or little against tables overdue by many max_ages and wait behind them (decision 55)
-           CASE WHEN st.loaded_at IS NOT NULL
+           -- most overdue: the time since due_at measured in max_ages; none for a table never tried, which would
+           -- count as 0 or little against tables overdue by many max_ages and wait behind them (decision 55). One that
+           -- failed takes its turn: a table that always fails would otherwise go before every other after each pause
+           CASE WHEN st.attempted_at IS NOT NULL
                 THEN extract(epoch FROM now() - st.due_at) / extract(epoch FROM st.max_age) END AS overdue
       FROM _rowvioli.status st JOIN _rowvioli.sources src ON src.id = st.source_id
      WHERE st.status <> 'loading' AND st.due_at <= now()

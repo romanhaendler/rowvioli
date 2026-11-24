@@ -39,6 +39,21 @@ def test_a_table_that_never_loaded_goes_first_and_then_the_most_overdue(erp):  #
     assert sorted(claims[:2]) == ["public.fresh", "public.later"] and claims[2:] == ["public.customers", "public.notes"]
 
 
+def test_a_table_that_failed_without_ever_loading_waits_its_turn_behind_the_overdue_ones(erp):
+    # else tables that always fail, due again after each pause, would take every slot before a table that loads
+    tables = '"public.customers" = { key = ["customer_no"] }\n"public.gone" = { key = ["id"] }\n'
+    apply(erp, definition(erp, tables).replace('max_age = "1h"', 'max_age = "1h"\nparallel = 1'))
+    run(erp)
+    assert facts(erp, "public.gone")[:2] == ("failed", 1)
+    erp.target("update _rowvioli.tables set loaded_at = now() - interval '10 hours', attempted_at = now() - interval "
+               "'10 hours' where source_table = 'public.customers'")
+    back(erp, 2)  # past its pause of a minute
+    run(erp)
+    claims = [t for (t,) in erp.target('select t.source_table from _rowvioli.runs r join _rowvioli.tables t '
+                                       'on t.id = r."table" order by run')][2:]
+    assert claims == ["public.customers", "public.gone"]
+
+
 def test_a_failed_run_pauses_one_minute_doubling_never_beyond_max_age_then_loads(erp):
     apply(erp, definition(erp, '"public.gone" = { key = ["id"] }\n"public.lost" = { key = ["id"], max_age = "3m" }\n'))
     m = timedelta(minutes=1)

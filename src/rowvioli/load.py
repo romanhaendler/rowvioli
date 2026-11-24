@@ -41,7 +41,7 @@ PRIMARY_KEY = """SELECT a.attname FROM pg_index i, unnest(i.indkey) WITH ORDINAL
 
 def claim(conn, worker, source, table):
     """In one transaction under the counting lock (docs/target.md "How Postgres counts"): takes the table lock of a
-    claimable table in scope never loaded, else of the most overdue, counts the attempt and opens the run's row with
+    claimable table in scope never tried, else of the most overdue, counts the attempt and opens the run's row with
     the hash of the definition. Returns the run's facts, as the definition says at this moment, or None."""
     sql(conn, "BEGIN")
     try:

@@ -65,7 +65,7 @@ due_at =  at once                       if never attempted
 
 - **Load times.** A load time is a request the clock makes. Everything said about a request under [Loading now](#loading-now) holds for it.
 
-- **Order.** A worker takes a table that never loaded first, then the table that is the most overdue measured against its own `max_age`. A five-minute table that is two minutes late overtakes hourly tables that are ten minutes late, and a new table does not wait behind tables that stay overdue: it is due the moment it comes and would count as hardly late at all.
+- **Order.** A worker takes a table that was never tried (`new`) first, then the table that is the most overdue measured against its own `max_age`. A five-minute table that is two minutes late overtakes hourly tables that are ten minutes late, and a new table does not wait behind tables that stay overdue: it is due the moment it comes and would count as hardly late at all. Once tried, a table that failed takes its turn by how overdue it is, so tables that always fail cannot take every slot.
 - **Retry.** After a run that did not succeed, the pause is one minute, then 2, 4, 8 minutes and so on, but never longer than `max_age`. A success resets it. A nightly table that fails at 02:00 is tried again at 02:01, 02:03, 02:07, 02:15, 02:31, 03:03 and so on.
 - **A crash needs no bookkeeping.** The attempt was counted when the table was claimed and the success never came. The pause follows from that. A crashed worker and a failed check go through the same formula.
 - **A changed `max_age`, `at` or `timezone` takes effect at once**, because nothing derived is stored.
