@@ -303,6 +303,8 @@ Drop the column, and the next run adds it with the new type; its values come fro
 
 **A change log that was changed by hand.** A column a person drops from the change log while the mirror keeps it cannot be told from a person's own column: the next run stops with `is not in the change log`, and the way out is the same, the drop from the mirror. The next run records it `by = hand`. Its values in the change log are gone.
 
+**A table of one's own that inherits from a mirror or a change log** (`CREATE TABLE ... () INHERITS (...)`) keeps its rows. A run reads, compares, counts and deletes only the rows of the mirror itself, and the history view reads only those of the change log (`ONLY`), so the child's rows are never `D` rows and never count towards `max_delete_share`. A column that leaves the mirror, a rename and a widening reach the child too: Postgres alters a child with its parent. A history view built before this version reads the child of a change log until a run builds the view anew.
+
 ## Workers
 
 A worker is stateless. It brings three things: its connectors, the address of the target and a key to decrypt connections. Everything else comes from the target. Scaling means starting another worker, and a crash loses nothing because nothing was kept in the worker.

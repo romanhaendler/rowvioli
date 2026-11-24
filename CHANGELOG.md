@@ -39,6 +39,7 @@ Fixed:
 - A column name longer than 63 bytes from a file or REST source fails the run before anything is written and names the column, and two names equal in their first 63 bytes name both. Before, the driver's message did.
 - A reason no longer shows a value of the source: a value a type under `columns` does not take names the file, the column and the type instead of DuckDB's message with the value; a `numeric` that no decimal holds from the `postgres` connector names its column; a value that Postgres quotes in its message is written `"***"`. An ODBC driver's message is not covered (docs/open-points.md).
 - An unconstrained `numeric` far beyond 38 digits before the point fails the run with the reason of more than 38 digits. Before, Arrow's cast wrapped it without an error, and `1.5e400` arrived as `0` with the run `ok` (in 0.4.1 too).
+- A consumer's table that inherits from a mirror keeps its rows. Before, a run read them as the mirror's, deleted them as `D` rows and counted them towards `max_delete_share` (in 0.4.1 too). The history view reads only the change log's own rows.
 
 ## 0.4.1 (2026-11-23)
 

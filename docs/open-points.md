@@ -14,6 +14,8 @@ Closed by decision 54: a REST column that is absent from every row of a page, an
 
 Closed after the shakedown before the merge of schema changes: a primary key that a person changed by hand before the upgrade is no longer taken for a change of key on the first run after it; the run tells the two by the definition of the table's last successful run or by the change log, and asks where neither tells ([A key](loading.md#columns)).
 
+Closed by decision 55: a consumer's table that inherits from a mirror keeps its rows ([What a person does by hand](loading.md#what-a-person-does-by-hand)).
+
 ## Left open
 
 
@@ -75,7 +77,6 @@ Unchanged from the first round:
 - **A JSON file is read twice**, once for its columns and once for its rows; so is every file of a pattern of JSON files.
 - **A REST field whose own name contains a dot cannot be named in `rows`**, and `apply` does not check `rows`: a value that is not text fails at the run.
 - **The pooler check has holes.** A control connection behind a pooler in transaction mode is caught by comparing `pg_backend_pid()` in two transactions. An idle pooler hands out the same server connection and passes it; a busy one was caught in 84 of 100 checks (PgBouncer 1.26.1, eight busy neighbours; [measurements](measurements.md#14-the-pooler-check-behind-pgbouncer-in-transaction-mode)). Session mode is the requirement, the check a net.
-- **A consumer's table made a child of a mirror (`CREATE TABLE ... () INHERITS (mirror)`) loses its rows on the next run.** The comparison and the publishing read and delete the mirror without `ONLY`, so the child's rows count as rows the source no longer has: they become `D` rows of the change log, are deleted from the child, and count towards `max_delete_share`. 0.4.1 does the same. Rows of one's own belong in a table of one's own; a column the source drops still leaves the children too (`.scratch/schema-changes/cases.md` G6).
 - **Tables without a key** are replaced as a whole on every run, have no change log, and bloat until autovacuum has run.
 - **Advisory locks share one number space per database.** Another application using two-key advisory locks in the same database could collide.
 - **An idle worker keeps one connection to the target open**, with which it asks whether something is claimable.

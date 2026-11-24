@@ -308,3 +308,42 @@ def test_a_name_postgres_quotes_in_its_message_stays_in_the_reason(erp):
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
     assert reason.endswith('new row for relation "customers" violates check constraint "c"'), reason
+
+
+CHILD = "select * from public.branch order by customer_no"
+BRANCH = ("create table public.branch () inherits (raw_erp.customers);"
+          "insert into public.branch values (7, 'Gus', 'Ulm'), (8, 'Hal', 'Ulm'), (9, 'Ida', 'Ulm'), (10, 'Jo', 'Ulm')")
+
+
+def test_a_consumers_table_that_inherits_from_the_mirror_keeps_its_rows_and_is_not_read_as_the_mirror(erp):
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], log = false }\n'))
+    ok(erp)
+    erp.target(BRANCH)
+    branch = erp.target(CHILD)
+    apply(erp, definition(erp))  # the change log begins with the mirror's rows, not the child's
+    erp.source("update customers set city = 'Köln' where customer_no = 1")
+    assert run(erp, "erp")[1]["tables"]["raw_erp.customers"] == {"status": "ok", "inserted": 0, "updated": 1,
+                                                                 "deleted": 0}
+    erp.source("update customers set city = 'Bonn' where customer_no = 1")
+    assert run(erp, "erp")[1]["tables"]["raw_erp.customers"] == {"status": "ok", "inserted": 0, "updated": 1,
+                                                                 "deleted": 0}
+    assert erp.target(CHILD) == branch
+    assert rows(erp.target, "select customer_no from only raw_erp.customers") == [(1,), (2,), (3,)]
+    assert erp.target("select _op, customer_no from raw_erp.customers__log order by _run, customer_no") == [
+        ("I", 1), ("I", 2), ("I", 3), ("U", 1)]
+
+
+def test_a_consumers_table_that_inherits_from_the_mirror_keeps_its_rows_when_the_key_changes(erp):
+    ok(erp)
+    erp.target(BRANCH + ";create table public.notes () inherits (raw_erp.customers__log);"
+               "insert into public.notes values (0, 'I', now(), 7, 'Gus', 'Ulm')")
+    branch = erp.target(CHILD)
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no", "name"] }\n'))
+    assert run(erp, "erp")[1]["tables"]["raw_erp.customers"] == {"status": "ok", "inserted": 3, "updated": 0,
+                                                                 "deleted": 3}
+    assert erp.target(CHILD) == branch
+    assert erp.target("select count(*) from only raw_erp.customers__log "
+                      "where _run = (select max(run) from _rowvioli.runs)") == [(6,)]
+    # the history view reads the change log, not a consumer's table that inherits from it
+    assert rows(erp.target, "select customer_no from raw_erp.customers__history where _valid_to is null") == [
+        (1,), (2,), (3,)]

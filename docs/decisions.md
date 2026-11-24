@@ -20,6 +20,8 @@ The first idea was a very fast Rust program. The discussion showed that speed wa
 
 ## 2. Compare in the target, by row comparison
 
+> **Changed by decision 55.** The comparison and publishing read and write the rows of the mirror alone (`ONLY`), never those of a table that inherits from it.
+
 **Decision.** Every run writes the complete source table into a staging table in the target. Postgres finds the differences with a join and `ROW(...) IS DISTINCT FROM ROW(...)`.
 
 **Why.** No hash, no canonical text form of values, no type normalisation in the program. The comparison happens in the target types, where it is exact. The program stays a pipe.
@@ -821,10 +823,11 @@ Smaller departures of the build: the notification is not sent for a first fill t
 **Decision.** The owner had all of it fixed (ticket 12 of schema changes, 2026-11-24). Where it changes an earlier decision, that decision says so.
 
 - **A numeric is never stored as another value** (decision 49). An unconstrained `numeric` with more digits before the point than a decimal holds fails the run and names the column, with the reason of more than 38 digits; Arrow's cast had wrapped such a value without an error, and `1.5e400` arrived as `0` with the run `ok`.
+- **A table that inherits from a mirror keeps its rows** (decision 2). Every statement that reads, counts or deletes the rows of a mirror, and the first fill of a change log, names the mirror with `ONLY`, and the history view reads its change log with `ONLY`. A consumer's child table was read as part of the mirror: its rows became `D` rows, were deleted and counted towards `max_delete_share`. What alters the mirror's columns (a column that goes, a rename, a widening, a new column) still reaches the child, since Postgres keeps a child's columns those of its parent.
 
 **Why.** Each was a fault of a promise already made: the value as the source has it.
 
-**Evidence.** `tests/test_run_mistakes.py`.
+**Evidence.** `tests/test_run_mistakes.py`, `test_checks.py`.
 
 ## Corrections after the prototype
 

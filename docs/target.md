@@ -190,14 +190,14 @@ Staging table and mirror sit next to each other in the target. One query finds t
 ```sql
 -- deleted: in the mirror, no longer in the staging table
 SELECT 'D', m.customer_no, m.name, m.city
-FROM raw_erp.customers m
+FROM ONLY raw_erp.customers m
 WHERE NOT EXISTS (SELECT 1 FROM stage s WHERE s.customer_no = m.customer_no)
 
 UNION ALL
 
 -- inserted or updated: in the staging table, missing or different in the mirror
 SELECT CASE WHEN m.customer_no IS NULL THEN 'I' ELSE 'U' END, s.customer_no, s.name, s.city
-FROM stage s LEFT JOIN raw_erp.customers m ON m.customer_no = s.customer_no
+FROM stage s LEFT JOIN ONLY raw_erp.customers m ON m.customer_no = s.customer_no
 WHERE m.customer_no IS NULL
    OR ROW(s.customer_no, s.name, s.city) IS DISTINCT FROM ROW(m.customer_no, m.name, m.city);
 ```
@@ -206,6 +206,7 @@ WHERE m.customer_no IS NULL
 - **Columns are named explicitly.** `ROW(...)` compares by position. After a column has been added, the order in mirror and staging table can differ, so the program generates the column lists by name. `ROW(s.*)` would be wrong.
 - **One pass.** Postgres reads both tables once and joins them on the key. The cost grows linearly with the number of rows.
 - **Composite keys** only add columns to the join condition.
+- **`ONLY`** reads and deletes the rows of the mirror itself, never those of a table of a consumer's that inherits from it.
 - **Without a key** there is no comparison and no change log. The transaction deletes all rows of the mirror and inserts the staging table. Consumers never see an empty table in that case either. The run counts the rows written as inserted and the rows that were in the mirror as deleted.
 
 The comparison is safe although it runs before the transaction: as long as the run holds the table lock, no other run changes the mirror.
@@ -216,7 +217,7 @@ Publishing itself:
 BEGIN;
 INSERT INTO raw_erp.customers__log (_run, _loaded_at, _op, customer_no, name, city)
 SELECT :run, now(), _op, customer_no, name, city FROM diff;                 -- unless log = false
-DELETE FROM raw_erp.customers m USING diff d
+DELETE FROM ONLY raw_erp.customers m USING diff d
  WHERE d._op IN ('D','U') AND d.customer_no = m.customer_no;
 INSERT INTO raw_erp.customers SELECT customer_no, name, city FROM diff WHERE _op IN ('I','U');
 UPDATE _rowvioli.tables SET loaded_at = now(), attempts = 0 WHERE id = :table;

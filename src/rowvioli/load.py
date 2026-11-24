@@ -266,7 +266,7 @@ def before_the_record(conn, t, primary_key, key, log_columns, renamed):
     defined, primary = ([renamed.get(c, c) for c in k] for k in (key, primary_key))  # the change log's names
     fits = [bool(k) and set(k) <= dict(log_columns).keys() and not sql(conn, f"""
         SELECT 1 FROM (SELECT _op, _loaded_at, lag(_op) OVER w AS before, lag(_loaded_at) OVER w AS at
-                       FROM {t['log_table']} WINDOW w AS (PARTITION BY {', '.join(quote(c) for c in k)}
+                       FROM ONLY {t['log_table']} WINDOW w AS (PARTITION BY {', '.join(quote(c) for c in k)}
                                                           ORDER BY _loaded_at)) l
          WHERE at = _loaded_at OR (_op = 'I') <> (before IS NULL OR before = 'D') LIMIT 1""") for k in (defined, primary)]
     if fits[0] != fits[1]:
@@ -301,7 +301,7 @@ def proven(conn, t, mirror, staged, log_columns, renamed):
         *(", ".join(f"{a}.{quote(n)}" for n in other) for a in "ms")) if other else "")
     numbers = ", ".join(f"count(*) FILTER (WHERE m.{quote(old)} IS NOT DISTINCT FROM s.{quote(new)}), "
                         f"count(DISTINCT m.{quote(old)})" for old, new in pairs)
-    [(rows, *found)] = sql(conn, f"SELECT count(*), {numbers} FROM {t['mirror']} m JOIN _stage s ON {on} {unchanged}")
+    [(rows, *found)] = sql(conn, f"SELECT count(*), {numbers} FROM ONLY {t['mirror']} m JOIN _stage s ON {on} {unchanged}")
     proofs = [(old, new, equal, values) for (old, new), equal, values in zip(pairs, found[::2], found[1::2])
               if rows >= PROOF_ROWS and equal == rows and values >= PROOF_VALUES]
     return {new: (old, f"proven by the data: {rows} rows unchanged otherwise, {equal} of them equal, {values} "
@@ -386,7 +386,7 @@ def misfits(conn, columns):
 def check_delete_share(conn, t, rows_read, counts):
     """After step 5: a broken source must not empty the mirror in a perfectly consistent way (decision 18).
     Without a key the shrinkage counts."""
-    before = sql(conn, f"SELECT count(*) FROM {t['mirror']}")[0][0]
+    before = sql(conn, f"SELECT count(*) FROM ONLY {t['mirror']}")[0][0]
     gone = counts["deleted"] if counts else before - rows_read
     if before and gone / before > t["max_delete_share"]:
         raise Exception(f"{round(100 * gone / before)} % of the rows would be deleted")
@@ -438,7 +438,7 @@ def stage(conn, t):
         rows_read = c.adbc_ingest("_stage", without_nul(batches), mode="append", temporary=True)
     # zero rows protect a mirror that has rows; a first load or an empty mirror publishes them
     if rows_read == 0 and t["max_delete_share"] < 1 and sql(conn, "SELECT to_regclass($1)", [t["mirror"]])[0][0] and \
-            sql(conn, f"SELECT 1 FROM {t['mirror']} LIMIT 1"):
+            sql(conn, f"SELECT 1 FROM ONLY {t['mirror']} LIMIT 1"):
         raise Exception("the source delivered zero rows; max_delete_share = 1.0 allows an empty table")
     # json has no equality, so the comparison could not run; the driver writes Arrow's json only as json
     jsonb = {"json": "jsonb", "json[]": "jsonb[]"}
@@ -491,15 +491,15 @@ def diff(conn, t, staged, mirror, plan):
     first = quote(read.get(t["key"][0], t["key"][0]))
     on = " AND ".join(f"s.{quote(k)} = m.{quote(read.get(k, k))}" for k in t["key"])
     if not mirror or plan["key"].get("by") == "definition":  # under another key: every old row goes, every new comes
-        old = f"SELECT 'D'::text, {m} FROM {t['mirror']} m UNION ALL " if mirror else ""
+        old = f"SELECT 'D'::text, {m} FROM ONLY {t['mirror']} m UNION ALL " if mirror else ""
         sql(conn, f"CREATE TEMP TABLE _diff (_op, {', '.join(quote(c) for c, _ in columns)}) AS "
                   f"{old}SELECT 'I'::text, {s} FROM _stage s")
     else:
         sql(conn, f"""CREATE TEMP TABLE _diff (_op, {', '.join(quote(c) for c, _ in columns)}) AS
-            SELECT 'D'::text AS _op, {m} FROM {t['mirror']} m WHERE NOT EXISTS (SELECT FROM _stage s WHERE {on})
+            SELECT 'D'::text AS _op, {m} FROM ONLY {t['mirror']} m WHERE NOT EXISTS (SELECT FROM _stage s WHERE {on})
             UNION ALL
             SELECT CASE WHEN m.{first} IS NULL THEN 'I' ELSE 'U' END, {s}
-              FROM _stage s LEFT JOIN {t['mirror']} m ON {on}
+              FROM _stage s LEFT JOIN ONLY {t['mirror']} m ON {on}
              WHERE m.{first} IS NULL OR ROW({s}) IS DISTINCT FROM ROW({m})""")
     counts = dict(sql(conn, "SELECT _op, count(*) FROM _diff GROUP BY _op"))
     return {"inserted": counts.get("I", 0), "updated": counts.get("U", 0), "deleted": counts.get("D", 0)}
@@ -537,11 +537,11 @@ def publish(conn, t, staged, delivered, mirror, log, rows_read, counts, plan):
         if plan["gone"]:  # a row that differs only in a column that went keeps its place in the mirror (story 5)
             ds, ms = (", ".join(f"{a}.{quote(c)}" for c, _ in staged) for a in "dm")
             kept = f" AND (d._op = 'D' OR ROW({ds}) IS DISTINCT FROM ROW({ms}))"
-            only = f" AND NOT EXISTS (SELECT FROM {t['mirror']} m WHERE {on})"
-        sql(conn, f"DELETE FROM {t['mirror']} m USING _diff d WHERE d._op IN ('D', 'U') AND {on}{kept}")
+            only = f" AND NOT EXISTS (SELECT FROM ONLY {t['mirror']} m WHERE {on})"
+        sql(conn, f"DELETE FROM ONLY {t['mirror']} m USING _diff d WHERE d._op IN ('D', 'U') AND {on}{kept}")
         sql(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _diff d WHERE _op IN ('I', 'U'){only}")
     else:  # without a key, or under another key (decision 54): replaced as a whole
-        deleted = rowcount(conn, f"DELETE FROM {t['mirror']}")
+        deleted = rowcount(conn, f"DELETE FROM ONLY {t['mirror']}")
         counts = {"inserted": rowcount(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _stage"),
                   "updated": 0, "deleted": deleted}
     if t["key"] and plan["key"]:  # once the old rows are gone, which may hold the new key twice
@@ -725,7 +725,7 @@ def write_log(conn, t, staged, log, names):
         sql(conn, f"CREATE TABLE {t['log_table']} (_run bigint, _op text, _loaded_at timestamptz, LIKE {t['mirror']})")
         # its one key said, so that a change of key the columns table noted for an earlier change log does not stop it
         keys_of_log(conn, t, [{"key": t["key"]}])
-        rows = f"SELECT 'I', {names} FROM {t['mirror']}"
+        rows = f"SELECT 'I', {names} FROM ONLY {t['mirror']}"
     # now() is the transaction's moment, the one that goes into tables.loaded_at
     sql(conn, f"INSERT INTO {t['log_table']} (_run, _loaded_at, _op, {names}) SELECT $1, now(), * FROM ({rows}) r",
         [t["run"]])
@@ -748,7 +748,7 @@ def write_log(conn, t, staged, log, names):
             SELECT _op, _loaded_at AS _valid_from,
                    lead(_loaded_at) OVER (PARTITION BY {', '.join(quote(c) for c in k['key'])} ORDER BY _loaded_at)
                    AS _valid_to, {columns}
-              FROM {t['log_table']}{' WHERE ' + ' AND '.join(cut) if cut else ''}) h
+              FROM ONLY {t['log_table']}{' WHERE ' + ' AND '.join(cut) if cut else ''}) h
          WHERE _op <> 'D'""")
     sql(conn, f"CREATE OR REPLACE VIEW {t['history']} AS" + "\n        UNION ALL".join(branches))
     for privilege, column, grantee, option in t.pop("grants", []):  # those carry_out found before it dropped the view
