@@ -140,3 +140,65 @@ Item 11, every "not checked", "not tested" or "not covered" of tickets 01 to 12 
   `definition.md` says to state it before the source renames. A real 0.4.1 fleet over days: cannot be had in a
   session; item 10 is the same states in minutes. "Not run: P1, P3, P4, P16, P22 and the reviewers": personas are a
   shakedown wave the owner starts before a release (`docs/agents/shakedown/README.md`), not part of this ticket.
+
+Review (2026-11-24), on `sc-14` after merging `schema-changes` with ticket 13 (264b2f7), fixed test first where a test
+could show it:
+
+- **One rule for a database's message** (ffa06c1). Ticket 13 told the target's message by its SQLSTATE class while
+  publishing, ticket 14 an ODBC driver's class 22: two rules that overlapped and left the rest open. Now one
+  function (`withheld` in `load.py`) and one paragraph (decision 54, item 8): a message of the source or the target,
+  through ADBC or ODBC, is shown only where its SQLSTATE's class holds names alone (08, 0A, 25, 28, 2B, 40, 42 but an
+  object that does not exist, 53, 54, 55, 57, 58, IM) or it is Postgres's own message of a violated constraint;
+  every other is withheld with its SQLSTATE, the function a frame names and the source table. Found on the way: a
+  Postgres source's error while rows arrive came without SQLSTATE (the connector read through Arrow's reader), and
+  `date field value out of range: 2000-13-01` or `relation "anna2" does not exist` of a source view reached the
+  reason; the connector now reads through the driver manager's reader, which keeps the fields. An ODBC driver that
+  gives `HY000` for everything, or no SQLSTATE in its record (five NULs), is withheld; a refused login (`28000`) and the
+  driver manager's `IM002` are shown. SQL Server's and MySQL's wordings are unit-tested by their documented SQLSTATEs
+  (`tests/test_reason.py`): neither driver nor server is on this machine. arrow-odbc's own messages that end in a
+  value (invalid UTF-8, a timestamp beyond nanoseconds) keep only what comes before it, with the table (b42066c);
+  psqlODBC cannot produce either (tried: invalid bytes of a `SQL_ASCII` database arrive replaced, `infinity` loads),
+  so they are tried on their words. Price, in the documents: a source table that does not exist says `SQLSTATE 42P01`
+  with the table, not Postgres's sentence.
+- **A grantee that lost its grant option** (7acf5e8): Postgres keeps a column grant the grantee passed on under its
+  table grant's option when that option is revoked; given again as the grantee it was no grant, with a warning only.
+  The run checks the option first and gives the grant itself otherwise, as for a grantor it may not act as.
+- **The retired column's note** (8ade7e6): it goes on with every later row of the column in the columns table, and is
+  read under an old target name too; a type changed by hand or a new target name lost it.
+- **`renamed` applied while a run loads** (7e94a99): a fault, not a documented limit. The loading run let the column
+  go and come, after which `renamed` could act no more, so the stated rename was lost for good. The run now reads the
+  table's row again under the lock it takes to publish, as for a new target name (decision 53), publishes nothing
+  when a rename of a column it would let go was stated since its claim, and the next run renames.
+- **`long()`** says the step's end also when the step raises; a run ended after a long step in a short one (the
+  record of the columns held by a consumer) names no step, tested and seen red by a mutation (7e94a99).
+- **`tests/test_upgrade.py`**: it now needed ticket 13's naming with the schema (`view public.consumer`). CI checks
+  out one commit without tags, so the workflow fetches the tag `v0.4.1` (`git fetch --depth=1 --no-tags origin tag
+  v0.4.1`, tried in a shallow clone); without it the test skips and says `git fetch --tags`. A second test runs 0.4.1
+  as a worker's role of the rights 0.4.1's documents give: refused after `init` with the grants' sentence, and with
+  the grants `init` prints it loads, a table stuck under 0.4.1 included. Offline (`git archive`), and each xdist
+  worker extracts its own copy.
+- **Tests that waited for a moment**: the connections test with the limits full waits for two loading tables, two
+  run processes and every worker connected, and its tables load for an hour (167bfec); the `pg_dump` test releases
+  the dump in a `finally` and waits up to 60 s for its locks (bd62284); `pg_dump` and `pg_restore` are the target
+  container's. The long-step tests leave 3 s before the step.
+- **An error of the target while rows are staged** was named the source's (`in the source, reading nul.parquet`),
+  found on the way and fixed (050713c).
+- **Postgres 14 and 17**: the suite takes `ROWVIOLI_TEST_IMAGE` (both containers). `postgres:14-alpine` at dee4254: 772
+  passed, 20 skipped; the two tests whose source has a numeric scale below 0 or above its precision need Postgres 15 in
+  the source and now skip and say so (the program's part, such a column stays `numeric` on a target before 15, holds).
+  A first run on 14 had one more failure that did not come again and was not recorded by name; the connections test,
+  which failed the same way on 17 and is fixed since, is the likely one.
+  `postgres:17` (Debian, another collation) at 050713c: 775 passed, 18 skipped, after two fixes of tests: A31's record
+  is ordered by bytes (`City` before `city`), and the connections test counted an autovacuum worker or the closing
+  backend of its own query before as a sixth connection.
+- **The pooler check behind PgCat 1.2.0** (measurement 14): transaction mode, 100 checks each with 0, 2, 8 and 16
+  neighbours, none missed (idle: 100 second connections on the first's server process; busy: mostly the driver's
+  statement lost, `26000`); `status` refused 20 of 20 with 0, 2 and 8 neighbours. Session mode never taken for a
+  pooler (100 of 100 with 0 and 2 neighbours, `status` 20 of 20); with 8 and 16 neighbours the pool of 5 had no
+  connection left for the check, which is the pool's size. The image was removed after.
+- Item 11's list holds: each point is tested, decided, or says why this machine cannot (a fleet over days, SQL
+  Server and MySQL drivers, Odyssey without an image); the personas are the owner's wave before a release.
+- Suites at fa3ad89's code (its last commit, a one-line narrowing, rerun with the rename, REST and file tests):
+  the whole suite on `postgres:16-alpine` with the PgBouncer image present, 775 passed, 18 skipped (7 min 56 s on a
+  machine busy with the other suites; 6 min 38 s alone, base 5.5 min, about 30 tests more); `tests/odbc/run.sh` 14
+  passed, 1 skipped.
