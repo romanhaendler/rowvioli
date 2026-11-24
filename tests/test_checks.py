@@ -43,12 +43,13 @@ def test_a_check_fails_the_run_and_leaves_the_mirror_unchanged(erp, change, expe
     assert rows(erp.target, MIRROR) == before
 
 
-def test_a_key_that_differs_from_the_mirrors_primary_key_fails_the_run(erp):
+def test_another_key_that_does_not_identify_a_row_fails_the_run_and_leaves_the_mirror_unchanged(erp):  # story 22
     ok(erp)
     before = rows(erp.target, MIRROR)
+    erp.source("insert into customers values (4, 'Anna', 'Ulm')")
     apply(erp, definition(erp, '"public.customers" = { key = ["name"] }\n'))
     erp.target("update _rowvioli.tables set requested_at = now()")
-    assert "key" in failed(erp)
+    assert failed(erp) == 'a key combination of ("name") occurs twice'
     assert rows(erp.target, MIRROR) == before
 
 
