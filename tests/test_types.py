@@ -300,6 +300,39 @@ def test_B11_a_first_type_under_columns_for_a_csv_column_loaded_as_text_goes_and
     log_replays(files, "raw_files.counts")
 
 
+@pytest.mark.parametrize("file, content, back, old", [
+    ("counts.csv", "id;n\n1;42\n2;\n3;7\n", "text", "42"),
+    ("counts.json", '{"id": "1", "n": 42}\n{"id": "2"}\n{"id": "3", "n": 7}\n', "jsonb", "42")])
+def test_B11_a_pin_taken_out_of_columns_goes_and_comes_back_to_what_the_file_brings_by_definition(
+        files, file, content, back, old):
+    (files.dir / "files" / file).write_text(content)
+    table = f'"{file}" = {{{{ key = ["id"], sep = ";"{{}} }}}}\n' if file.endswith(".csv") else \
+        f'"{file}" = {{{{ key = ["id"]{{}} }}}}\n'
+    code, answer = load(files, table.format(', columns = { n = "integer" }'))
+    assert code == 0, answer
+    code, answer = load(files, table.format(""))
+    assert code == 0, answer
+    run = max_run(files)
+    assert types(files, "n", "raw_files.counts") == [back, back]
+    assert files.target(f"select id, n__{run}, n::text from raw_files.counts__log where _run = {run} order by id") == [
+        ("1", None, old), ("3", None, "7")]
+    assert files.target('select _op, "column", mirror, was, "by" from _rowvioli.columns__log where _run = %s '
+                        'order by "column"', [run]) == [("U", "n", True, None, "definition"),
+                                                       ("I", f"n__{run}", False, "n", "definition")]
+    log_replays(files, "raw_files.counts")
+
+
+def test_without_a_change_log_a_pin_taken_out_of_columns_stops_and_says_how_to_drop_it(files):
+    (files.dir / "files" / "counts.csv").write_text("id;n\n1;42\n")
+    table = '"counts.csv" = {{ key = ["id"], log = false, sep = ";"{} }}\n'
+    assert load(files, table.format(', columns = { n = "integer" }'))[0] == 0
+    code, answer = load(files, table.format(""))
+    assert code == 1
+    assert answer["raw_files.counts"]["reason"] == (
+        "column n has changed its type from integer to text; without a change log its values are nowhere else, so a "
+        'person drops it and the next run adds it anew: ALTER TABLE "raw_files"."counts" DROP COLUMN "n"')
+
+
 def test_without_a_change_log_a_type_under_columns_of_another_family_stops_and_says_how_to_drop_it(files):
     (files.dir / "files" / "counts.csv").write_text("id;n\n1;42\n")
     table = '"counts.csv" = {{ key = ["id"], log = false, sep = ";"{} }}\n'

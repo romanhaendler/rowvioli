@@ -112,7 +112,8 @@ def check(conn, t, staged, mirror, log_columns):
     (decision 2), old name to new, and `key` when the mirror's primary key is not the definition's (decision 7): the
     primary key it `was`, whether the change is `by` the definition or the primary key was changed by hand and is put
     back, and whether a change `log` exists. `renamed`, new name to old, the columns that keep their values and
-    history under another name (decision 10), and `proven`, the note of each one the data proved."""
+    history under another name (decision 10), and `proven`, the note of each one the data proved. `unpinned`, the
+    retired ones whose pin under `columns` was taken out (decision 19)."""
     types, logged, had = dict(staged), dict(log_columns), dict(mirror)
     way = ("rename that column of the change log and drop its history view, which the next run creates again: "
            f"ALTER TABLE {t['log_table']} RENAME COLUMN {{}} TO <another name>; DROP VIEW {t['history']}")
@@ -129,7 +130,7 @@ def check(conn, t, staged, mirror, log_columns):
     # the key after the renames: Postgres renames a column inside the primary key by itself (decision 7)
     moved = {old: new for new, old in renamed.items()}
     primary_key = [moved.get(k, k) for (k,) in sql(conn, PRIMARY_KEY, [t["mirror"]])] if mirror else []
-    plan = {"renamed": renamed, "proven": {}, "gone": [], "retired": {}, "key": {}}
+    plan = {"renamed": renamed, "proven": {}, "gone": [], "retired": {}, "key": {}, "unpinned": []}
     # nothing is proven without a catalog, a key or a change log, nor joined by a key of another family, which stops below
     if t["key"] and t["log"] and log_columns and t["type"] not in ("file", "rest") \
             and set(primary_key) == set(t["key"]) \
@@ -158,10 +159,13 @@ def check(conn, t, staged, mirror, log_columns):
             changed = f"column {name} has changed its type from {type} to {types[name]}"
             drop = ("so a person drops it and the next run adds it anew: "
                     f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
-            # where the definition names the columns it is the catalog; a file guesses the type of every other one
+            # where the definition names the columns it is the catalog. CSV, Excel and JSON deliver every other column
+            # as text or jsonb, so another family there is a pin taken out; Parquet's own types can flip
             if t["type"] == "file" and name not in dict(t["options"].get("columns") or {}):
-                raise Exception(f"{changed}; a source without a catalog guesses its types, so pin it under columns "
-                                "in the table's definition")
+                if not re.search(r"\.(csv|xlsx|json|jsonl|ndjson)$", t["source_table"], re.I):
+                    raise Exception(f"{changed}; a source without a catalog guesses its types, so pin it under "
+                                    "columns in the table's definition")
+                plan["unpinned"].append(name)
             if name in (t["key"] or []):
                 raise Exception(f"{changed}, a type of another family in the key, so a row before cannot be told "
                                 "from one after: give the table another target_table, which begins a new mirror")
@@ -574,6 +578,8 @@ def carry_out(conn, t, plan):
         alter(conn, f"column {name} " + ("has another type in the source" if name in plan["retired"]
                                          else "is gone from the source") + f" and would leave the mirror {t['name']}",
               f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
+    for name in plan["unpinned"]:  # decision 19: a type the definition gave, and took back
+        changes[name]["by"] = changes[plan["retired"][name]]["by"] = "definition"
     for table in (t["mirror"], t["log_table"]):  # decision 5, one ALTER per table, so it is rewritten at most once
         if widened := [(name, type) for into, name, type in plan["widen"] if into == table]:
             columns = ", ".join(f"column {name} to {type}" for name, type in widened)
