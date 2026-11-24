@@ -7,7 +7,7 @@ import pytest
 
 from conftest import until
 from test_checks import MIRROR, failed
-from test_columns import LAST
+from test_columns import LAST, heard, listen
 from test_history import LOADED_AT, again
 from test_run import apply, definition, erp, ok, rows  # noqa: F401 (erp is a fixture)
 
@@ -62,6 +62,18 @@ def test_A5_without_a_change_log_a_gone_column_stops_the_run_and_says_how_to_dro
     assert rows(erp.target, MIRROR) == before
 
 
+def test_a_column_goes_in_the_run_that_changes_deletes_and_inserts_rows(erp):  # story 4
+    ok(erp)
+    erp.source("alter table customers drop column city")
+    erp.source("update customers set name = 'Anna2' where customer_no = 1")
+    erp.source("delete from customers where customer_no = 2")
+    erp.source("insert into customers values (4, 'Dora')")
+    again(erp)
+    assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
+    assert erp.target(LOG) == [("U", 1, None), ("D", 2, "Essen"), ("I", 4, None)]
+    log_replays(erp)
+
+
 def test_a_column_a_person_added_to_the_mirror_is_never_dropped_and_stops_the_run(erp):  # story 8, cases G1
     ok(erp)
     erp.target("alter table raw_erp.customers add column memo text")
@@ -92,11 +104,14 @@ def test_A6_a_gone_column_a_consumers_view_reads_stops_the_run_naming_the_view_a
     erp.source("alter table customers drop column city")
     erp.source("update customers set name = 'Anna2' where customer_no = 1")
     erp.target("update _rowvioli.tables set requested_at = now()")
+    listener = listen(erp)
     reason = failed(erp)
     assert reason.startswith("column city is gone from the source and would leave the mirror raw_erp.customers, but "
                              "view reporting.by_city depends on column city of table raw_erp.customers"), reason
     assert (rows(erp.target, MIRROR), erp.target("select count(*) from raw_erp.customers__log")) == before
     assert erp.target("select count(*) from _rowvioli.columns__log where _op <> 'I'") == [(0,)]
+    assert heard(listener) == []
+    listener.close()
     erp.target("drop view reporting.by_city")  # the way out
     again(erp)
     assert columns(erp) == ["customer_no", "name"]
