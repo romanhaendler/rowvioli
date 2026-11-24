@@ -268,12 +268,18 @@ def check(conn, t, staged, mirror, log_columns, renamed):
                 before_the_record(conn, t, primary_key, key, log_columns, renamed)
             plan["key"] = {"was": primary_key, "by": "hand" if hand else "definition", "log": bool(log_columns)}
     # decision 54: one branch over a change log written under two keys gives wrong rows, so the record says them
-    if log_columns and stretches(conn, t) is None and (noted := sql(
-            conn, """SELECT substr(note, strpos(note, $2) + length($2)) FROM _rowvioli.columns__log WHERE id = $1
-                      AND strpos(note, $2) > 0 ORDER BY _loaded_at DESC LIMIT 1""", [t["id"], KEYS_NOTE])):
+    if log_columns and stretches(conn, t) is None and (noted := sql(conn, NOTED, [t["id"], KEYS_NOTE])):
         raise Exception(f"the comment on column _op of the change log {t['name']}__log, which says the keys it was "
                         "written under, is missing or unreadable, and the key has changed: put it back, "
                         f"COMMENT ON COLUMN {t['log_table']}._op IS {literal(noted[0][0])}")
+    # and one that names another key last than the one the change log is written under, before this run's renames
+    last = [renamed.get(c, c) for c in (plan["key"]["was"] if plan["key"].get("by") == "definition" else key)]
+    if log_columns and last and (keys := stretches(conn, t)) and set(keys[-1]["key"]) != set(last):
+        noted = sql(conn, NOTED, [t["id"], KEYS_NOTE])
+        raise Exception(f"the comment on column _op of the change log {t['name']}__log, which says the keys it was "
+                        f"written under, names ({', '.join(keys[-1]['key'])}) last, where the change log is written "
+                        f"under ({', '.join(last)}): put it back, COMMENT ON COLUMN {t['log_table']}._op IS "
+                        + literal(noted[0][0] if noted else json.dumps([{"key": last}])))
     # the same for a retired column's comment, whose text the record noted when the run retired it
     for name, note in sql(conn, 'SELECT "column", note FROM _rowvioli.columns WHERE id = $1 AND NOT mirror '
                                 "AND strpos(note, $2) > 0", [t["id"], RETIRED_NOTE]):  # also under an old target name
@@ -294,6 +300,11 @@ def check(conn, t, staged, mirror, log_columns, renamed):
                             "the table a key that identifies a row")
     plan["moved"] = plan["retired"] | {old: new for new, old in renamed.items()}  # the names carry_out gives
     return plan
+
+
+# the latest text of the comment on _op the columns log noted for a table
+NOTED = """SELECT substr(note, strpos(note, $2) + length($2)) FROM _rowvioli.columns__log WHERE id = $1
+            AND strpos(note, $2) > 0 ORDER BY _loaded_at DESC LIMIT 1"""
 
 
 def before_the_record(conn, t, primary_key, key, log_columns, renamed):

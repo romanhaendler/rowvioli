@@ -250,6 +250,27 @@ def test_C13_a_key_value_that_changes_is_a_D_and_an_I(erp):
 ANOTHER_KEY = '"public.customers" = { key = ["customer_no", "name"] }\n'
 
 
+@pytest.mark.parametrize("changed_key", [False, True])
+def test_a_comment_on_op_that_names_another_key_than_the_change_logs_stops_with_the_text_to_put_back(erp, changed_key):
+    ok(erp)  # ticket 15, X5: a comment of the right shape was trusted, and the history view partitioned by its key
+    if changed_key:
+        apply(erp, definition(erp, ANOTHER_KEY))
+        again(erp)
+    keys = comment(erp)
+    erp.target("comment on column raw_erp.customers__log._op is "
+               f"""'{json.dumps(keys[:-1] + [{**keys[-1], "key": ["city"]}])}'""")
+    erp.source("alter table customers add column phone text")  # the history view is built anew
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    put_back = f"""COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '{json.dumps(keys)}'"""
+    assert failed(erp).replace("***", "x") == (
+        "the comment on column _op of the change log raw_erp.customers__log, which says the keys it was written "
+        f"under, names (city) last, where the change log is written under ({', '.join(keys[-1]['key'])}): put it "
+        f"back, {put_back}")
+    erp.target(put_back)
+    again(erp)
+    log_replays(erp)
+
+
 @pytest.mark.parametrize("removal", ["is null", "is 'our customers'", "a key no list", "a from no moment",
                                      "a column that does not exist"])
 def test_the_comment_on_op_removed_after_a_change_of_key_stops_the_run_with_the_text_to_put_back(erp, removal):
