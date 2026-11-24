@@ -898,6 +898,7 @@ WRAPPER = re.compile(r"^(?:[A-Z_]+: )?(?:\[libpq\] )?(?:nanoarrow call failed: )
 # a row's value Postgres quotes in a message: last, after a colon (`invalid input syntax for type integer: "abc"`), or
 # before `is out of range` (`value "…"` for an integer, bare for a float). Names are quoted too, but never there
 VALUE = re.compile(r'(?<=: )"[^\n]*"$|(?:^|(?<=\s))"[^\n]*"(?= is out of range)')
+OWN = os.path.dirname(os.path.abspath(__file__)) + os.sep  # the program's code, its shipped connectors among it
 
 
 def reason_line(values, e, step):
@@ -907,16 +908,22 @@ def reason_line(values, e, step):
     ADBC cuts long messages, so the end may be missing. A line saying so, with the exception's type, when there is no
     message."""
     text = scrub(values, str(e)).strip()
-    if type(e) is Exception:  # the program's own reason is one line: a name in it may hold a control character
+    raised = e.__traceback__
+    while raised and raised.tb_next:
+        raised = raised.tb_next
+    # the program's own reason is one line: a name in it may hold a control character. A plain Exception raised
+    # elsewhere, by a connector of one's own, is cut as a driver's message is, since its next lines may quote a row
+    if type(e) is Exception and raised and os.path.abspath(raised.tb_frame.f_code.co_filename).startswith(OWN):
         text = CONTROL.sub("?", text)
     before, _, traceback = text.partition("Traceback (most recent call last)")
     before = re.sub(r"\s*Detail: Python exception:\s*$", "", before)
     first, *rest = (WRAPPER.sub("", before).strip() or traceback.strip().split("\n")[-1]).split("\n")
     line = f"{first} {rest[0].strip()}" if first.endswith(":") and rest else first
-    line = VALUE.sub('"***"', line)
-    line = re.sub(r"permission denied for table (columns(?:__log)?)$",r"\g<0>: the worker's role lacks a right on "
-                  r"_rowvioli.\1, which rowvioli init printed with the upgrade to version 4 "
-                  '(docs/operation.md "The target")', line.strip())
+    line = VALUE.sub('"***"', line).strip()
+    if step != "reading the source":  # a source may have a table of that name
+        line = re.sub(r"permission denied for table (columns(?:__log)?)$", r"\g<0>: the worker's role lacks a right on "
+                      r"_rowvioli.\1, which rowvioli init printed with the upgrade to version 4 "
+                      '(docs/operation.md "The target")', line)
     return line or f"the driver gave no message while {step} ({type(e).__name__})"
 
 
