@@ -519,3 +519,45 @@ def test_a_timestamp_finer_than_microseconds_arrives_cut_to_microseconds(files):
     code, answer = load(files, '"ns.parquet" = {}\n')
     assert code == 0, answer
     assert files.target("select t from raw_files.ns") == [(datetime(2026, 1, 1, 0, 0, 0, 123456),)]
+
+
+def write(rv, name, rows):
+    """A JSON or an Excel file of `rows`, dicts of text; a key a row lacks is a field the file lacks."""
+    path = rv.dir / "files" / name
+    if name.endswith(".json"):
+        return path.write_text(json.dumps(rows))
+    columns = list(dict.fromkeys(k for r in rows for k in r))
+    db = duckdb.connect()
+    db.execute("LOAD excel")
+    db.register("t", pa.table({c: [r.get(c) for r in rows] for c in columns}))
+    db.execute(f"COPY t TO '{path}' (FORMAT xlsx, HEADER true)")
+
+
+@pytest.mark.parametrize("kind, unpinned", [("xlsx", "text"), ("json", "jsonb")])
+def test_excel_and_json_go_through_every_change_of_shape_a_csv_goes_through(files, kind, unpinned):  # ticket 14
+    """A pattern whose files differ, a header renamed, a pin set, changed and taken out, a field missing (decision 54)."""
+    from test_columns_go_and_come import columns
+    table = f'"t_*.{kind}" = {{{{ key = ["id"], target_table = "t"{{}} }}}}\n'
+    text = "#>> '{}'" if kind == "json" else ""  # a JSON value as its text
+    type = "select format_type(atttypid, atttypmod) from pg_attribute where attname = 'amount' and attrelid in " \
+           "('raw_files.t'::regclass, 'raw_files.t__log'::regclass)"
+    write(files, f"t_1.{kind}", [{"id": "1", "amount": "10", "note": "a"}, {"id": "2", "amount": "20", "note": "b"}])
+    write(files, f"t_2.{kind}", [{"id": "3", "amount": "30"}])  # a file without note
+    code, answer = load(files, table.format(""))
+    assert code == 0, answer
+    assert files.target(f"select id {text}, amount {text}, note {text} from raw_files.t order by 1") == [
+        ("1", "10", "a"), ("2", "20", "b"), ("3", "30", None)]
+    write(files, f"t_1.{kind}", [{"id": "1", "amount": "10", "memo": "a"}, {"id": "2", "amount": "20", "memo": "b"}])
+    code, answer = load(files, table.format(', renamed = { memo = "note" }'))  # the header renamed
+    assert code == 0, answer
+    assert columns(files, "raw_files.t") == ["id", "amount", "memo"]
+    for pin, expected in [("integer", "integer"), ("bigint", "integer"), (None, unpinned)]:  # set, widened, taken out
+        code, answer = load(files, table.format(f', columns = {{ amount = "{pin}" }}' if pin else ""))
+        assert code == 0, answer
+        assert files.target(type) == [(expected,), (expected,)], pin
+    write(files, f"t_2.{kind}", [{"id": "3", "memo": "c"}])  # a field missing
+    code, answer = load(files, table.format(""))
+    assert code == 0, answer
+    assert files.target(f"select amount {text}, memo {text} from raw_files.t order by id {text}") == [
+        ("10", "a"), ("20", "b"), (None, "c")]
+    log_replays(files, "raw_files.t")
