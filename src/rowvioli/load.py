@@ -584,7 +584,8 @@ def record_columns(conn, t, delivered, mirror, log, changes):
             row.update(op="I", by="found" if not old else "source" if name not in found else "hand")
         else:
             # a mirror's column the change log lost by hand: the run adds it again, the state alone shows nothing
-            hand = found.get(name) != (before["type"], before["mirror"]) or bool(log) and name not in dict(log)
+            hand = found.get(name) != (before["type"], before["mirror"]) or bool(log) and name not in dict(log) \
+                or changes.get(name, {}).get("by") == "hand"  # a primary key put back: the record knew the key
             if not hand and all(before[f] == row[f] for f in ("type", "source_type", "key", "mirror")):
                 continue
             row.update(op="U", by="hand" if hand else "source", was=before["was"])

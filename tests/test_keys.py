@@ -116,3 +116,20 @@ def test_C5_another_key_without_a_change_log_replaces_the_primary_key(erp):
     assert erp.target(NOT_NULL, ["raw_erp.customers"]) == [("name",)]
     assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
     assert erp.target("select to_regclass('raw_erp.customers__log')") == [(None,)]
+
+
+def test_C15_a_primary_key_changed_by_hand_is_put_back_and_recorded_by_hand(erp):  # story 24
+    ok(erp)
+    erp.target("alter table raw_erp.customers drop constraint customers_pkey, add primary key (customer_no, name)")
+    erp.source("update customers set city = 'Köln' where customer_no = 1")
+    again(erp)
+    assert primary_key(erp) == ["customer_no"]
+    assert erp.target(NOT_NULL, ["raw_erp.customers"]) == [("customer_no",)]
+    # the change log was written under the definition's key all along: only the row that changed
+    assert erp.target(f"select _op, customer_no, city from raw_erp.customers__log {THIS_RUN}") == [("U", 1, "Köln")]
+    assert comment(erp) is None
+    assert erp.target(f'select _op, "column", "key", "by", note from _rowvioli.columns__log {THIS_RUN} '
+                      'order by "column"') == [
+        ("U", column, key, "hand", "the primary key (customer_no, name) was put back to the definition's (customer_no)")
+        for column, key in [("customer_no", 1), ("name", None)]]
+    log_replays(erp)
