@@ -1060,29 +1060,25 @@ WRAPPER = re.compile(r"^(?:[A-Z_]+: )?(?:\[libpq\] )?(?:Execution error \[PGRES_
                      r"(?:PGRES_[A-Z_]+ )?(?:ERROR:\s+)?", re.S)
 
 
-# a row's value Postgres quotes in a message: last, after a colon (`invalid input syntax for type integer: "abc"`), or
-# before `is out of range` (`value "…"` for an integer, bare for a float). Names are quoted too, but never there
+# a value quoted in a message without a SQLSTATE, a connector's of one's own say: last, after a colon (`invalid input
+# syntax for type integer: "abc"`), or before `is out of range` (`value "…"`, bare for a float), as Postgres quotes them
 VALUE = re.compile(r'(?<=: )"[^\n]*"$|(?:^|(?<=\s))"[^\n]*"(?= is out of range)')
-# the SQLSTATE in arrow-odbc's text of a driver's error, the ODBC standard's for every driver:
-# `ODBC emitted an error calling 'SQLExecDirect': State: 22P02, Native error: 1, Message: ...`
-ODBC_STATE = re.compile(r"\bState: (\w{5}), Native error: -?\d+, Message: ")
+# the SQLSTATE in arrow-odbc's text of a driver's diagnostic record, the ODBC standard's for every driver
+# (`ODBC emitted an error calling 'SQLExecDirect': State: 22P02, Native error: 1, Message: ...`); a driver that sets
+# none leaves five NULs there
+ODBC_STATE = re.compile(r"\bState: ([^,]{5}), Native error: -?\d+, Message: ")
 OWN = os.path.dirname(os.path.abspath(__file__)) + os.sep  # the program's code, its shipped connectors among it
 
 
-def reason_line(values, e, step):
+def reason_line(values, e, step, source=None):
     """The reason as it is stored, shown and logged: the first line of the driver's message without its wrapper,
     joined with the next when it ends in a colon, without a value of a row (VALUE), scrubbed last, so that a password
     that occurs in the wrapper (`x`, `query`) does not keep the wrapper from being cut. A message that holds a
     traceback gives the text before it, or the exception's own line (the traceback's last) when nothing is before it;
     ADBC cuts long messages, so the end may be missing. A line saying so, with the exception's type, when there is no
-    message. A message raised under a consumer's code is withheld (raised_by_a_consumer)."""
-    if withheld := raised_by_a_consumer(e, step):
-        return scrub(values, CONTROL.sub("?", withheld))
-    # an ODBC driver's data exception quotes the value as the driver words it (psqlODBC after Postgres's message,
-    # SQL Server in single quotes), so no pattern finds it: the class of the SQLSTATE says it, whatever the driver
-    if (odbc := ODBC_STATE.search(str(e))) and odbc[1].startswith("22"):
-        return (f"the ODBC driver raised a data exception (SQLSTATE {odbc[1]}) while {step}; its message may hold a "
-                "row's values, so it is left out here")
+    message. A database's message that may hold a row's value is withheld (withheld); `source` is the source table."""
+    if reason := withheld(e, step, source):
+        return scrub(values, CONTROL.sub("?", reason))
     # first only a value with a line break or another control character, which the cut and the ? would break up
     text = scrub([v for v in values if v and CONTROL.search(v)], str(e)).strip()
     raised = e.__traceback__
@@ -1120,39 +1116,38 @@ CONSTRAINT = re.compile(r'duplicate key value violates unique constraint "[^"]*"
                         r'|could not create (?:unique index|exclusion constraint) "[^"]*"')
 
 
-# the classes of SQLSTATE whose messages Postgres writes with names and no value of a row, and which an operator needs
-# while publishing: a lost connection, a feature, a transaction's state, a dependent object, a deadlock, a missing right
-# or object, resources such as a full disk, a limit, an object in use, a cancel, a system error. A constraint's message
-# (class 23) is known by its words (CONSTRAINT)
-NAMES = {"08", "0A", "25", "2B", "40", "42", "53", "54", "55", "57", "58"}
-# but an object that does not exist, whose name a cast of a row's value makes (`relation "Anna" does not exist` of a
-# check constraint's ::regclass, a column, a type or role, a function): the run's own statements name what is there
+# the classes of SQLSTATE whose messages hold names and no value of a row, and which an operator needs: a lost
+# connection, a feature, a transaction's state, a refused login, a dependent object, a deadlock, a missing right, a
+# syntax, resources such as a full disk, a limit, an object in use, a cancel, a system error, and ODBC's driver manager
+# (a data source not found). A constraint's message (class 23) is known by its words (CONSTRAINT)
+NAMES = {"08", "0A", "25", "28", "2B", "40", "42", "53", "54", "55", "57", "58", "IM"}
+# but an object that does not exist, whose name a cast of a row's value makes (`relation "Anna" does not exist` of
+# ::regclass in a view or a check constraint, a column, a type or role, a function)
 UNDEFINED = {"42P01", "42703", "42704", "42883"}
 
 
-def raised_by_a_consumer(e, step):
-    """Decision 54, a reason never shows a value: the reason for an error raised under a consumer's code, a trigger on
-    the target, a constraint's or a column's function, a function a source view calls, whose message is free text
-    that may hold a row (`raise exception 'bad row %', NEW`, `relation "Anna" does not exist` of an EXECUTE), or None
-    for any other. Told by a function's frame in the context the driver gives, in its fields for a statement and in its
-    text for a source's rows, whatever the function's language, and by the SQLSTATE only RAISE and ASSERT give;
-    Postgres's own messages of a violated constraint keep their names. While publishing, an error of the target outside
-    the classes of NAMES is withheld too: a function in C or in a language that names no frame (a consumer's trigger,
-    constraint or column) gives no other sign, and Postgres's own message of a value (`date field value out of range:
-    2000-13-01`) can hold a row's, as can one of an object that does not exist (UNDEFINED)."""
+def withheld(e, step, source):
+    """Decision 54, item 8, the one rule for a database's message, of the source or the target, through ADBC or ODBC:
+    it reaches a reason only where the SQLSTATE the driver gives says that it holds names alone (NAMES but UNDEFINED),
+    or as Postgres's own message of a violated constraint, and never from under a consumer's function. Every other is
+    withheld: a value's (class 22), a consumer's RAISE or ASSERT (P0001, P0004) or a function in C (it names no frame),
+    a class the program does not know, a driver's HY000 or none. Returns the reason, which names what the program
+    knows: the function its frame names in the context the driver gives, in whatever language (`PL/pgSQL function
+    guard() line 3 at RAISE`, `SQL function "f" statement 1`, `PL/Python function "guard"`), the SQLSTATE, the source
+    table or the target. None for a message to show, and for one without a SQLSTATE: the program's own, a connector's,
+    libpq's before a server answered, which reason_line shows without a quoted value."""
     details = {k.decode(): v.decode(errors="replace") for k, v in getattr(e, "details", None) or []}
     text = str(e)
     state = details.get("PG_DIAG_SQLSTATE") or ((odbc := ODBC_STATE.search(text)) and odbc[1])
     function = FRAME.search(details.get("PG_DIAG_CONTEXT") or text.partition("\nCONTEXT:  ")[2])
     message = details.get("PG_DIAG_MESSAGE_PRIMARY") or WRAPPER.sub("", text).split("\n")[0]
-    raised = state in ("P0001", "P0004")  # raise_exception, assert
-    if not (function or raised or step == "publishing" and state and (state[:2] not in NAMES or state in UNDEFINED)) \
-            or CONSTRAINT.fullmatch(message):
+    if CONSTRAINT.fullmatch(message) or not (function or state and (state[:2] not in NAMES or state in UNDEFINED)):
         return None
+    who = f"function {function[1]}" if function else "a function" if state in ("P0001", "P0004") else "a statement"
     where = "source" if step == "reading the source" else "target"
-    return (f"{f'function {function[1]}' if function else 'a function' if raised else 'a statement'} raised an error"
-            f"{f' (SQLSTATE {state})' if state else ''} in the {where}; its message may hold a row's values, so it is "
-            f"left out here: the {where}'s server log has it")
+    return (f"{who} raised an error{f' (SQLSTATE {state})' if state and state.isalnum() else ''} in the {where}"
+            f"{f', reading {source}' if source and where == 'source' else ''}; its message may hold a row's values, "
+            f"so it is left out here: the {where}'s server log has it")
 
 
 def scrub(values, text):
@@ -1222,7 +1217,7 @@ def main(worker, source, table):
     try:
         answer = load(conn, t)
     except BaseException as e:  # everything, so no unscrubbed traceback reaches stderr (open point F4)
-        answer = {"reason": reason_line(t.get("values", []), e, t.get("step", "claiming"))}
+        answer = {"reason": reason_line(t.get("values", []), e, t.get("step", "claiming"), t.get("source_table"))}
     if "reason" in answer:  # outside the except, so a failing fail() cannot print the unscrubbed error with it
         try:
             answer = fail(conn, t, answer["reason"])

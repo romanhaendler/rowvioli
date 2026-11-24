@@ -43,12 +43,10 @@ def test_a_numeric_whose_values_fit_loads_whatever_its_digits_before_the_point(e
     assert erp.target(text.format("raw_erp.nn")) == erp.source(text.format("nn"))
 
 
-@pytest.mark.parametrize("value, type, says", [
-    ("Secret3", "int", 'invalid input synta*** for type integer: "***"'),  # x is the harness's password
-    ("3000000000", "int", 'value "***" is out of range for type integer'),
-    ("2024-13-45 Secret4", "date", 'date/time field value out of range: "***"'),
-    ("1e999", "float8", '"***" is out of range for type double precision')])
-def test_a_value_the_source_cannot_convert_stays_out_of_the_reason(erp, value, type, says):
+@pytest.mark.parametrize("value, type, state", [
+    ("Secret3", "int", "22P02"), ("3000000000", "int", "22003"), ("2024-13-45 Secret4", "date", "22008"),
+    ("1e999", "float8", "22003")])
+def test_a_value_the_source_cannot_convert_stays_out_of_the_reason(erp, value, type, state):
     erp.source("create table raw (id int primary key, v text)")
     erp.source(f"insert into raw values (1, '{value}')")
     erp.source(f"create view cast_view as select id, v::{type} as v from raw")
@@ -56,7 +54,9 @@ def test_a_value_the_source_cannot_convert_stays_out_of_the_reason(erp, value, t
     r = erp.run("run")
     assert r.returncode == 1
     why = erp.target("select reason from _rowvioli.runs where status = 'failed'")[0][0]
-    assert says == why and value not in why and value not in r.stdout + r.stderr, why
+    assert why == (f"a statement raised an error (SQLSTATE {state}) in the source, reading public.cast_view; its message "
+                   "may hold a row's values, so it is left out here: the source's server log has it")
+    assert value not in r.stdout + r.stderr
 
 
 def test_a_failed_rest_path_stays_in_the_reason(api):

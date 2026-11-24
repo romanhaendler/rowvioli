@@ -293,15 +293,20 @@ def test_a_table_without_a_key_is_emptied_the_same_way(erp):
     assert rows(erp.target, MIRROR) == []
 
 
-@pytest.mark.parametrize("value, said", [('my "secret": value', 'invalid input syntax for type integer: "***"'),
-                                         ("3000000000", 'value "***" is out of range for type integer')])
-def test_a_value_postgres_quotes_in_its_message_stays_out_of_the_reason(erp, value, said):  # decision 54, item 8
+@pytest.mark.parametrize("value, column, state", [
+    ('my "secret": value', "n::int", "22P02"), ("3000000000", "n::int", "22003"),
+    # Postgres's own messages that show the value unquoted or as a name: date field value out of range: 2000-13-01,
+    # relation "3000000000" does not exist
+    ("3000000000", "make_date(2000, length(n) + 3, 1)", "22008"), ("3000000000", "n::regclass", "42P01")])
+def test_a_value_in_the_sources_message_is_withheld_by_its_sqlstate(erp, value, column, state):  # decision 54, item 8
     erp.source("create table texts (k int, n text)")
     erp.source("insert into texts values (1, %s)", [value])
-    erp.source("create view quoting as select k, n::int as n from texts")
+    erp.source(f"create view quoting as select k, {column} as n from texts")
     apply(erp, definition(erp, '"public.quoting" = {}\n'))
-    reason = failed(erp)  # x is the harness's password, which a reason hides
-    assert reason == said.replace("x", "***") and "secret" not in reason and "3000000000" not in reason, reason
+    reason = failed(erp)
+    assert reason == (f"a statement raised an error (SQLSTATE {state}) in the source, reading public.quoting; its "
+                      "message may hold a row's values, so it is left out here: the source's server log has it"), reason
+    assert "secret" not in reason and "3000000000" not in reason and "2000-13" not in reason
 
 
 def test_a_name_postgres_quotes_in_its_message_stays_in_the_reason(erp):
@@ -372,9 +377,10 @@ def test_a_message_a_function_in_a_source_view_raises_is_withheld(erp, statement
                f"if n = 'Anna' then {statement}; end if; return n; end $$")
     erp.source("create view checked as select customer_no, check_name(name) as name from customers")
     apply(erp, definition(erp, '"public.checked" = { key = ["customer_no"] }\n'))
-    # the driver gives a source's error while rows arrive as text only: no SQLSTATE. x is the harness's password
-    assert withheld(erp) == ("function check_name(te***t) raised an error in the source; its message may hold a row's "
-                             "values, so it is left out here: the source's server log has it")
+    state = "P0001" if "raise" in statement else "42P01"  # x is the harness's password
+    assert withheld(erp) == (f"function check_name(te***t) raised an error (SQLSTATE {state}) in the source, reading "
+                             "public.checked; its message may hold a row's values, so it is left out here: the "
+                             "source's server log has it")
 
 
 @pytest.mark.parametrize("constraint, change, says", [

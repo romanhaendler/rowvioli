@@ -186,8 +186,8 @@ def test_a_column_goes_and_comes_widens_changes_family_is_renamed_and_the_key_ch
 
 @needs_driver
 @pytest.mark.parametrize("column, said", [
-    ("body::int", "a data exception (SQLSTATE 22P02)"), ("body::date", "a data exception (SQLSTATE 22007)"),
-    ("(body || '1e40')::float8::numeric(40, 0)", "a data exception (SQLSTATE 22003)"),
+    ("body::int", "a statement raised an error (SQLSTATE 22P02) in the source, reading public.v;"), ("body::date", "a statement raised an error (SQLSTATE 22007) in the source, reading public.v;"),
+    ("(body || '1e40')::float8::numeric(40, 0)", "a statement raised an error (SQLSTATE 22003) in the source, reading public.v;"),
     ("guard(body)", "a function raised an error (SQLSTATE P0001) in the source"),
     # arrow-odbc's own, for a numeric beyond the 28 digits psqlODBC describes: it names no value
     ("(body || '1e40')::numeric", "A value (at least one) is too large to be written into the allocated buffer")])
