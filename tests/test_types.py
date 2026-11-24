@@ -166,6 +166,23 @@ def test_a_type_of_any_family_widened_by_hand_in_the_mirror_is_followed_in_the_c
     log_replays(erp, "raw_erp.amounts")
 
 
+def test_a_run_ended_after_max_seconds_while_it_widened_says_so_and_names_the_column(erp):  # story 16
+    erp.source("create table amounts (id int primary key, a integer)")
+    erp.source("insert into amounts select g, g from generate_series(1, 3) g")
+    apply(erp, definition(erp, '"public.amounts" = { key = ["id"], max_seconds = 2 }\n'))
+    ok(erp)
+    # a consumer's index that takes a second per row, so that rewriting the mirror's three rows takes three
+    erp.target("create function public.slow(v numeric) returns numeric immutable language plpgsql "
+               "as $$ begin perform pg_sleep(1); return v; end $$")
+    erp.target("create index on raw_erp.amounts (public.slow(a))")
+    erp.source("alter table amounts alter a type bigint")
+    erp.source("update amounts set a = 3000000000 where id = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == ('ended after max_seconds = 2 while widening "raw_erp"."amounts", column a to bigint; raise '
+                           "max_seconds once, until a run has widened it")
+    assert types(erp, "a") == ["integer", "integer"]
+
+
 def parquet(rv, values, type):
     pq.write_table(pa.table({"id": pa.array([1, 2], pa.int32()), "n": pa.array(values, type)}),
                    rv.dir / "files" / "counts.parquet")

@@ -3,7 +3,8 @@
 Started by the worker loop as `python -m rowvioli.load <worker> <source> <table>`, with a pipe on stdin that
 ends with the worker. It tells the worker on stdout,
 one JSON object per line: {"claimed": <target table>, "run", "max_seconds"} right after the claim, before reading,
-and {"table": <target table>, "status", ...counts or "reason"} at the end. It prints nothing if it claimed nothing.
+{"widening": <table and columns>} before a widening that may rewrite a table, and {"table": <target table>,
+"status", ...counts or "reason"} at the end. It prints nothing if it claimed nothing.
 """
 import importlib.metadata
 import itertools
@@ -461,8 +462,9 @@ def carry_out(conn, t, plan):
               f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
     for table in (t["mirror"], t["log_table"]):  # decision 5, one ALTER per table, so it is rewritten at most once
         if widened := [(name, type) for into, name, type in plan["widen"] if into == table]:
-            alter(conn, f"{table} would be widened for values of the source, "
-                        + ", ".join(f"column {name} to {type}" for name, type in widened),
+            columns = ", ".join(f"column {name} to {type}" for name, type in widened)
+            say(widening=f"{table}, {columns}")  # the worker names it if it ends the run meanwhile (decision 15)
+            alter(conn, f"{table} would be widened for values of the source, {columns}",
                   f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(n)} TYPE {type}" for n, type in widened))
     return changes
 
