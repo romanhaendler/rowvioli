@@ -9,7 +9,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from rowvioli.connectors import file
 from test_columns_go_and_come import log_replays
 
 CUSTOMERS = [(1, "Anna", 2.5), (2, "Ben", None), (3, "Cleo", 10.0)]
@@ -370,21 +369,23 @@ def test_a_value_a_type_under_columns_does_not_take_names_table_column_and_type_
         "select reason from _rowvioli.tables union all select reason from _rowvioli.runs"))
 
 
-def test_a_value_a_type_under_columns_does_not_take_in_a_later_read_of_a_pattern_is_named_the_same(tmp_path):
-    # among several files of the second read, where DuckDB fails only once batches are read
-    for i in range(file.FILES_PER_READ + 10):
-        (tmp_path / f"o_{i:02}.csv").write_text(f"id;n\n{i};{'secret-value' if i == file.FILES_PER_READ + 5 else i}\n")
-    with pytest.raises(Exception) as e:
-        list(file.read({"path": str(tmp_path)}, "o_*.csv", {"sep": ";", "columns": {"n": "integer"}}))
-    assert str(e.value) == "o_*.csv: column n is not integer in every row; change the value in the file, or its type " \
-                           "under columns"
+def test_a_value_a_type_under_columns_does_not_take_in_a_later_read_of_a_pattern_is_named_the_same(files):
+    # among several files of the second read (50 files are read at once), where DuckDB fails only once batches are read
+    for i in range(60):
+        (files.dir / "files" / f"o_{i:02}.csv").write_text(f"id;n\n{i};{'secret-value' if i == 55 else i}\n")
+    code, answer = load(files, '"o_*.csv" = { sep = ";", columns = { n = "integer" }, target_table = "o" }\n')
+    assert code == 1
+    [(reason,)] = files.target("select reason from _rowvioli.status")
+    assert reason.rstrip(".") == (  # the error crosses Arrow's stream, which ends it with a period
+        "o_*.csv: column n is not integer in every row; change the value in the file, or its type under columns")
 
 
-def test_a_value_a_reader_option_of_duckdb_does_not_take_is_named_without_the_value(tmp_path):
-    (tmp_path / "o.csv").write_text("id;n\n1;secret-value\n")
-    with pytest.raises(Exception) as e:
-        list(file.read({"path": str(tmp_path)}, "o.csv", {"sep": ";", "types": {"n": "INTEGER"}}))
-    assert str(e.value) == "o.csv: a value in the file does not convert to the type its column is read as"
+def test_a_value_a_reader_option_of_duckdb_does_not_take_is_named_without_the_value(files):
+    (files.dir / "files" / "o.csv").write_text("id;n\n1;secret-value\n")
+    code, answer = load(files, '"o.csv" = { sep = ";", column_types = { n = "INTEGER" } }\n')
+    assert code == 1
+    assert files.target("select reason from _rowvioli.status") == [
+        ("o.csv: a value in the file does not convert to the type its column is read as",)]
 
 
 def test_a_json_file_whose_later_rows_differ_from_its_first_arrives_whole(files):
