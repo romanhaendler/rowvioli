@@ -72,8 +72,19 @@ def read(connection, table, options):
     for type in columns.values():
         if not TYPE.fullmatch(type):
             raise Exception(f"{table}: {type} is not a column type")
-    text = "->>'$'" if json else ""  # a JSON value is cast from its text, as in a CSV: "Anna" without the quotes
-    casts = ", ".join(f'CAST({quote(c)}{text} AS {t}) AS {quote(c)}' for c, t in columns.items())
+
+    def text(c, t):
+        """What a column under `columns` is cast from. A JSON value's text, as in a CSV: "Anna" without the quotes. An
+        Excel cell's date and time where it holds a number: Excel keeps a date as the days since 1899-12-30 (up to
+        9999-12-31), the time as their fraction, to the millisecond, and a format the text DuckDB reads leaves out."""
+        if json:
+            return f"{quote(c)}->>'$'"
+        if reader == "read_xlsx" and re.match(r"\s*(date|timestamp)", t, re.IGNORECASE):
+            days = f"TRY_CAST({quote(c)} AS DOUBLE)"
+            return (f"CASE WHEN {days} BETWEEN 0 AND 2958466 THEN strftime(TIMESTAMP '1899-12-30' + "
+                    f"to_milliseconds(round({days} * 86400e3)::BIGINT), '%Y-%m-%d %H:%M:%S.%f') ELSE {quote(c)} END")
+        return quote(c)
+    casts = ", ".join(f'CAST({text(c, t)} AS {t}) AS {quote(c)}' for c, t in columns.items())
     db = duckdb.connect()
 
     def relation(path, **extra):
@@ -122,7 +133,7 @@ def read(connection, table, options):
         for group in groups:
             part = rows(group, cast=False)
             for c, t in columns.items():
-                if part.filter(f"{quote(c)}{text} IS NOT NULL AND TRY_CAST({quote(c)}{text} AS {t}) IS NULL").limit(1) \
+                if part.filter(f"{text(c, t)} IS NOT NULL AND TRY_CAST({text(c, t)} AS {t}) IS NULL").limit(1) \
                         .fetchall():
                     return Exception(f"{table}: column {c} is not {t} in every row; change the value in the file, or "
                                      "its type under columns")

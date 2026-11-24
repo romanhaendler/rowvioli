@@ -95,6 +95,19 @@ def test_columns_names_types_for_csv_and_excel(files):
             (1, Decimal("2.5")), (2, None), (3, Decimal("10"))]
 
 
+def test_an_excel_date_a_datetime_and_a_boolean_arrive_as_such_where_columns_names_their_type(files):
+    """Excel keeps a date as a number of days with a format; read as text it is that number (46023)."""
+    db = duckdb.connect()
+    db.execute("LOAD excel")
+    db.execute(f"COPY (SELECT 1 AS id, DATE '2026-01-01' AS d, TIMESTAMP '2026-01-01 03:04:05.123' AS ts, true AS b, "
+               f"'2026-01-02' AS t) TO '{files.dir / 'files' / 'dates.xlsx'}' (FORMAT xlsx, HEADER true)")
+    pins = 'd = "date", ts = "timestamp", b = "bool", t = "date"'
+    code, answer = load(files, f'"dates.xlsx" = {{ columns = {{ {pins} }} }}\n')
+    assert code == 0, answer
+    assert files.target("select d, ts, b, t from raw_files.dates") == [
+        (date(2026, 1, 1), datetime(2026, 1, 1, 3, 4, 5, 123000), True, date(2026, 1, 2))]
+
+
 def test_the_separator_option_is_passed_to_duckdb(files):
     # a wrong separator proves the option is not sniffed away: the whole line becomes one column
     code, answer = load(files, '"customers_csv.csv" = {}\n', options='sep = ","')
