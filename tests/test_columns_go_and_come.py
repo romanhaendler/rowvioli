@@ -92,6 +92,12 @@ def test_a_column_a_person_added_to_the_mirror_is_never_dropped_and_stops_the_ru
                            "they are to be kept: CREATE TABLE <a table of yours> AS SELECT \"customer_no\", \"memo\" "
                            'FROM "raw_erp"."customers"; ALTER TABLE "raw_erp"."customers" DROP COLUMN "memo"')
     assert erp.target("select distinct memo from raw_erp.customers") == [("mine",)]
+    erp.target('CREATE TABLE public.my_memos AS SELECT "customer_no", "memo" FROM "raw_erp"."customers"; '
+               'ALTER TABLE "raw_erp"."customers" DROP COLUMN "memo"')  # the way out as the reason says it
+    again(erp)
+    assert erp.target("select distinct memo from public.my_memos") == [("mine",)]
+    assert columns(erp) == ["customer_no", "name", "city"]
+    log_replays(erp)
 
 
 def test_a_table_stuck_on_a_column_missing_in_the_source_resolves_with_the_first_run(erp):  # story 45, cases E12

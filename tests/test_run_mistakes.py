@@ -7,13 +7,16 @@ from test_secrets import lab
 from test_run import apply, definition, erp, ok, run  # noqa: F401 (erp is a fixture)
 
 
-def test_a_numeric_the_target_cannot_hold_fails_with_the_cause_and_no_path(erp):
+# whatever Arrow's message: `The string 'nan' is not a valid decimal256 number`, `Decimal value does not fit in
+# precision 76`
+@pytest.mark.parametrize("value, shown", [("NaN", "'nan'"), ("1e39", "1" + "0" * 39)])
+def test_a_numeric_the_target_cannot_hold_fails_with_the_cause_and_no_path(erp, value, shown):
     erp.source("create table nn (id int primary key, v numeric)")
-    erp.source("insert into nn values (1, 'NaN')")
+    erp.source(f"insert into nn values (1, '{value}')")
     apply(erp, definition(erp, '"public.nn" = { key = ["id"] }\n'))
     why = failed(erp)
     assert "public.nn: column v has a value no decimal holds, such as NaN or Infinity; cast it in a view of the " \
-           "source" in why and "'nan'" not in why and "Traceback" not in why and ".py" not in why, why
+           "source" in why and shown not in why.lower() and "Traceback" not in why and ".py" not in why, why
 
 
 @pytest.mark.parametrize("value, type, says", [

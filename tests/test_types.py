@@ -159,7 +159,7 @@ def test_a_table_stuck_on_a_changed_type_resolves_with_the_first_run(erp):  # st
                                           ("real", "double precision")])
 def test_a_type_of_any_family_widened_by_hand_in_the_mirror_is_followed_in_the_change_log(erp, before, wide):
     amounts(erp, before, "(1, '1')" if before != "date" else "(1, '2024-01-01')")
-    erp.target(f"alter table raw_erp.amounts alter a type {wide}")  # decision 20
+    erp.target(f"alter table raw_erp.amounts alter a type {wide}")  # by hand, within its family
     again(erp)
     assert types(erp, "a") == [wide, wide]
     assert erp.target(RECORD, ["a"]) == [(wide, before, "hand")]
