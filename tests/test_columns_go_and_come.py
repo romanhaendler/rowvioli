@@ -1,5 +1,6 @@
 """A column goes and comes back: the mirror follows the source, the change log keeps what was (spec tests, stage 2;
 the numbers are those of `.scratch/schema-changes/cases.md`)."""
+import json
 import time
 
 import psycopg
@@ -18,13 +19,19 @@ def columns(rv, table="raw_erp.customers"):
 
 
 def log_replays(rv, table="raw_erp.customers"):
-    """The invariant: the change log replayed, the latest version of each key without the D rows, gives the mirror."""
+    """The invariant: the change log replayed from the last change of key, the latest version of each key without the
+    D rows, gives the mirror. The comment on _op says when the key changed last."""
     key = ", ".join(f'"{k}"' for (k,) in rv.target(
         "select a.attname from pg_index i join pg_attribute a on a.attrelid = i.indrelid and a.attnum = any(i.indkey) "
         "where i.indrelid = %s::regclass and i.indisprimary", [table]))
     names = ", ".join(f'"{c}"' for c in columns(rv, table))
-    replay = rows(rv.target, f"select {names} from (select distinct on ({key}) _op, {names} from {table}__log "
-                             f"order by {key}, _loaded_at desc, _run desc) r where _op <> 'D'")
+    [(keys,)] = rv.target("select col_description(%s::regclass, (select attnum from pg_attribute where attrelid = "
+                          "%s::regclass and attname = '_op'))", [f"{table}__log"] * 2)
+    since = json.loads(keys)[-1].get("from") if keys else None
+    stretch = "_loaded_at > %s or _loaded_at = %s and _op = 'I'" if since else "true"
+    replay = rows(lambda q: rv.target(q, [since, since] if since else None),
+                  f"select {names} from (select distinct on ({key}) _op, {names} from {table}__log where {stretch} "
+                  f"order by {key}, _loaded_at desc, _run desc) r where _op <> 'D'")
     assert replay == rows(rv.target, f"select {names} from {table}")
 
 
