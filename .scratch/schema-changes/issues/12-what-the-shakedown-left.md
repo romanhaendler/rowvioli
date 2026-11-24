@@ -67,18 +67,27 @@ all the same. Each starts from its red as a test at the existing seam.
     three changed rows it said `~60` (change-log rows). Read what the documents promise for the counts and
     make count and documents agree; a row the mirror did not get is not an update of the mirror.
 
+12. **A password that occurs in a driver's wrapper text does not leave the wrapper in the reason.** A reason is
+    scrubbed of the passwords before the driver's wrapper is cut off (`reason_line`), so a password such as
+    `x` or `query` turns `Failed to execute query` into something the wrapper's pattern no longer matches,
+    and the whole wrapper with the statement stays in the reason. Cut first, scrub last; the test harness's
+    passwords (`x`) then stop bending every reason, and the tests that match with `in`/`endswith` for that
+    reason alone match the reason again. Also: a name inside a connector's message that the driver wraps at
+    a line break is not cut there (ticket 11, item 8, left untried).
+
 ### Documents
 
-12. A `numeric(p,s)` widened to plain `numeric` reads without trailing zeros (`3.00` reads `3`; the values
-    are equal): `docs/connectors.md` beside the other losses of a driver. The worker's grants: if a worker
-    needs no `SELECT` on `_rowvioli.columns__log`, the documents and what `init` prints do not ask for it.
+13. A `numeric(p,s)` widened to plain `numeric` reads without trailing zeros (`3.00` reads `3`; the values
+    are equal): `docs/connectors.md` beside the other losses of a driver. The worker's grants stay as they are: a
+    worker reads `_rowvioli.columns__log` for the text to put back when the comment on `_op` is lost (H1's
+    lead was wrong).
     A rename shows under the new name at every moment of the history view. What a change of columns costs
     in change-log rows, with H4's numbers (`docs/measurements.md` or `docs/target.md`). `CHANGELOG.md`.
     `.scratch/shakedown/eighth-run.md`: each line this ticket fixes is marked fixed.
 
 ## Acceptance criteria
 
-- [ ] 1 to 11: a test each, seen red first, at the existing seam; a sentence here for any that cannot be
+- [ ] 1 to 12: a test each, seen red first, at the existing seam; a sentence here for any that cannot be
       tested there.
 - [ ] The whole suite passes.
 
