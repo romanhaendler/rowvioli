@@ -108,9 +108,9 @@ A run loads exactly one table, in a process of its own. It uses a single connect
 flowchart TD
     A["1 Claim<br/>take the table lock, count the attempt"] --> B["2 Read the table's row, decrypt the connection<br/>hand it to the connector"]
     B --> C["3 Fill the staging table<br/>connector reads, COPY writes, chunk by chunk"]
-    C --> D["4 Check<br/>schema, unique keys, zero rows"]
+    C --> D["4 Check and plan<br/>columns, keys, zero rows"]
     D --> E["5 Compute the diff<br/>into a small table, check the share of deletions"]
-    E --> F["6 Publish<br/>one transaction: change log, mirror, loaded_at"]
+    E --> F["6 Publish<br/>one transaction: plan, change log, mirror, columns, loaded_at"]
     F --> G["7 Close the connection<br/>lock released, staging table gone"]
 
     B -.->|connector missing or connection broken| X["run failed<br/>target table unchanged, retried after the pause"]
@@ -145,12 +145,14 @@ def load(target):                                  # target = control connection
     chunks = read(decrypt(table.connection), table.name, table.options)
     target.copy_into_staging(chunks)               # writes chunk by chunk
 
-    target.sql("check schema, keys, zero rows")
+    target.sql("check columns, keys, zero rows; plan what happens to the columns")
     target.sql("compute the diff into a small table, check the share of deletions")
 
     target.begin()
+    target.sql("carry out the plan: columns that go, widen, key")
     target.sql("diff into the change log")
     target.sql("apply diff to the mirror")
+    target.sql("record the columns")
     target.sql("loaded_at = now, attempts = 0")
     target.commit()                                # visible from here on
     target.close()                                 # lock released
@@ -162,23 +164,86 @@ Data passes through the program only in the lines `read` and `copy_into_staging`
 
 ### Checks before publishing
 
+Step 4 compares staging table, mirror, change log, key and `renamed` and makes a plan: what the run will do to the columns besides adding new ones. Every stop that follows from a rule happens here, before anything is written. What only Postgres can find, an object of a consumer that depends on a column, stops the run in publishing, which rolls back.
+
 | Check | Aborts if | Runs |
 |---|---|---|
-| Schema | a column is missing or has changed its type, as far as the driver tells types apart (see [Types](connectors.md#types)), or holds a value its type in the target does not hold. A new column is added to the target. | step 4, on the filled staging table |
-| Key | a key column is not in the source, a key combination occurs twice in the staging table, a key column is null, or the key in the definition differs from the primary key of the mirror. | a missing key column in step 3, as soon as the connector has delivered its columns, before the staging table exists; the rest in step 4 |
+| Columns | the plan cannot carry out what the source changed: a column is gone or of another family in a table without a change log, a column of another family is a key column or a file column whose type the file guesses, a column of the mirror is not in the change log, a name the change log keeps for a retired column is taken, or a stated rename cannot act. A new column is added, a column gone from a table with a change log leaves the mirror, a type of the same family is kept or widened: see [Columns](#columns) and [The stops](#the-stops). | step 4, on the filled staging table |
+| Key | a key column is not in the source, a key combination occurs twice in the staging table, a key column is null, a key column is of another family than the mirror's, the key was taken away while a change log exists, or the comment on the change log's column `_op` is lost after a change of key. A key that differs from the mirror's primary key is no failure: see [Columns](#columns). | a missing key column in step 3, as soon as the connector has delivered its columns, before the staging table exists; the rest in step 4 |
 | Safety limits | the source delivers zero rows while the mirror has rows and `max_delete_share` is below 1, or more than `max_delete_share` of the rows would disappear. | zero rows at the end of step 3; the share after step 5 |
 | Change log | a change log exists and this run would not write to it (`log = false`, or the key was taken away), or it exists and its mirror does not. | step 4 |
 | Target name | `apply` gave the table another target name, or took it out of the definition, while the run loaded. Nothing is published; a renamed table loads its new name at once (decision 53). | step 6, the last statement before COMMIT |
 
-The share of deletions is known only from the diff, so it is checked after step 5. The safety limits keep a broken source from emptying the mirror in a perfectly consistent way. Zero rows protects a mirror that has rows. A table on its first load, or a mirror that is empty, publishes zero rows: a new empty table in the source is mirrored as an empty table. `max_delete_share = 1.0` on a table (or its source) says that every row may go, so an emptied source then gives an empty mirror (with a key, a `D` row in the change log for each row; without one, an empty table, since a table without a key is replaced as a whole and its mirror is empty when it has no rows). The reason for zero rows names this way out (decision 48).
+The share of deletions is known only from the diff, so it is checked after step 5. The safety limits keep a broken source from emptying the mirror in a perfectly consistent way. Zero rows protects a mirror that has rows. A table on its first load, or a mirror that is empty, publishes zero rows: a new empty table in the source is mirrored as an empty table. `max_delete_share = 1.0` on a table (or its source) says that every row may go, so an emptied source then gives an empty mirror (with a key, a `D` row in the change log for each row; without one, an empty table, since a table without a key is replaced as a whole and its mirror is empty when it has no rows). The reason for zero rows names this way out (decision 48). Under another key only the shrinkage of the mirror counts.
 
 A table with a key cannot have a column `_op`, and with a change log neither `_run`, `_loaded_at`, `_valid_from` nor `_valid_to`: the diff, the change log and the history view use these names.
 
-A change log that exists is complete, so a run that could not keep it complete fails and names the log. A changed key is never converted, and the program never renames or drops a table. A person does, and the next run builds anew.
+A change log that exists is complete, so a run that could not keep it complete fails and names the log. The program never renames or drops a table. A person does, and the next run builds anew.
+
+#### Columns
+
+A run changes the columns of a mirror by itself where its change log keeps what was, and stops where a person must decide. The record of every change is in [the columns table](target.md#the-columns-table).
+
+| The source | A table with a key and a change log | Without a change log |
+|---|---|---|
+| a new column | added to mirror and change log | added |
+| a column is gone | leaves the mirror, stays in the change log | stops |
+| a type of the same family | the mirror's type stays while every value fits, else mirror and change log are widened | the same |
+| a type of another family | the column goes and comes back | stops |
+| another key | the mirror is replaced as a whole, the history stays | the mirror is replaced as a whole |
+| a renamed column | a rename where the data prove it or `renamed` states it | a rename where `renamed` states it |
+
+The left column holds for a table with a key and a change log. A table with `log = false`, a table without a key and a table whose change log this run would begin have none that keeps what was.
+
+**A column is gone.** It is dropped from the mirror and stays in the change log, which gets a `U` for every row that had a value in it, so replaying the change log still gives the mirror and the history ends the version that had the value at the moment the column went. Rows that differ only in that column are not rewritten in the mirror. The columns table notes what Postgres drops with the column without a word: its indexes, its check constraints and the grants on it. A column of a key is a changed key, below. A column that is only missing from one file, one page or one run of a file or REST table is empty there and never goes, when the change log has it: the change log says whether the column is the source's.
+
+**A column comes back.** In the family of its old type it continues its column in the change log, and `columns__history` shows the gap. In another family it begins a new column: the change log's old column is renamed `<name>__<run>` (a retired column), keeps its values and is no longer read, and the new one takes the name.
+
+**A type.** One test for every family: a staged value fits when it passes into the target's type and back unchanged. A column of the mirror's family keeps the mirror's type while every value fits, whatever type the source declares, so a view on the mirror does not stop a table that loads fine. When a value does not fit, mirror and change log are altered to the type that holds both (`integer` to `bigint`; more digits in a `numeric`, an integer counting as 5, 10 or 19 digits before the point; `real` and `double precision` to `double precision`; `date` and `timestamp` to `timestamp`). A source that narrows a type changes nothing in the target. A column of another family goes and comes back in the same run. The widening can rewrite mirror and change log under an exclusive lock; a worker ends a run that exceeds `max_seconds` meanwhile, and the reason says so (`ended after max_seconds = 3600 while widening "raw_shop"."items", column amount to numeric(12,4); raise max_seconds once, until a run has widened it`).
+
+A file's types are what the file brings: text for CSV and Excel, `jsonb` for JSON, its own for Parquet, except the columns the table names under `columns`. Where the definition names the columns it is the catalog: a type under `columns` that changes to another family goes and comes back like any column, a first type given to a CSV column that was loaded as `text` too, and a column taken out of a REST table's `columns` leaves the mirror as a column a database source drops; all recorded with `by = definition`. A type that a Parquet file brings itself in another family stops instead, since a single odd value could retire a column: pin it under `columns`. A field named under `columns` and missing from the data is empty and never goes.
+
+**A key.** The key of the definition is compared with the primary key of the mirror as a set, after renames: the same columns in another order are the same key. A first key (a table that had none), another key and a key taken away without a change log replace the mirror as a whole under the new primary key, as a table without a key always is. A change log that exists gets a `D` for every old row and an `I` for every new one with the moment of the run, and its history view reads each stretch by its own key ([History](target.md#history)). A table without a change log begins with every row, as before. A primary key that a person changed by hand while the definition stayed is put back, and the columns table records it as `by = hand`. A key column is widened like any column.
+
+**A rename.** One column gone and one come in the same run, of one family, is a rename in mirror and change log when the data prove it or the table says so, and no row is written. The proof is one query over the mirror's old column and the staged new one, joined by the key, over the rows whose other columns are unchanged: every such row must be equal, there must be at least 20 such rows holding at least 5 different values, the gone column must have exactly one candidate and the new one exactly one, and the new name must not be in the change log. Nothing is proven for a table without a key or a change log, for a file or REST source, where the key changes, or where a key column is of another family; a flag, a small table and two candidates are not proven, and what is not proven is a column that goes and one that comes. A column renamed and retyped within its family is a rename, and its type is fitted to the old column. The columns table gets a `D` of the old name and an `I` of the new one with `was`, and for a proof the note `proven by the data: 20 rows unchanged otherwise, 20 of them equal, 5 distinct values`. A consumer's view on the renamed column keeps working under its own column name. A rename where the data cannot prove it is stated in the definition with [`renamed`](definition.md); it acts when the old column is gone and the new has come, and does nothing while the source still delivers the old one.
+
+Two columns that swap names, or a name reused in the run its column was renamed, are seen by nobody: every row of the two is a `U`. Where a column is renamed and a new one takes its old name in the same run the data do not prove either.
+
+**A consumer's object** that depends on a column, a type or the key that would change stops the run. Postgres refuses, nothing is published, and the reason says which column would have changed and then Postgres's own detail, which names the object:
+
+```
+column city is gone from the source and would leave the mirror raw_erp.customers, but view reporting.by_city depends on column city of table raw_erp.customers: change or drop that, and the next run goes on
+```
+
+The same holds for a foreign key or a view on the primary key when the key changes: `the key of raw_erp.customers would change from (customer_no) to (customer_no, name), but ...`. A consumer who wants to be asked before a column changes builds a view on it. The run goes on once the object is changed or dropped. If a consumer holds a lock on the mirror, its change log or its history view while the run tries to change them, the run asks without waiting for up to ten seconds and fails with `raw_erp.customers, its change log or its history view stayed in use for 10 s, so its columns could not change; the next run tries again`.
+
+### The stops
+
+Every stop gives its reason in the status view and says the way out. For `raw_erp.customers` and a column `city`:
+
+| Reason | What it means and the way out |
+|---|---|
+| `column city is missing in the source; without a change log its values are nowhere else, so a person drops it: ALTER TABLE "raw_erp"."customers" DROP COLUMN "city"` | A column is gone from a table without a change log (also a file or REST table without one, where a column missing from the data stops again). Drop it as said; the next run is `ok`. A table with a change log drops it by itself. |
+| `column amount has changed its type from text to numeric; without a change log its values are nowhere else, so a person drops it and the next run adds it anew: ALTER TABLE ... DROP COLUMN "amount"` | A type of another family in a table without a change log. Drop the column as said, or take the old rows along first by renaming the table's three objects. |
+| `column amount has changed its type from text to numeric; a source without a catalog guesses its types, so pin it under columns in the table's definition` | A file whose guessed type, or the type a Parquet file brings, is of another family now. Pin the type under `columns`, and the next run goes and comes by the definition. |
+| `column id has changed its type from integer to text, a type of another family in the key, so a row before cannot be told from one after: give the table another target_table, which begins a new mirror` | A key column changes its family. The old rows cannot be told from the new ones. |
+| `column memo of the mirror is not in the change log, so it is not known to be from the source; ...` | A column that a person added to the mirror, and that the source does not deliver, or delivers under that name. A run never drops or overwrites it. The reason says both ways out: drop the column from the mirror, which deletes its values, or rename it, so that the source's column can take the name. A table without a change log cannot tell and is not stopped for it. |
+| `column amount of the mirror has the type text, of another family than the integer the source delivers, and a run does not change it back; drop it from the mirror and the next run brings it again: ALTER TABLE ... DROP COLUMN "amount"` | A person changed the mirror's type to another family. The drop works whatever values were written into the column; putting the type back fails when one does not cast. |
+| `column city__812 of the source has the name under which the change log keeps the old values of city: rename that column of the change log and drop its history view, which the next run creates again: ALTER TABLE "raw_erp"."customers__log" RENAME COLUMN "city__812" TO <another name>; DROP VIEW "raw_erp"."customers__history"` | The source delivers a column named like a retired column (`<name>__<digits>` beside a log column `<name>`). Rename the one in the change log as said. |
+| `column city of the change log is to keep its old values under city__812, a name that is taken` (or `longer than 63 bytes`)`: rename that column of the change log ...` | A column of another family has to retire the old one and its new name is not free, or too long. Rename the column in the change log. |
+| `column city is renamed town in the table's definition, but text and integer are types of two families, so their values are not the same: take town out of renamed` | A stated rename across two families. |
+| `column city is renamed town in the table's definition, but the change log has a column town already: rename that column of the change log and drop its history view, which the next run creates again: ...` | A stated rename onto a name the change log has. |
+| `the definition has no key any more, the mirror's primary key is ['customer_no']: put the key back, or give the table another target_table; to load it without a key, drop the change log raw_erp.customers__log with its history view (DROP TABLE "raw_erp"."customers__log" CASCADE) and the mirror` | The key was taken away while a change log exists. The program does not end a change log. |
+| `the comment on column _op of the change log raw_erp.customers__log, which says the keys it was written under, is missing or unreadable, and the key has changed: put it back, COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '...'` | The comment is gone after a change of key. The reason holds the text to put back. |
+| `the change log raw_erp.customers__log exists and this run would not write to it (log = false or no key): drop it with its history view (DROP TABLE "raw_erp"."customers__log" CASCADE), or rename both with the mirror` (or `and its mirror is missing`) | The change log would no longer be complete. See below. |
+| `column amount cannot be added to "raw_erp"."customers": Postgres counts the columns once dropped from a table towards its 1600; rewrite the table to free them, by dump and restore` | A table has used up Postgres's 1600 columns with dropped ones. |
+| `Binder Error: Column "zz" in REPLACE list not found in FROM clause` | DuckDB's words for a field named under `columns` that a file does not have. The read fails: the definition or the file is wrong. In a REST table such a field is empty. |
+
+The rest of the stops are not about columns: `a key column of (customer_no) is null`, `a key combination of (customer_no) occurs twice`, `table dbo.Customers has no column customer_no; it has: ...`, `column _op is a name of the change log or the history view, so a table with a key cannot have it`, the safety limits and the target name.
 
 ### What a person does by hand
 
-The failures about a change log, a changed name and a changed type end in a few statements, here for `raw_erp.customers`. A changed key needs one more, the drop of the mirror.
+What a run does by itself is above. What is left for a person are the failures about a change log, a changed name, a table without a change log, and a column or type changed by hand, here for `raw_erp.customers`.
 
 **The target name changed** (`apply` said so), and mirror and history should come along. Rename the three before the next run, here to `clients`:
 
@@ -188,17 +253,17 @@ ALTER TABLE raw_erp.customers__log RENAME TO clients__log;
 ALTER VIEW raw_erp.customers__history RENAME TO clients__history;
 ```
 
-A changed `target_schema` moves them instead, here to `hr`, with `ALTER TABLE raw_erp.customers SET SCHEMA hr;`, the same for `customers__log`, and `ALTER VIEW raw_erp.customers__history SET SCHEMA hr;`. Both change: move, then rename.
+A changed `target_schema` moves them instead, here to `hr`, with `ALTER TABLE raw_erp.customers SET SCHEMA hr;`, the same for `customers__log`, and `ALTER VIEW raw_erp.customers__history SET SCHEMA hr;`. Both change: move, then rename. The columns table follows a mirror renamed by hand: the next run closes the old name's rows and enters the columns under the new one with `by = found`.
 
 Left alone, the old three stay where they are, and the next run builds a mirror under the new name with every row as `I`.
 
-**`log = false` was set, the key was taken away, the mirror was dropped or the key changed.** The change log would no longer be complete. Drop it, and its view goes with it:
+**`log = false` was set, the key was taken away, or the mirror was dropped.** The change log would no longer be complete. Drop it, and its view goes with it:
 
 ```sql
 DROP TABLE raw_erp.customers__log CASCADE;
 ```
 
-After a changed key (or a key taken away) the old mirror has to go as well, the third statement: `DROP TABLE raw_erp.customers`. The next run builds anew and the history begins there. To keep the old history instead, rename mirror, change log and history view as above.
+After a key taken away the old mirror has to go as well, a second statement: `DROP TABLE raw_erp.customers`; the next run builds anew and the history begins there. To keep the old history instead, rename mirror, change log and history view as above. A changed key needs none of this: the run keeps the history.
 
 **A name with a control character from an older version.** A target may hold a table whose name has one (such a name is refused now). Give the table a clean `target_table` and run `apply`: it prints the change with `?` for the character, and the next run builds the new tables. The old tables stay, and their name cannot be typed. Find it with `\dt` in `psql`, which shows the character as `\x1B`, and write it as an identifier with Unicode escapes with the character as `\001B` (a backslash in the name is doubled). Drop the mirror and its change log, and the history view goes with the log:
 
@@ -207,46 +272,27 @@ DROP TABLE raw_erp.U&"c\001B[31mred" CASCADE;
 DROP TABLE raw_erp.U&"c\001B[31mred__log" CASCADE;
 ```
 
-**A column was dropped in the source**, here `city`. The run fails with `column city is missing in the source`, and keeps failing, since the program never drops a column. Drop it from the mirror and from the change log; the history view reads the log, so it goes first, and the next run creates it again:
+**A column was dropped in the source of a table without a change log**, here `city`. The run fails with `column city is missing in the source; without a change log its values are nowhere else, so a person drops it: ALTER TABLE "raw_erp"."customers" DROP COLUMN "city"` and keeps failing until the column is dropped, since its values would be nowhere else:
 
 ```sql
-DROP VIEW raw_erp.customers__history;
 ALTER TABLE raw_erp.customers DROP COLUMN city;
-ALTER TABLE raw_erp.customers__log DROP COLUMN city;
 ```
 
-The next run is `ok`, and the log still replays to the mirror. The versions of rows that differed only in `city` now look alike in the history, and the values of `city` are gone from it. A table without a change log needs only the second statement. Not for a key column: dropping it drops the mirror's primary key, and a key column gone from the source is a changed key (above). A view of a consumer's own that reads `city` makes the `DROP` fail; drop that view first and create it again afterwards.
+A view of a consumer's own that reads `city` makes the `DROP` fail; drop that view first and create it again afterwards. A table with a change log does this by itself, and keeps the values of `city` in its change log and history.
 
-**A column's type was tightened after the first load**, for example `columns = { amount = "decimal(10,2)" }` for a CSV column that arrived as text. The run fails and names the column, and the mirror stays as it is, since the program never converts a column:
-
-```
-2026-11-12 14:03:05 ✘ raw_shop.items               failed      0.1s  column amount has changed its type from text to numeric
-```
-
-The same happens to a mirror with a `json` column from before json arrived as `jsonb`. The mirror and its change log have the old type, so drop both. The next run builds anew with the new type, and the history begins there:
-
-```sql
-DROP TABLE raw_shop.items__log CASCADE;
-DROP TABLE raw_shop.items;
-```
-
-A table without a change log needs only the second statement. To keep the old rows, rename the old tables as above before the next run.
-
-**A numeric column needs more digits than the mirror holds**, for example after the source went from `numeric(12,2)` to `numeric(12,4)`. The mirror keeps its type and loads while the values fit; the first that does not fails the run:
+**A column's type was tightened after the first load of a table without a change log**, for example `columns = { amount = "decimal(10,2)" }` for a CSV column that arrived as text. The run fails and names the column and the way out:
 
 ```
-2026-11-12 14:03:05 ✘ raw_shop.items               failed      0.1s  column amount holds a value that its type numeric(12,2) in raw_shop.items does not hold (1.2345)
+2026-11-12 14:03:05 ✘ raw_shop.items               failed      0.1s  column amount has changed its type from text to numeric; without a change log its values are nowhere else, so a person drops it and the next run adds it anew: ALTER TABLE "raw_shop"."items" DROP COLUMN "amount"
 ```
 
-Widen the column in the mirror and its change log. The history view reads the log, so it goes first, and the next run creates it again:
+Drop the column, and the next run adds it with the new type; its values come from the source again. A table with a change log goes and comes back by itself: the old values stay in the change log under `amount__<run>`.
 
-```sql
-DROP VIEW raw_shop.items__history;
-ALTER TABLE raw_shop.items ALTER amount TYPE numeric(12,4);
-ALTER TABLE raw_shop.items__log ALTER amount TYPE numeric(12,4);
-```
+**A table that was stuck before this version**, on `is missing in the source` or `has changed its type`, resolves with its first run if it has a change log, also a mirror with a `json` column from before json arrived as `jsonb`. A table without one stops as above, with its way out.
 
-A view of your own on the mirror blocks the `ALTER` as well; drop it before and create it again after. The same statements give a mirror made by 0.1.0 the source's precision and scale; it loads without them.
+**A column or a type changed by hand in the mirror.** A column a person adds to the mirror is never dropped or overwritten: the run stops with `is not in the change log` until the column is dropped or renamed. A type widened by hand in the mirror, within its family, is followed in the change log by the next run. A type changed by hand to another family stops the run, as in the table above, and the way out is to drop the column.
+
+**A change log that was changed by hand.** A column a person dropped from the change log and then dropped in the source stops with `is not in the change log`; drop it from the mirror too.
 
 ## Workers
 
