@@ -545,6 +545,10 @@ def publish(conn, t, staged, delivered, mirror, log, rows_read, counts, plan):
     if any(plan.values()):  # anything but added columns
         lock(conn, t)
         changes = carry_out(conn, t, plan)
+    elif not new and dict(staged).keys() - {moved.get(n, n) for n, _ in mirror}:
+        # added columns alone: mirror, change log and history view are altered one after the other, so a run that waited
+        # for one while holding another could deadlock with a consumer reading them (story 43)
+        lock(conn, t)
     else:
         sql(conn, "BEGIN")
     if new:  # created inside publishing, so a mirror never exists empty
@@ -915,9 +919,8 @@ def record_columns(conn, t, delivered, mirror, log, changes):
 
 
 def widen(conn, table, staged, existing):
-    """Decision 17: adds the source's columns the table lacks. The exclusive lock this takes waits behind a
-    long-reading consumer, so it gives up after lock_timeout and the run fails instead of hanging. Says whether
-    it added one."""
+    """Decision 17: adds the source's columns the table lacks, under the lock publish took first (story 43); the
+    lock_timeout bounds a wait that lock leaves none for. Says whether it added one."""
     have = dict(existing)
     new = [(name, type) for name, type in staged if name not in have]
     for name, type in new:

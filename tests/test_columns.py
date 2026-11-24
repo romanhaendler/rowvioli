@@ -221,6 +221,28 @@ def test_a_run_stopped_by_a_consumers_view_never_waits_for_it_while_holding_the_
                              "an object that depends on it was in use"), reason
 
 
+def test_a_run_that_adds_a_column_never_waits_for_its_change_log_while_holding_the_mirror(erp):  # story 43
+    ok(erp)
+    erp.target("create function public.slow() returns event_trigger language plpgsql as $$ begin "
+               "perform pg_sleep(2); end $$; create event trigger slow on ddl_command_start when tag in ('ALTER TABLE') "
+               "execute function public.slow()")
+    erp.source("alter table customers add column phone text")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    worker = erp.start("run")
+    until(lambda: erp.target("select 1 from pg_stat_activity where wait_event = 'PgSleep' and query like "
+                             "'%customers__log%ADD COLUMN%'"))
+    time.sleep(1.3)  # as above: late enough that the consumer's own check for a deadlock would find one
+
+    def read():  # a consumer joining the history view with its mirror, history first
+        with psycopg.connect(erp.target_url, autocommit=True) as c:
+            return c.execute("select count(*) from raw_erp.customers__history h join raw_erp.customers m "
+                             "using (customer_no)").fetchone()
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        consumer = pool.submit(read)
+        assert worker.wait(timeout=20) == 0
+        assert consumer.result(timeout=20) == (3,)
+
+
 def test_a_run_that_changes_columns_notifies_on_commit_and_one_that_fails_does_not(erp):
     ok(erp)
     listener = listen(erp)

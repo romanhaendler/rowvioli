@@ -222,6 +222,8 @@ This is not a scheduler. Nothing in the program knows about time.
 
 **Price.** Adding a column takes a short exclusive lock that a long-reading consumer can block. A `lock_timeout` turns that into a failed run.
 
+> **Changed by decision 55.** The lock is taken on mirror, change log and history view together, without waiting and tried again for up to ten seconds, as for every change of columns, since a run that held the mirror and waited for the change log deadlocked with a consumer joining the history view with its mirror.
+
 ## 18. Safety limits before publishing
 
 > **Changed by decision 42.** The limit on zero rows applies only when the mirror exists and holds rows.
@@ -831,7 +833,9 @@ Smaller departures of the build: the notification is not sent for a first fill t
 - **A new table goes first** (decision 20). A worker claims the tables that were never tried (status `new`) before the others, and among the others the most overdue, measured in its own `max_age`, as before. A new table is due the moment it comes, so it counted as overdue by nothing and waited behind every table that stayed overdue: 34 of 50 new tables were still `new` after four minutes with `max_age = "1s"` and `parallel = 8` (H4). When a table is due, `max_age` and `at` are untouched; only the order among due tables changes, and the order among new tables is as it was, none before another. A table whose runs failed takes its turn among the others by how overdue it is, also one that never loaded: otherwise tables that always fail, due again after each pause, would take every slot before the tables that load (review of ticket 12).
 - **A pooler in transaction mode is refused, idle or busy** (decision 7). Every command reads `pg_backend_pid()` on its connection, on a second connection and on its connection again, once at its start; a run process leaves it to its worker. The second connection with the first one's server process, a connection that changed it, or a statement the driver loses (`SQLSTATE 26000`, `08P01`) is a pooler in transaction mode (a second connection the server or the pooler refuses, for want of a free one, is not asked), and the command stops with `a connection pooler in transaction mode is in front of the target; use session mode or connect directly` before it claims anything. Before, an idle pooler passed the two reads on one connection, and `run` and `work` failed with the driver's messages and left tables `loading` until the pooler restarted (H1).
 
-**Why.** Each was a fault of a promise already made: the value as the source has it.
+- **A run that adds a column never waits while it holds a lock** (decision 17, story 43). It locks mirror, change log and history view in one statement without waiting, as for every change of columns; before, it added the column to the mirror and then waited for the change log, and a consumer that joined the history view with its mirror meanwhile had its query ended by Postgres as a deadlock (in 0.4.1 too). Found in the review of ticket 12.
+
+**Why.** Each was a fault of a promise already made: the value as the source has it, and a run that never ends a consumer's query.
 
 **Evidence.** `tests/test_run_mistakes.py`, `test_checks.py`, `test_pause_requests.py`; measurement 14.
 

@@ -87,7 +87,9 @@ def test_a_new_column_waits_10s_for_a_reading_consumer_then_fails_and_loads_once
         consumer.execute(MIRROR)
         started = time.monotonic()
         reason = failed(erp)
-        assert "lock timeout" in reason and time.monotonic() - started >= 10
+        # asked without waiting, as for every change of columns (story 43)
+        assert reason.startswith("raw_erp.customers, its change log or its history view stayed in use for 10 s, so "
+                                 "its columns could not change") and time.monotonic() - started >= 10, reason
     assert rows(erp.target, MIRROR) == before
     erp.target("update _rowvioli.tables set requested_at = now()")
     ok(erp)
