@@ -1,5 +1,6 @@
-"""A real pg_dump of the target (docs/operation.md "The target"): beside a run that changes columns, and a dump taken after
-every kind of change restored into an empty database, where a run goes on as before (ticket 14 of schema changes)."""
+"""A real pg_dump of the target (docs/operation.md "The target"): beside a run that changes columns, and a dump taken
+after every kind of change restored into an empty database, where a run goes on as before (ticket 14 of schema
+changes)."""
 import subprocess
 import uuid
 
@@ -19,9 +20,11 @@ def test_a_run_that_changes_columns_while_pg_dump_reads_the_target_gives_up_afte
         erp, servers):
     erp.source("insert into customers select g, 'n' || g, repeat('c', 50) from generate_series(4, 20000) g")
     ok(erp)
-    # pg_dump holds its locks until it has written everything, and a pipe nobody reads keeps it from finishing
+    # pg_dump holds its locks until it has written everything, and a pipe nobody reads until the test lets it keeps
+    # it from finishing
+    go = f"/tmp/go-{database(erp)}"
     dump = subprocess.Popen(["docker", "exec", servers["target"], "sh", "-c",
-                             f"pg_dump -U postgres {database(erp)} | (sleep 14; wc -c)"],
+                             f"pg_dump -U postgres {database(erp)} | (until [ -e {go} ]; do sleep 0.2; done; wc -c)"],
                             stdout=subprocess.PIPE, text=True)
     until(lambda: erp.target("select 1 from pg_locks l join pg_stat_activity a using (pid) where a.application_name "
                              "= 'pg_dump' and l.relation = 'raw_erp.customers'::regclass"))
@@ -29,9 +32,12 @@ def test_a_run_that_changes_columns_while_pg_dump_reads_the_target_gives_up_afte
     again(erp)  # rows alone: pg_dump's share lock lets them through
     erp.source("alter table customers drop column city")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    assert failed(erp).replace("***", "x") == ("raw_erp.customers, its change log or its history view stayed in use for 10 s, so its "
-                           "columns could not change; the next run tries again")
+    assert failed(erp).replace("***", "x") == (  # the source's password is x
+        "raw_erp.customers, its change log or its history view stayed in use for 10 s, so its columns could not "
+        "change; the next run tries again")
+    subprocess.run(["docker", "exec", servers["target"], "touch", go], check=True)
     assert int(dump.communicate(timeout=30)[0]) > 1_000_000 and dump.returncode == 0
+    subprocess.run(["docker", "exec", servers["target"], "rm", go], check=True)
     again(erp)
     assert columns(erp) == ["customer_no", "name"]
     log_replays(erp)
