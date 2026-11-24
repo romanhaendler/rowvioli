@@ -1,5 +1,6 @@
 """Types: the target keeps its type while the values fit, is widened when one does not, and a type of another family
 is a column that goes and comes (spec tests, stage 3; the numbers are those of `.scratch/schema-changes/cases.md`)."""
+import psycopg
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -461,4 +462,51 @@ def test_a_column_of_another_family_in_the_run_that_changes_the_key_keeps_its_ol
     log = f"select _op, customer_no, city__{run}, city from raw_erp.customers__log where _run = {run}"
     assert rows(erp.target, log) == sorted([("D", n, c, None) for n, _, c in old]
                                            + [("I", n, None, c and len(c)) for n, _, c in old], key=repr)
+    log_replays(erp)
+
+
+def slow_index(rv, table, column):
+    """A consumer's index on `table` whose function waits as long as public.pause says, per row it indexes."""
+    rv.target("create table if not exists public.pause (seconds float); insert into public.pause values (0)")
+    rv.target("create or replace function public.slow(v anyelement) returns anyelement immutable language plpgsql "
+              "as $$ begin perform pg_sleep(seconds) from public.pause; return v; end $$")
+    rv.target(f"create index on {table} (public.slow({column}))")
+
+
+@pytest.mark.parametrize("change, step", [
+    ("alter table customers drop column city",
+     'writing a row of the change log for every row of raw_erp.customers that had a value in city; raise max_seconds '
+     "once, until a run has written them"),
+    ("key", 'replacing raw_erp.customers under the key (customer_no, name), with a D and an I in the change log for '
+            "every row; raise max_seconds once, until a run has replaced it"),
+    ("alter table customers rename city to town", "comparing city with town in every row of raw_erp.customers to "
+                                                   "prove a rename; raise max_seconds once, until a run has proven it")])
+def test_a_run_ended_after_max_seconds_in_a_long_step_of_a_change_says_which_rolls_back_and_the_next_finishes(
+        erp, change, step):  # decision 54, ticket 14 of schema changes
+    erp.source("insert into customers select g, 'n' || g, 'c' || (g % 7) from generate_series(4, 30) g")
+    table = '"public.customers" = {{ key = [{}], max_seconds = {} }}\n'
+    apply(erp, definition(erp, table.format('"customer_no"', 2)))
+    ok(erp)
+    before = rows(erp.target, MIRROR), rows(erp.target, "select * from raw_erp.customers__log")
+    holder = None
+    if change == "key":  # the mirror's rows are written anew
+        slow_index(erp, "raw_erp.customers", "customer_no")
+        apply(erp, definition(erp, table.format('"customer_no", "name"', 2)))
+    elif "drop" in change:  # the change log gets a row per row
+        slow_index(erp, "raw_erp.customers__log", "customer_no")
+    else:  # the proof reads every row of the mirror, which a consumer holds meanwhile
+        holder = psycopg.connect(erp.target_url)
+        holder.execute("lock table raw_erp.customers in access exclusive mode")
+    if holder is None:
+        erp.target("update public.pause set seconds = 0.2")
+    if change != "key":
+        erp.source(change)
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp).replace("***", "x")  # the source's password is x
+    if holder:
+        holder.close()
+    assert reason == f"ended after max_seconds = 2 while {step}"
+    assert (rows(erp.target, MIRROR), rows(erp.target, "select * from raw_erp.customers__log")) == before
+    apply(erp, definition(erp, table.format('"customer_no", "name"' if change == "key" else '"customer_no"', 30)))
+    again(erp)
     log_replays(erp)

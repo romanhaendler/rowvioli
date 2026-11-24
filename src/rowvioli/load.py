@@ -3,9 +3,10 @@
 Started by the worker loop as `python -m rowvioli.load <worker> <source> <table>`, with a pipe on stdin that
 ends with the worker. It tells the worker on stdout,
 one JSON object per line: {"claimed": <target table>, "run", "max_seconds"} right after the claim, before reading,
-{"widening": <table and columns>} before a widening that may rewrite a table, and {"table": <target table>,
-"status", ...counts or "reason"} at the end. It prints nothing if it claimed nothing.
+{"long": <what>} before a step of a change that may outlast max_seconds and {"long": null} after it, and
+{"table": <target table>, "status", ...counts or "reason"} at the end. It prints nothing if it claimed nothing.
 """
+import contextlib
 import importlib.metadata
 import itertools
 import json
@@ -104,7 +105,16 @@ def load(conn, t):
     plan = check(conn, t, staged, mirror, log_columns)
     staged, plan["widen"], plan["followed"] = fit(conn, t, staged, mirror, log_columns, plan["renamed"])
     t["step"] = "comparing with the mirror"
-    counts = diff(conn, t, staged, mirror, plan) if t["key"] else None
+    # decision 54: the steps that write a row per row, named to the worker in case they outlast max_seconds
+    key = plan["key"].get("by") == "definition"
+    t["long"] = (f"replacing {t['name']} under the key ({', '.join(t['key'] or [])})"
+                 + (", with a D and an I in the change log for every row" if plan["key"]["log"] else "")
+                 + "; raise max_seconds once, until a run has replaced it" if key else
+                 f"writing a row of the change log for every row of {t['name']} that had a value in "
+                 f"{' and '.join(plan['gone'])}; raise max_seconds once, until a run has written them"
+                 if plan["gone"] else None)
+    with long(t["long"]):
+        counts = diff(conn, t, staged, mirror, plan) if t["key"] else None
     if mirror:  # under another key the mirror is replaced as a whole, and only its shrinkage counts
         check_delete_share(conn, t, rows_read, None if plan["key"] else counts)
     t["step"] = "publishing"
@@ -308,8 +318,10 @@ def proven(conn, t, mirror, staged, log_columns, renamed):
         *(", ".join(f"{a}.{quote(n)}" for n in other) for a in "ms")) if other else "")
     numbers = ", ".join(f"count(*) FILTER (WHERE m.{quote(old)} IS NOT DISTINCT FROM s.{quote(new)}), "
                         f"count(DISTINCT m.{quote(old)})" for old, new in pairs)
-    [(rows, *found)] = sql(conn, f"SELECT count(*), {numbers} FROM ONLY {t['mirror']} m JOIN _stage s ON {on} "
-                                 f"{unchanged}")
+    with long(f"comparing {' and '.join(f'{old} with {new}' for old, new in pairs)} in every row of {t['name']} to "
+              "prove a rename; raise max_seconds once, until a run has proven it"):
+        [(rows, *found)] = sql(conn, f"SELECT count(*), {numbers} FROM ONLY {t['mirror']} m JOIN _stage s ON {on} "
+                                     f"{unchanged}")
     proofs = [(old, new, equal, values) for (old, new), equal, values in zip(pairs, found[::2], found[1::2])
               if rows >= PROOF_ROWS and equal == rows and values >= PROOF_VALUES]
     return {new: (old, f"proven by the data: {rows} rows unchanged otherwise, {equal} of them equal, {values} "
@@ -551,6 +563,8 @@ def publish(conn, t, staged, delivered, mirror, log, rows_read, counts, plan):
         lock(conn, t)
     else:
         sql(conn, "BEGIN")
+    if t["long"]:  # the rows of the mirror and the change log, under the lock that load() named
+        say(long=t["long"])
     if new:  # created inside publishing, so a mirror never exists empty
         key = f", PRIMARY KEY ({', '.join(quote(k) for k in t['key'])})" if t["key"] else ""
         sql(conn, f"CREATE TABLE {t['mirror']} (LIKE _stage{key})")
@@ -576,6 +590,8 @@ def publish(conn, t, staged, delivered, mirror, log, rows_read, counts, plan):
         sql(conn, f"ALTER TABLE {t['mirror']} ADD PRIMARY KEY ({', '.join(quote(k) for k in t['key'])})")
     if t["key"] and t["log"]:  # the change log's columns under the names the plan gave them
         write_log(conn, t, staged, [(moved.get(n, n), type) for n, type in log], logged)
+    if t["long"]:
+        say(long=None)
     record_columns(conn, t, delivered, mirror, log, changes)
     # the table lock guards the table, not its name, which an apply may have given to another table meanwhile
     # (decision 53). Last, so the row lock that holds off an apply until COMMIT is taken after every wait on a mirror
@@ -689,13 +705,13 @@ def carry_out(conn, t, plan):
     for table in (t["mirror"], t["log_table"]):  # decision 54, one ALTER per table, so it is rewritten at most once
         if widened := [(name, type) for into, name, type in plan["widen"] if into == table]:
             columns = ", ".join(f"column {name} to {type}" for name, type in widened)
-            say(widening=f"{table}, {columns}")  # the worker names it if it ends the run meanwhile (decision 54)
             hand = set(plan["followed"]) if table == t["log_table"] else set()
             why = " and ".join(w for w, some in [("for values of the source", len(widened) > len(hand)),
                                                  ("to follow the mirror, which a person widened", hand)] if some)
-            alter(conn, t, f"{table} would be widened {why}, {columns}",
-                  f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(n)} TYPE {type}" for n, type in widened),
-                  table, [n for n, _ in widened])
+            with long(f"widening {table}, {columns}; raise max_seconds once, until a run has widened it"):
+                alter(conn, t, f"{table} would be widened {why}, {columns}",
+                      f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(n)} TYPE {type}" for n, type in widened),
+                      table, [n for n, _ in widened])
     if t.get("blocked"):
         raise Exception("; and ".join(t["blocked"]) + ": change or drop that, and the next run goes on")
     return changes
@@ -1077,6 +1093,17 @@ def fail(conn, t, reason):
 
 def say(**line):
     print(json.dumps(line), file=CHANNEL, flush=True)
+
+
+@contextlib.contextmanager
+def long(what):
+    """Decision 54: a step of a change that may outlast max_seconds, said to the worker, which names it if it ends the
+    run meanwhile, and its end; nothing for None."""
+    if what:
+        say(long=what)
+    yield
+    if what:
+        say(long=None)
 
 
 CHANNEL = sys.stdout  # the line to the worker; main takes it away from fd 1

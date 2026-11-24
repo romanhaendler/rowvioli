@@ -179,8 +179,7 @@ def listen(runs, answers, ended, seconds, lines):
             if claim and claim["deadline"] <= now:
                 p.kill()  # docs/target.md "Order when finishing": kill first, write the reason afterwards
                 claim["deadline"], claim["reason"] = math.inf, f"ended after max_seconds = {claim['max_seconds']}" + (
-                    f" while widening {claim['widening']}; raise max_seconds once, until a run has widened it"
-                    if "widening" in claim else "")
+                    f" while {claim['long']}" if claim.get("long") else "")
                 say_run(claim, "failed", claim["reason"])
                 answers[claim["claimed"]] = claim["answer"] = {"status": "failed", "reason": claim["reason"]}
                 ended.append(claim)
@@ -194,8 +193,8 @@ def listen(runs, answers, ended, seconds, lines):
             if "claimed" in said:  # the clock for max_seconds starts here
                 runs[p] = said | {"deadline": time.monotonic() + said["max_seconds"], "started": time.monotonic()}
                 say_run(runs[p], "started", f"run {said['run']}")
-            elif "widening" in said:  # a step that may outlast max_seconds (decision 54)
-                runs[p]["widening"] = said["widening"]
+            elif "long" in said:  # a step of a change that may outlast max_seconds, or its end (decision 54)
+                runs[p]["long"] = said["long"]
             elif "answer" not in runs[p]:  # a run killed after max_seconds may still have answered
                 answers[said.pop("table")] = runs[p]["answer"] = said
                 if said.get("reason") == "connection to the target lost":  # the run could not record it itself
