@@ -96,8 +96,21 @@ with why and what closing it would take:
   at: a table that breaks it and has a changed key that nothing in the target explains is told about the change log
   first, where it was told about the key; no test has both); `log` a setting and `log_columns` columns throughout;
   `by` decided in one pass after the rows are built (the reader's versions are now read whenever rows are recorded).
-  Not done: the columns as dicts from the start (four functions call `dict()` on the lists): it would change every
+  Decided not to do, in the review: the columns as dicts from the start (four functions call `dict()` on the lists): it would change every
   loop over columns in `load.py` (`.items()` in about ten places, `staged + [...]` in `diff`), one large diff the
   night before the release for no change a reader meets; `publish()` keeps its nine parameters, which are the
-  pipeline's facts in its order, and bundling them would hide which step reads which. Closing either is a mechanical
-  change of `load.py` with the suite as the net.
+  pipeline's facts in its order, and bundling them would hide which step reads which. Both change no behaviour and
+  no reader meets them; a large mechanical diff of `load.py` the night before 0.5.0 is a risk with nothing to gain, so
+  they stay as they are by decision, not as an open point.
+
+Review (2026-11-24), fixed on `sc-13` test first: a change Postgres refuses ran under an empty search path, so a
+consumer's event trigger or check constraint whose function finds its table on the path failed every run that changed
+columns (item 5: only the catalogue's naming runs under the empty path now); a grant passed on whose grantee lost USAGE
+on the schema failed every run that built the history view anew (item 4: the worker's role gives it, as where it may
+not act as the grantee; tested on Postgres 14, 16 and 17); a `catalog` other than `"data"` or `"definition"` was taken
+half for each (item 2: refused with the value; `"definition"` tested for a connector of one's own); while publishing
+an object that does not exist is withheld too (`relation "anna2" does not exist` of `::regclass`), and Postgres's own
+messages of a constraint a widening checks again are shown (item 8); an old key column retired in the run the key
+changes failed the run (item 1); the merged stop of item 7 is tested; a key column named under `columns` that no file
+has stops as null (item 3). A misspelt name under `columns` is an empty column, as in REST: the old Binder Error caught
+it, but a pin set before a file brings its column must not stop the table, and the empty column shows the mistake.
