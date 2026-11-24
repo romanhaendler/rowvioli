@@ -116,8 +116,8 @@ def test_a_driver_installed_without_its_metadata_loads_and_its_version_is_none(e
     assert erp.target("select driver_version from _rowvioli.runs") == [(None,)]
 
 
-def test_a_column_name_longer_than_63_bytes_arrives_cut_and_a_key_naming_it_fails(erp):  # cases A20, as it is today
-    long = "c" * 70
+def test_a_postgres_source_cuts_a_name_longer_than_63_bytes_itself_and_a_key_naming_the_long_name_fails(erp):
+    long = "c" * 70  # cases A20: the source keeps 63 bytes of it, so a run never sees the long name (tests/test_file.py)
     erp.source(f'create table wide (k int primary key, "{long}" int)')
     erp.source("insert into wide values (1, 2)")
     apply(erp, definition(erp, '"public.wide" = { key = ["k"] }\n'))

@@ -367,6 +367,15 @@ def stage(conn, t):
     batches = stream(connector.read(connection, t["source_table"], options))
     if batches is None:
         raise Exception("the connector delivered nothing, not even the columns")
+
+    def cut(name):  # Postgres keeps the first 63 bytes of a name, whole characters, and drops the rest (cases A20)
+        return name.encode()[:63].decode(errors="ignore")
+    if long := [n for n in batches.schema.names if cut(n) != n]:
+        twins = [n for n in batches.schema.names if cut(n) == cut(long[0])]
+        raise Exception(f"columns {' and '.join(twins)} of the source are equal in their first 63 bytes, the most "
+                        "Postgres keeps of a name: give them names in the source that differ there" if twins[1:] else
+                        f"column {long[0]} of the source is longer than 63 bytes, the most Postgres keeps of a name: "
+                        "give it a shorter name in the source")
     if (gone := [k for k in t["key"] or [] if k not in batches.schema.names]):
         raise Exception(f"table {t['source_table']} has no column {', '.join(gone)}; it has: "
                         + ", ".join(batches.schema.names))

@@ -449,11 +449,29 @@ def test_a_csv_header_with_one_name_twice_arrives_with_the_second_numbered(files
     assert files.target("select * from raw_files.twice") == [("1", "2", "3")]
 
 
-def test_two_names_equal_in_their_first_63_bytes_fail_with_the_cut_name_twice(files):  # cases A20, as it is today
-    (files.dir / "files" / "long.csv").write_text(f"{'c' * 63}x;{'c' * 63}y\n1;2\n")
+@pytest.mark.parametrize("long", ["c" * 64, "ä" * 32])  # bytes, not characters
+def test_A20_a_column_name_longer_than_63_bytes_fails_the_run_and_names_the_column(files, long):
+    (files.dir / "files" / "long.csv").write_text(f"{'d' * 63};{long}\n1;2\n")
     code, answer = load(files, '"long.csv" = {}\n')
     assert code == 1
-    assert f'column "{"c" * 63}" specified more than once' in answer["raw_files.long"]["reason"]
+    assert answer["raw_files.long"]["reason"] == (
+        f"column {long} of the source is longer than 63 bytes, the most Postgres keeps of a name: give it a shorter "
+        "name in the source")
+    assert files.target("select to_regclass('raw_files.long')") == [(None,)]
+    # a name of 63 bytes, also of characters of two bytes, loads whole
+    (files.dir / "files" / "long.csv").write_text(f"{'d' * 63};{'ä' * 31}d\n1;2\n")
+    code, answer = load(files, '"long.csv" = {}\n')
+    assert code == 0, answer
+    assert [c for c, _ in types(files, "long")] == ["d" * 63, "ä" * 31 + "d"]
+
+
+def test_A20_two_names_equal_in_their_first_63_bytes_fail_and_name_both(files):
+    (files.dir / "files" / "long.csv").write_text(f"k;{'c' * 63}y;{'c' * 63}z\n0;1;2\n")
+    code, answer = load(files, '"long.csv" = {}\n')
+    assert code == 1
+    assert answer["raw_files.long"]["reason"] == (
+        f"columns {'c' * 63}y and {'c' * 63}z of the source are equal in their first 63 bytes, the most Postgres "
+        "keeps of a name: give them names in the source that differ there")
 
 
 def test_a_csv_without_a_header_gets_column0_and_up_and_keeps_its_first_line(files):  # cases F8, as it is today
