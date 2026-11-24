@@ -71,6 +71,14 @@ said under Comments.
 11. **A connector whose extra is not installed says which to install**: `connector "file" cannot be loaded: No
     module named 'duckdb'` adds `pip install "rowvioli[file]"` (`odbc`, `rest` alike), in `list`, `run` and `work`.
 
+### Found while building (added in the review)
+
+12. **A Parquet `uint64` above 2^63 arrives whole**: the driver writes it as `bigint` and `18446744073709551615`
+    arrived as `-1`, run `ok`. It arrives exact (`numeric`) or the run fails naming the column, never the value.
+13. **A Parquet decimal of more than 38 digits** is read by DuckDB as a double, rounded, run `ok`: the same rule.
+    And the siblings, each settled by the same rule: an unsigned integer of another width, `hugeint`/`uhugeint`, an
+    integer beyond `bigint` in Excel or JSON, a time, interval or timestamp of nanoseconds.
+
 ## Acceptance criteria
 
 - [x] 1 to 11: a test each, seen red first, at the existing seam (`tests/odbc/run.sh` for ODBC); a sentence under
@@ -122,6 +130,38 @@ Built on `sc-16` (Opus), each item test-first, the red seen:
 
 Found on the way, not built (outside the items; for the owner): a Parquet `uint64` above 2^63 arrives wrapped as a
 negative `bigint` (the driver's cast, `18446744073709551615` → `-1`, run `ok`), and a Parquet `decimal` of more than 38
-digits is read by DuckDB as `DOUBLE`, rounded, with the run `ok`.
+digits is read by DuckDB as `DOUBLE`, rounded, with the run `ok`. Built in the review as items 12 and 13.
 
 Suites at c17e345: the whole suite 787 passed, 21 skipped (8 min 44 s); `tests/odbc/run.sh` 17 passed, 1 skipped.
+
+Review (Opus, branch `sc-16-review`). Every new test of items 1 to 11 fails with `src` of the branch's base (seen;
+items 6, 7 and 10 also with their one line taken out alone). Judged right as built: items 2 to 5 and 7 to 9. Added:
+
+- 6: the empty-target race happens on demand: three `init` at once on a fresh database, ten rounds by hand: with
+  the lock 30 of 30 exit 0 (`the schema _rowvioli is ready in the target`); without it, in every round two of three
+  exit 1 with `duplicate key value violates unique constraint "pg_namespace_nspname_index"`. Now a test
+  (`test_three_inits_at_once_on_an_empty_target_all_end_as_on_a_ready_target`, red 3 of 3 without the lock).
+- 1: psqlODBC describes `float8` as `SQL_FLOAT` with 17 and `real` as `SQL_REAL`; arrow-odbc hands `map_schema`
+  only the Arrow schema, where both are `float32`, so reading every float as a double is the lesser evil.
+  `3.14::real` arrives as `3.140000104904175`, the same number: docs/connectors.md says it, and `r::numeric` in a
+  view keeps `3.14`. A mirror of `real` from a `float8` widens by the family rule (`misfits` takes 22003 for
+  `1e300::real`), with or without a change log; one from a `real` keeps its type. Dates: psqlODBC's raw text of a
+  date `infinity` and `-infinity` is `0000-00-00` (both), of `4713-01-01 BC` `4713-01-01`; as a date struct it is
+  the day of the run. The connector could tell `0000-00-00` only by reading every date of every driver as text
+  (for the owner); docs/connectors.md says the loss in the `odbc` paragraph.
+- 10: through psqlODBC (Unicode and ANSI) a `LATIN1` database's `Müller` arrives right with no setting (seen by
+  hand, `arrow_odbc` in the ODBC image). A CSV not in UTF-8 fails with `CSV Error on Line: 2` (no way out in it)
+  and loads with `encoding = "latin-1"` (tested); a JSON file fails with `Malformed JSON … invalid UTF-8` and must be
+  converted. docs/connectors.md says both.
+- 11: `odbc` and `rest` tested in `list` too.
+- 12: `load.whole()` (new, beside `without_nul`, one line in `stage()` after `stream()`): a `uint64` from any
+  connector is staged as `numeric(20,0)`; `uint32`/`uint16`/`uint8` the driver already widens (tested). For the
+  merge with sc-15: `stage()` gains `batches = whole(batches, t)` after the check for `None`, nothing else there.
+- 13: the file connector reads `parquet_schema` and fails a decimal of more than 38 digits naming file and column.
+- Siblings: a time, timestamp or timestamptz of nanoseconds (Parquet; ODBC's `datetime2(7)`) with a value finer than
+  a microsecond fails naming the column (`whole()`), the driver had cut it (cases B16, whose test pinned the cut);
+  `columns = { t = "timestamp" }` reads it rounded (DuckDB rounds). `uhugeint` under `columns` is refused (DuckDB
+  handed 2^128 − 1 to Arrow as `-1`); a `hugeint` of 39 digits already failed naming the column (tested). An integer
+  beyond `bigint` in a JSON file keeps its digits as `jsonb` (seen); in Excel it is a float in the file (documented).
+  Not settled: an interval's nanoseconds (DuckDB's intervals have none; another connector's are cut), and a `uint64`
+  or nanoseconds inside a list (shortcut in `whole()`).
