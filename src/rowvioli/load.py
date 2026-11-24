@@ -305,11 +305,11 @@ def diff(conn, t, staged, mirror, plan):
     """Step 5, by the plan (decision 13): the rows that differ into the TEMP table _diff (docs/target.md "Comparing in
     the target"), over the columns of staging table and mirror together, every column list by name. Returns the
     counts."""
-    had, delivered = dict(mirror), dict(staged)
+    had, staging = dict(mirror), dict(staged)
     columns = staged + [(c, had[c]) for c in plan["gone"]]
     # a new column is null in the mirror once added, and one that went is null in the source, so a row differs only
     # if the other side has a value there
-    s = ", ".join(f"s.{quote(c)}" if c in delivered else f"NULL::{type}" for c, type in columns)
+    s = ", ".join(f"s.{quote(c)}" if c in staging else f"NULL::{type}" for c, type in columns)
     m = ", ".join(f"m.{quote(c)}" if c in had else f"NULL::{type}" for c, type in columns)
     key = [quote(k) for k in t["key"]]
     on = " AND ".join(f"s.{k} = m.{k}" for k in key)

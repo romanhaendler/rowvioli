@@ -134,6 +134,7 @@ def test_A8_a_function_that_reads_a_gone_column_breaks_at_its_next_call_and_the_
         erp.target("select cities()")
     assert erp.target("select _loaded_at from _rowvioli.columns__log where \"column\" = 'city' and _op = 'U'") == [
         (loaded_at,)]
+    log_replays(erp)
 
 
 def test_A10_a_gone_key_column_stops_the_run_as_before(erp):
