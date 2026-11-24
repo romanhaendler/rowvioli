@@ -137,17 +137,22 @@ def check(conn, t, staged, mirror, log_columns):
         proofs = proven(conn, t, mirror, staged, log_columns, renamed)
         renamed.update({new: old for new, (old, _) in proofs.items()})
         plan["proven"] = {new: note for new, (_, note) in proofs.items()}
-    unknown = ("column {} of the mirror is not in the change log, so it is not known to be from the source; drop it "
-               "from the mirror, or add it to the change log too and the next run takes it out of the mirror")
     for name, type in mirror:
         if name in renamed.values():
             continue
+        # a run adds a column to mirror and change log together, so one only the mirror has is a person's (story 8)
+        if t["key"] and t["log"] and log_columns and name not in logged:
+            raise Exception(f"column {name} of the mirror is not in the change log, so it is not known to be from the "
+                            "source; " + (f"the source brings a column {name}, which a run would write into: drop it "
+                                          "from the mirror, or rename it to keep its values: ALTER TABLE "
+                                          f"{t['mirror']} DROP COLUMN {quote(name)} or RENAME COLUMN {quote(name)} TO "
+                                          "<another name>" if name in types else
+                                          "drop it from the mirror, or add it to the change log too and the next run "
+                                          "takes it out of the mirror"))
         if name not in types:
             if not (t["key"] and t["log"] and log_columns):
                 raise Exception(f"column {name} is missing in the source; without a change log its values are nowhere "
                                 f"else, so a person drops it: ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
-            if name not in logged:
-                raise Exception(unknown.format(name))
             plan["gone"].append(name)
         elif family(types[name]) != family(type):  # another family goes and comes (decision 6); fit() did the same
             changed = f"column {name} has changed its type from {type} to {types[name]}"
@@ -162,8 +167,6 @@ def check(conn, t, staged, mirror, log_columns):
                                 "from one after: give the table another target_table, which begins a new mirror")
             if not (t["key"] and t["log"] and log_columns):
                 raise Exception(f"{changed}; without a change log its values are nowhere else, {drop}")
-            if name not in logged:  # a person's column under a name the source brings now: no run brings its values
-                raise Exception(unknown.format(name))
             if family(logged[name]) != family(type):  # the mirror's type changed by hand (cases G4)
                 raise Exception(f"column {name} of the mirror has the type {type}, of another family than the "
                                 f"{types[name]} the source delivers, and a run does not change it back; drop it from "
@@ -709,8 +712,7 @@ def record_columns(conn, t, delivered, mirror, log, changes):
         if (before := old.get(name)) is None:
             row.update(op="I", by="found" if not old else "source" if name not in found else "hand")
         else:
-            # a mirror's column the change log lost by hand: the run adds it again, the state alone shows nothing
-            hand = found.get(name) != (before["type"], before["mirror"]) or bool(log) and name not in dict(log) \
+            hand = found.get(name) != (before["type"], before["mirror"]) \
                 or changes.get(name, {}).get("by") == "hand"  # a primary key put back: the record knew the key
             if not hand and all(before[f] == row[f] for f in ("type", "source_type", "key", "mirror")):
                 continue

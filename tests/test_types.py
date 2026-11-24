@@ -188,9 +188,33 @@ def test_G1_a_column_a_person_added_whose_name_the_source_brings_in_another_fami
     erp.source("alter table amounts add column memo integer")
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert failed(erp) == (
-        "column memo of the mirror is not in the change log, so it is not known to be from the source; drop it from "
-        "the mirror, or add it to the change log too and the ne***t run takes it out of the mirror")
+        "column memo of the mirror is not in the change log, so it is not known to be from the source; the source "
+        "brings a column memo, which a run would write into: drop it from the mirror, or rename it to keep its "
+        'values: ALTER TABLE "raw_erp"."amounts" DROP COLUMN "memo" or RENAME COLUMN "memo" TO <another name>')
     assert erp.target("select memo from raw_erp.amounts") == [("mine",)]
+
+
+def test_G1_a_column_a_person_added_whose_name_the_source_brings_in_its_family_is_never_written(erp):  # story 8
+    amounts(erp, "integer", "(1, 10)")
+    erp.target("alter table raw_erp.amounts add column memo text")
+    erp.target("update raw_erp.amounts set memo = 'mine'")
+    erp.source("alter table amounts add column memo text")
+    erp.source("update amounts set memo = 'theirs'")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == (  # x is the harness's password, which a reason hides
+        "column memo of the mirror is not in the change log, so it is not known to be from the source; the source "
+        "brings a column memo, which a run would write into: drop it from the mirror, or rename it to keep its "
+        'values: ALTER TABLE "raw_erp"."amounts" DROP COLUMN "memo" or RENAME COLUMN "memo" TO <another name>')
+    assert erp.target("select memo from raw_erp.amounts") == [("mine",)]
+    # renamed, it is a column of a person's own, which stops as any (cases G1); dropped, the source's comes
+    erp.target('ALTER TABLE "raw_erp"."amounts" RENAME COLUMN "memo" TO "my_memo"')
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp).startswith("column my_memo of the mirror is not in the change log")
+    assert erp.target("select my_memo from raw_erp.amounts") == [("mine",)]
+    erp.target('ALTER TABLE "raw_erp"."amounts" DROP COLUMN "my_memo"')
+    again(erp)
+    assert erp.target("select memo from raw_erp.amounts") == [("theirs",)]
+    log_replays(erp, "raw_erp.amounts")
 
 
 def test_a_run_ended_after_max_seconds_while_it_widened_says_so_and_names_the_column(erp):  # story 16
