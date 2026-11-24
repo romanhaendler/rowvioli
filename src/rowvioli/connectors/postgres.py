@@ -8,6 +8,9 @@ from ..target import quote
 
 # the reader's version, so that columns another one delivers are recorded as by = reader (decision 54)
 driver_version = version("adbc-driver-postgresql")
+# a timestamp's infinity as the driver reads it: Postgres's largest number moved to Arrow's epoch, wrapped around. It
+# cannot write it again ("Error occurred writing COPY data"); -infinity and a date's infinity it writes as they were
+INFINITY = -2**63 + 946_684_800_000_000 - 1
 
 
 def read(connection, table, options):
@@ -26,6 +29,12 @@ def read(connection, table, options):
     def batches():
         try:
             for b in reader:
+                for f, c in zip(reader.schema, b.columns):
+                    c = c.flatten() if pa.types.is_list(f.type) else c  # an array of timestamps too
+                    if pa.types.is_timestamp(c.type) and pc.any(pc.equal(c.view(pa.int64()), INFINITY)).as_py():
+                        raise Exception(f"{table}: column {f.name} has infinity, which the driver cannot write into a "
+                                        f"timestamp{'tz' if c.type.tz else ''} of the target; cast it in a view of "
+                                        "the source")
                 yield pa.record_batch([_cast(table, c, f) if _is_numeric(r) else c
                                        for c, f, r in zip(b.columns, schema, reader.schema)], schema=schema)
         finally:

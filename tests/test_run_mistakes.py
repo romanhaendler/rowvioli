@@ -30,6 +30,23 @@ def test_a_numeric_the_target_cannot_hold_fails_with_the_cause_and_no_path(erp, 
         and shown not in why.lower() and "Traceback" not in why and ".py" not in why, why
 
 
+@pytest.mark.parametrize("type", ["timestamp", "timestamptz", "timestamp[]"])
+def test_a_timestamp_of_infinity_fails_naming_the_column_and_minus_infinity_loads(erp, type):
+    """The driver reads infinity as a number it cannot write again; -infinity and a date's infinity it can."""
+    erp.source(f"create table inf (id int primary key, ts {type}, d date)")
+    value = "'{{{}}}'" if type.endswith("[]") else "'{}'"
+    erp.source(f"insert into inf values (1, {value.format('-infinity')}, 'infinity'), "
+               f"(2, {value.format('-infinity')}, '-infinity')")
+    apply(erp, definition(erp, '"public.inf" = { key = ["id"] }\n'))
+    ok(erp)
+    text = "select id, ts::text, d::text from {} order by 1"
+    assert erp.target(text.format("raw_erp.inf")) == erp.source(text.format("inf"))
+    erp.source(f"update inf set ts = {value.format('infinity')} where id = 2")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == ("public.inf: column ts has infinity, which the driver cannot write into a "
+                           f"{type.removesuffix('[]')} of the target; cast it in a view of the source")
+
+
 def test_a_numeric_whose_values_fit_loads_whatever_its_digits_before_the_point(erp):
     if int(erp.source("show server_version_num")[0][0]) < 150000:
         pytest.skip("a numeric's scale below 0 or above its precision needs Postgres 15 in the source")

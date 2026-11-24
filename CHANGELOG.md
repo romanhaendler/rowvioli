@@ -52,6 +52,7 @@ Fixed:
 - `rowvioli run` whose own connection the target drops, as a restart does, ends with the line `connection to the target lost`. Before, its last line was Postgres's bare `FATAL:  terminating connection due to administrator command`.
 - A run that adds a column never waits for the change log while it holds the mirror: it locks mirror, change log and history view first, without waiting, as for every change of columns, and a long reader makes it fail with `... stayed in use for 10 s, so its columns could not change` instead of `lock timeout`. Before, a consumer joining the history view with its mirror meanwhile had its query ended by Postgres as a deadlock (in 0.4.1 too).
 - A consumer's table that inherits from a mirror keeps its rows. Before, a run read them as the mirror's, deleted them as `D` rows and counted them towards `max_delete_share` (in 0.4.1 too). The history view reads only the change log's own rows.
+- A `timestamp` or `timestamptz` of `infinity` from the `postgres` connector, also in an array, fails the run with a reason that names the column and says to cast it in a view of the source; the driver cannot write it into the target. Before, the reason was `Error occurred writing COPY data:` (in 0.4.1 too). `-infinity` and a date's `infinity` load as before.
 
 ## 0.4.1 (2026-11-23)
 
