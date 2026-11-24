@@ -59,7 +59,7 @@ columns__log, columns__history   its change log and history view
 - `sources` and the first line of `tables` are the definition. Only `apply` writes them. A table row carries the settings a table may override, with the source's filled in.
 - The second line of `tables` is what the workers experienced, plus `requested_at`.
 - `runs` is a log: one row per run. Nothing reads it to decide anything.
-- `status` is what people look at. It shows a table as `new`, `loading`, `ok` or `failed`, with the `reason` of a failure in a column of its own. A reason is one line: the driver's own message without its wrapper (`IO:`, `NOT_FOUND:`), traceback or the paths of a traceback. When the driver gave none, it says so and names the step. A table whose run died shows as `failed` with the reason `worker lost`: the view finds that nobody holds the table lock any more and no reason was written. The run that next claims the table sets the dead run's row in `runs` to `failed`, reason `worker lost`, with a `finished_at`.
+- `status` is what people look at. It shows a table as `new`, `loading`, `ok` or `failed`, with the `reason` of a failure in a column of its own. A reason is one line: the driver's own message without its wrapper (`IO:`, `NOT_FOUND:`), traceback or the paths of a traceback, and an error the connector raised while its rows were read as the connector raised it, not as the driver wraps it. The values of the connection are removed after the line is cut, so that a password such as `query` cannot keep the wrapper in it; a value with a line break is removed before. When the driver gave none, it says so and names the step. A table whose run died shows as `failed` with the reason `worker lost`: the view finds that nobody holds the table lock any more and no reason was written. The run that next claims the table sets the dead run's row in `runs` to `failed`, reason `worker lost`, with a `finished_at`.
 - Progress is computed there too, for example `loading, 485,000 of about 1,000,000 rows`: while a table is loading, `rows_written` shows its rows so far and `rows_last_run` the rows read by its last successful run. The holder of the table lock is in `pg_locks`, its rows so far are in Postgres' own `pg_stat_progress_copy`. A worker writes nothing for it. `rows_written` is empty for a role that is neither the workers' role nor a member of `pg_read_all_stats`.
 
 ## History
@@ -103,6 +103,8 @@ This returns customers 7 (Bonn) and 9 (Essen). A moment before the first load re
 
 **Columns that go, come and change.** A column the source drops leaves the mirror and stays in the change log and the history view. The change log gets a `U` for every row that had a value in it, so the version that had the value ends at the moment the column went and the next one has it empty. A column that comes back continues its old column in the change log, empty for the versions in between. Where a column comes back with a type of another family, the change log's old column is renamed `<name>__<run>` (a retired column, here `city__812` for run 812), keeps its values, and a new column takes the name; the history view shows both. A type of the same family that is widened is widened in the change log too. A renamed column is renamed in the change log, so the history view shows it under its new name at every moment, also before the rename; the columns table keeps the old name for the moments before, and its row of the new name says the old one in `was`, which joins the two. The columns table says when each of this happened ([below](#the-columns-table)).
 
+What a change of columns costs in the change log: a column that goes writes a `U` for every row that had a value in it, a type of another family one for every row, and a changed key a `D` and an `I` for every row, with the mirror rewritten; a new column, a widened type and a rename write none. "What changed yesterday" on such a change log then lists every row. In the shakedown before the merge (H4), 40 changes of columns of a table of 100,000 rows gave 4.2 million change-log rows, 383 MB.
+
 **A changed key.** The mirror is replaced as a whole under the new key, and the change log gets a `D` for every old row and an `I` for every new one, with the moment of the run. The history view then has one branch per key, joined with `UNION ALL`, each over its own stretch of the change log and partitioned by its own key: the stretch of the old key reaches up to the moment of the change and its `D` rows, the next begins with its `I` rows. The keys and the moments they changed are the comment on the change log's column `_op`, and the view is built from that comment and from nothing in `_rowvioli`:
 
 ```sql
@@ -135,7 +137,7 @@ SELECT customer_no, city
 
 ## The columns table
 
-Which columns and types a mirror had at a moment, and what caused each change, is kept the way rows are: `_rowvioli.columns` is to the columns of the mirrors what a mirror is to its rows, `_rowvioli.columns__log` its change log and `_rowvioli.columns__history` its history view, with `_op`, `_run`, `_loaded_at`, `_valid_from` and `_valid_to` as for any change log; the history view carries `_run` and `_op` as well, so that who may read only it reads what changed and in which run. `_loaded_at` is that of the rows published in the same transaction, so a column's change and the rows loaded with it carry the same moment. The three are written by the publishing transaction only, for every table, with or without a key.
+Which columns and types a mirror had at a moment, and what caused each change, is kept the way rows are: `_rowvioli.columns` is to the columns of the mirrors what a mirror is to its rows, `_rowvioli.columns__log` its change log and `_rowvioli.columns__history` its history view, with `_op`, `_run`, `_loaded_at`, `_valid_from` and `_valid_to` as for any change log; the history view carries `_run` and `_op` as well, and for each version the run that ended it with that run's `by` and `note` (`_valid_to_run`, `_valid_to_by`, `_valid_to_note`, empty while it is current), so that who may read only it reads what changed, in which run and why, also where a version ended with none after it. `_loaded_at` is that of the rows published in the same transaction, so a column's change and the rows loaded with it carry the same moment. The three are written by the publishing transaction only, for every table, with or without a key.
 
 ```
 columns   target_schema, target_table, column     the key
@@ -165,19 +167,29 @@ SELECT "column", type, "key" FROM _rowvioli.columns__history
  ORDER BY "column";
 ```
 
-What changed in a table since a moment, in which run, by whom, and what the note says:
+What changed in a table since a moment, in which run, by whom, and what the note says, with the versions that ended since:
 
 ```sql
-SELECT _valid_from, _run, _op, "column", type, mirror, was, "by", note FROM _rowvioli.columns__history
- WHERE target_schema = 'raw_erp' AND target_table = 'customers' AND _valid_from > '2026-03-01 00:00:00+00'
+SELECT _valid_from, _run, _op, "column", type, mirror, was, "by", note, _valid_to, _valid_to_run, _valid_to_by,
+       _valid_to_note
+  FROM _rowvioli.columns__history
+ WHERE target_schema = 'raw_erp' AND target_table = 'customers'
+   AND (_valid_from > '2026-03-01 00:00:00+00' OR _valid_to > '2026-03-01 00:00:00+00')
  ORDER BY _valid_from, "column";
 ```
 
-`_op` is `I` for a column the record did not have and `U` for a change. A column a person dropped from mirror and change log, and every column of a mirror renamed by hand under its old name, is closed instead: its last version ends then (`_valid_to`) and none follows, so the query above does not list it; `columns__log` has it as a `D` row.
+`_op` is `I` for a column the record did not have and `U` for a change. A column a person dropped from mirror and change log, and every column of a mirror renamed by hand under its old name, is closed instead: its last version ends then and none follows, and that version says the run that closed it, `by = hand` (`_valid_to_run`, `_valid_to_by`); `columns__log` has it as a `D` row.
 
 The reader of `columns__history` needs `SELECT` on that view and nothing else in `_rowvioli`, as for the history of a mirror ([Rights](operation.md#the-target)). With it the reader sees the columns of every table of the target, in every schema, and in the notes the names of the indexes and constraints that went with a column and of the roles that had a grant on it.
 
-**The notification.** A run that records a change of columns, a key or a name notifies the channel `rowvioli_schema` in the transaction that publishes it, once per run, so a listener hears it at the COMMIT and never for a run that was rolled back. The payload is small and fixed: `{"schema" : "raw_erp", "table" : "customers", "run" : 812}`, as Postgres writes a JSON object. A listener reads what changed from the history view, `SELECT _op, "column", type, mirror, was, "by", note FROM _rowvioli.columns__history WHERE _run = 812`, which needs no right on `columns__log`. A column closed in that run, as above, is not among those rows; a listener that must hear of it reads `columns__log` with the same condition, which needs `SELECT` on it. It is not sent for a first fill where every column is `found`: a table's first fill is no change of columns. A first fill that changed a column, such as the first run after the upgrade on a table whose source dropped one, sends it. A change `by = hand` or `by = reader` is sent as well.
+**The notification.** A run that records a change of columns, a key or a name notifies the channel `rowvioli_schema` in the transaction that publishes it, once per run, so a listener hears it at the COMMIT and never for a run that was rolled back. The payload is small and fixed: `{"schema" : "raw_erp", "table" : "customers", "run" : 812}`, as Postgres writes a JSON object. A listener reads what changed from the history view, the versions the run began and those it ended, a column it closed among them, which needs no right on `columns__log`:
+
+```sql
+SELECT target_table, "column", _run, _op, type, mirror, was, "by", note, _valid_to_run, _valid_to_by, _valid_to_note
+  FROM _rowvioli.columns__history WHERE _run = 812 OR _valid_to_run = 812;
+```
+
+The notification is not sent for a first fill where every column is `found`: a table's first fill is no change of columns. A first fill that changed a column, such as the first run after the upgrade on a table whose source dropped one, sends it. A change `by = hand` or `by = reader` is sent as well.
 
 ```sql
 LISTEN rowvioli_schema;
@@ -190,14 +202,14 @@ Staging table and mirror sit next to each other in the target. One query finds t
 ```sql
 -- deleted: in the mirror, no longer in the staging table
 SELECT 'D', m.customer_no, m.name, m.city
-FROM raw_erp.customers m
+FROM ONLY raw_erp.customers m
 WHERE NOT EXISTS (SELECT 1 FROM stage s WHERE s.customer_no = m.customer_no)
 
 UNION ALL
 
 -- inserted or updated: in the staging table, missing or different in the mirror
 SELECT CASE WHEN m.customer_no IS NULL THEN 'I' ELSE 'U' END, s.customer_no, s.name, s.city
-FROM stage s LEFT JOIN raw_erp.customers m ON m.customer_no = s.customer_no
+FROM stage s LEFT JOIN ONLY raw_erp.customers m ON m.customer_no = s.customer_no
 WHERE m.customer_no IS NULL
    OR ROW(s.customer_no, s.name, s.city) IS DISTINCT FROM ROW(m.customer_no, m.name, m.city);
 ```
@@ -206,6 +218,7 @@ WHERE m.customer_no IS NULL
 - **Columns are named explicitly.** `ROW(...)` compares by position. After a column has been added, the order in mirror and staging table can differ, so the program generates the column lists by name. `ROW(s.*)` would be wrong.
 - **One pass.** Postgres reads both tables once and joins them on the key. The cost grows linearly with the number of rows.
 - **Composite keys** only add columns to the join condition.
+- **`ONLY`** reads and deletes the rows of the mirror itself, never those of a table of a consumer's that inherits from it.
 - **Without a key** there is no comparison and no change log. The transaction deletes all rows of the mirror and inserts the staging table. Consumers never see an empty table in that case either. The run counts the rows written as inserted and the rows that were in the mirror as deleted.
 
 The comparison is safe although it runs before the transaction: as long as the run holds the table lock, no other run changes the mirror.
@@ -216,7 +229,7 @@ Publishing itself:
 BEGIN;
 INSERT INTO raw_erp.customers__log (_run, _loaded_at, _op, customer_no, name, city)
 SELECT :run, now(), _op, customer_no, name, city FROM diff;                 -- unless log = false
-DELETE FROM raw_erp.customers m USING diff d
+DELETE FROM ONLY raw_erp.customers m USING diff d
  WHERE d._op IN ('D','U') AND d.customer_no = m.customer_no;
 INSERT INTO raw_erp.customers SELECT customer_no, name, city FROM diff WHERE _op IN ('I','U');
 UPDATE _rowvioli.tables SET loaded_at = now(), attempts = 0 WHERE id = :table;
@@ -225,7 +238,7 @@ UPDATE _rowvioli.runs SET status = 'ok', finished_at = now(), inserted = ..., up
 COMMIT;
 ```
 
-Where the plan holds more than added columns ([Columns](loading.md#columns)), publishing begins differently: it locks mirror, change log and history view in one statement with `LOCK TABLE ... IN ACCESS EXCLUSIVE MODE NOWAIT`, tried again for up to ten seconds, so that a run never waits for a lock while it holds another and cannot deadlock with a consumer who reads them in another order. Then it drops the history view, carries out the plan (renames, retired columns, the key, columns that go, widened types), applies the diff, creates the history view again, writes the columns table, notifies on `rowvioli_schema` and ends with the check of the target name, as above.
+Where the plan holds more than added columns ([Columns](loading.md#columns)), publishing begins differently: it locks mirror, change log and history view in one statement with `LOCK TABLE ... IN ACCESS EXCLUSIVE MODE NOWAIT`, tried again for up to ten seconds, so that a run never waits for a lock while it holds another and cannot deadlock with a consumer who reads them in another order. A run that only adds columns takes the same lock and goes on with the diff. Otherwise it then drops the history view, carries out the plan (renames, retired columns, the key, columns that go, widened types), applies the diff, creates the history view again, writes the columns table, notifies on `rowvioli_schema` and ends with the check of the target name, as above.
 
 ## How Postgres counts
 
@@ -244,8 +257,8 @@ SELECT classid AS source, count(*) FROM pg_locks
    AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
  GROUP BY classid;
 
--- 3. If the total is below max_running: take the lock of the most overdue table
---    whose source is below its parallel, and count the attempt.
+-- 3. If the total is below max_running: take the lock of a table never tried, else of
+--    the most overdue table, whose source is below its parallel, and count the attempt.
 SELECT pg_try_advisory_lock(:source, :table);
 UPDATE _rowvioli.tables SET attempted_at = now(), attempts = attempts + 1, reason = NULL WHERE id = :table;
 INSERT INTO _rowvioli.runs (run, "table", worker, started_at, status) VALUES (:run, :table, :me, now(), 'running');
@@ -275,6 +288,7 @@ The prototype claimed this way with 6 workers of 4 slots, two sources with `para
 | The target fails over to another node | connections drop, running loads end without publishing, the retry catches up | with the connection |
 | An object of a consumer depends on a column, type or key that would change | the run fails and names the object, nothing is published | right after; the next run goes on once the object is changed |
 | Target Postgres is unreachable | workers wait and retry. Nothing is loaded. | |
+| Target Postgres restarts during a run | the run fails with `connection to the target lost`. `work` records it once the target is back, and loads on. `rowvioli run`, whose own connection is gone too, ends with the line `connection to the target lost` and exit code 1, and the status shows `worker lost` until the table's next run | with the connection |
 
 In no case does anything half-done become visible: a COMMIT needs a command from the worker, and the worker is gone by then.
 
@@ -283,6 +297,6 @@ The program sets on its own connections:
 - Keepalive: `keepalives_idle=30`, `keepalives_interval=10`, `keepalives_count=3`, `tcp_user_timeout=60000` in the URL, so the worker notices a dead server
 - The same for the server's side of the session, `tcp_keepalives_idle = 30`, `tcp_keepalives_interval = 10`, `tcp_keepalives_count = 3`, `tcp_user_timeout = 60000`, so Postgres notices a dead worker and frees its locks. Without them the server's default applies, two hours on Linux.
 - `client_connection_check_interval = 2s`, so that Postgres looks for the client during a long statement too
-- `lock_timeout = 10s` for adding a column, so that a long-reading consumer cannot block the run forever. The run then fails with `lock timeout` and loads after its pause; meanwhile new readers of that table wait behind it for up to 10 s.
+- A run that adds a column locks mirror, change log and history view first, without waiting, tried again for up to ten seconds, as for every change of columns ([Comparing in the target](#comparing-in-the-target)), so that a long-reading consumer cannot block the run forever and the run never waits for one while it holds another. The run then fails with `raw_erp.customers, its change log or its history view stayed in use for 10 s, so its columns could not change; the next run tries again` and loads after its pause.
 
-The control connection must go to Postgres directly, or through a pooler in session mode, not through one in transaction mode. A command that opens the target reads `pg_backend_pid()` in two transactions, and when the two differ it fails with `a connection pooler in transaction mode is in front of the target; use session mode`. The check is a net with holes: a pooler with no other client keeps handing out the same server connection and passes it, and one that is busy is caught most of the time (84 of 100 checks with eight busy neighbours, [measurements](measurements.md#14-the-pooler-check-behind-pgbouncer-in-transaction-mode)). Whoever runs a pooler configures session mode and does not rely on the check.
+The control connection must go to Postgres directly, or through a pooler in session mode, not through one in transaction mode. A command that opens the target reads `pg_backend_pid()` on its connection, on a second connection, and on its connection again, before it claims anything; a run process leaves it to the worker that started it. Postgres gives every connection a server process of its own for its life, so the second connection never has the first one's, and one connection never changes it. A pooler in transaction mode hands a server process to whichever client asks next: an idle one hands the first connection's to the second, a busy one moves the first between its transactions, and a very busy one loses the driver's statement to another client (`SQLSTATE 26000` or `08P01`). Each of the three stops the command with `a connection pooler in transaction mode is in front of the target; use session mode or connect directly`. The second connection costs a command one connection more for a few milliseconds (34 ms on a laptop to a local container); where the server or the pooler has none to spare (`max_connections`, PgBouncer's `max_client_conn`), it is not asked and the two reads on the command's connection decide alone. It was caught in every one of 400 checks with up to 16 busy neighbours ([measurements](measurements.md#14-the-pooler-check-behind-pgbouncer-in-transaction-mode)). Nothing is claimed through such a pooler: a table lock taken there would stay on a server process the pooler keeps, and the table would show `loading` until the pooler restarts.

@@ -34,7 +34,7 @@ def check_address(url):
         raise SystemExit("ROWVIOLI_TARGET_URL has more than one @ after the scheme: a password with @, / or : "
                          "must be percent-encoded")
     rest = url.split("://", 1)[1]
-    authority = re.split(r"[/?]", rest, 1)[0]  # not at #: the driver takes a # in a password as it is
+    authority = re.split(r"[/?]", rest, maxsplit=1)[0]  # not at #: the driver takes a # in a password as it is
     host = authority.rsplit("]", 1)[-1]  # after an IPv6 host's bracket, so its colons are no user info
     port = host.rsplit(":", 1)[-1]
     # a password holding / or ? ends the authority early: what is left looks like host:word with an @ further on.
@@ -45,19 +45,41 @@ def check_address(url):
                          "(%2F, %3F)")
 
 
-def connect(init=False, versioned=True):
+def connect(init=False, versioned=True, pooler=True):
     """Opens the control connection and refuses a target without `_rowvioli` or with another schema version.
     With init=True a missing `_rowvioli` is created instead. With versioned=False only the status view must
-    exist: a role that may only read it cannot read `meta` (docs/operation.md "The target")."""
+    exist: a role that may only read it cannot read `meta` (docs/operation.md "The target"). With pooler=False the
+    check for a pooler in transaction mode is left out: a run process's worker has made it (decision 55)."""
     url = os.environ.get("ROWVIOLI_TARGET_URL")
     if not url:
         raise SystemExit("ROWVIOLI_TARGET_URL is not set")
     check_address(url)
-    conn = adbc.connect(url + ("&" if "?" in url else "?") + KEEPALIVE, autocommit=True)
-    for name, value in SESSION.items():
-        sql(conn, f"SET {name} = '{value}'")
-    if sql(conn, "SELECT pg_backend_pid()") != sql(conn, "SELECT pg_backend_pid()"):  # one per transaction (autocommit)
-        raise SystemExit("a connection pooler in transaction mode is in front of the target; use session mode")
+    url += ("&" if "?" in url else "?") + KEEPALIVE
+    conn = adbc.connect(url, autocommit=True)
+    pooled = False
+    try:
+        for name, value in SESSION.items():
+            sql(conn, f"SET {name} = '{value}'")
+        if pooler:
+            # Postgres gives every connection a server process of its own for its life. A pooler in transaction mode
+            # hands one to whichever client asks next: an idle one hands this connection's to the next client too, a
+            # busy one moves this connection between two transactions (decision 55)
+            [(pid,)] = sql(conn, "SELECT pg_backend_pid()")  # one transaction each (autocommit)
+            try:
+                other = adbc.connect(url, autocommit=True)
+            except adbc.Error:  # a server or pooler with no connection to spare, which one command needs: not asked
+                other = None
+            if other:
+                with other:
+                    pooled = sql(other, "SELECT pg_backend_pid()") == [(pid,)]
+            pooled = pooled or sql(conn, "SELECT pg_backend_pid()") != [(pid,)]
+    except adbc.Error as e:  # a very busy one gives the driver's statement to another client's transaction
+        if not pooler or e.sqlstate not in ("26000", "08P01"):  # invalid_sql_statement_name, protocol_violation
+            raise
+        pooled = True
+    if pooled:
+        raise SystemExit("a connection pooler in transaction mode is in front of the target; use session mode or "
+                         "connect directly")
     if not versioned:
         if not sql(conn, "SELECT to_regclass('_rowvioli.status') IS NOT NULL")[0][0]:
             raise SystemExit(NO_SCHEMA)

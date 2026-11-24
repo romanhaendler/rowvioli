@@ -62,7 +62,7 @@ Answer of `run` on stdout:
 {"seconds": 41.2,
  "tables": {
   "raw_erp.customers": {"status": "ok", "inserted": 12, "updated": 3, "deleted": 1},
-  "raw_erp.suppliers": {"status": "failed", "reason": "62 % of the rows would be deleted"}}}
+  "raw_erp.suppliers": {"status": "failed", "reason": "62 % of the rows would be deleted, more than max_delete_share = 0.5 allows: the source table may have been replaced or emptied; if so, max_delete_share = 1.0 on the table lets one run through"}}}
 ```
 
 | Exit code | Meaning |

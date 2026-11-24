@@ -267,6 +267,17 @@ Recommendation: the documentation (now `docs/target.md`, "History") names an ind
 
 Limitations: one pooler version, one pool size, a synthetic load. A pass is no proof that no pooler is in front; the check catches the case it is built for, a pooler whose server connections are shared between clients, with a chance that grows with their number. Session mode was found to work in the shakedown (`install-target.md`).
 
+**The check since ticket 12 of schema changes** (2026-11-24, PgBouncer 1.26.1, `edoburu/pgbouncer:v1.26.1-p0`, `POOL_MODE=transaction`, pool of 5, in front of `postgres:16-alpine`, scripts not kept). The control connection reads `pg_backend_pid()`, a second connection of the same process reads it once, and the control connection reads it again; a pooler is found when the second connection has the first one's server process, when the control connection's two differ, or when the driver's statement fails with `SQLSTATE 26000` or `08P01`. 100 checks in a row, each with its own two connections, with neighbours running `pg_sleep(0.05)`:
+
+| Neighbours | Second connection on the first's server process | Control connection moved | Driver's statement lost | Missed |
+|---|---|---|---|---|
+| 0 | 100 | 0 | 0 | 0 |
+| 2 | 72 | 25 | 6 | 0 |
+| 8 | 0 | 0 | 100 | 0 |
+| 16 | 0 | 0 | 100 | 0 |
+
+`rowvioli status` through the pooler said `a connection pooler in transaction mode is in front of the target` 20 times of 20 with 0, 2 and 8 neighbours. Postgres gives every connection a server process of its own for its life, and a pooler in session mode keeps one per client, so neither is ever taken for a pooler: in `tests/test_run_mistakes.py` an idle pooler in transaction mode is refused and one in session mode loads. In the review of ticket 12, idle, with `SERVER_ROUND_ROBIN=1` and `MIN_POOL_SIZE=5`, so that five server connections wait and each goes to the next client in turn: 20 of 20 refused. Limitations: one pooler, one pool size.
+
 ## 15. A whole run on a wide table
 
 2026-11-17, the program at commit 4705418 (`uv sync --locked`, then `uv run rowvioli run <source> <table> --slots 1` from the worktree), a real process per run, the seconds as the program reports them; the scripts are not in `experiments/`. Apple M2, 8 cores, 16 GB, macOS; Docker 29.3.1. Source and target are two containers of `postgres:16-alpine` (PostgreSQL 16.16), each `--cpus 2 --memory 4g --shm-size 1g -c work_mem=256MB`, so the numbers stand beside sections 1 to 3. Client and both servers on the same machine, no network between them. Beside the runs, one other agent's two idle-to-light containers ran (a PgBouncer experiment); the host's load average was 3 to 5 at the start. Docker's disk was at 36 to 63 % during the runs.
@@ -324,5 +335,5 @@ Limitations: two runs per case, spread of the two up to 15 % (up to 30 % for the
 | Connections cannot be read without the private key, and tampering is detected | experiment 7. The prototype sealed whole blocks and rejected a copied ciphertext and a wrong private key. |
 | A killed process cannot publish | prototype: killed while filling, at the diff and while publishing, the mirror stayed unchanged |
 | A process per run costs 0.1 to 0.2 s | prototype |
-| A transaction-mode pooler shared with other clients is caught by two `pg_backend_pid()` reads; an idle one is not | experiment 14 |
+| A transaction-mode pooler is caught, idle or busy, by `pg_backend_pid()` read on the control connection twice and on a second connection once, and by the driver's statement it loses | experiment 14 |
 | A whole run on 300 columns costs no more per cell than on 8; 100,000 rows take about 11 s, three times the rows 3.5 times as long, and the read from the source is most of it | experiment 15 |

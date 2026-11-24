@@ -159,6 +159,22 @@ def test_C12_a_consumers_foreign_key_or_view_on_the_primary_key_stops_another_ke
     assert primary_key(erp) == ["customer_no"]
 
 
+def test_C12_a_consumers_foreign_key_on_a_key_column_that_leaves_the_key_is_named_with_a_view_in_the_way(erp):
+    ok(erp)
+    erp.target("create schema reporting; create table reporting.orders (id int, customer_no int references "
+               "raw_erp.customers); create view reporting.cities as select city from raw_erp.customers")
+    erp.source("alter table customers drop column city")
+    apply(erp, definition(erp, '"public.customers" = { key = ["name"] }\n'))
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp).replace("***", "x")  # the source's password is x, and the reason hides it
+    assert reason == (
+        "the key of raw_erp.customers would change from (customer_no) to (name), but constraint orders_customer_no_fkey "
+        "on table reporting.orders depends on index raw_erp.customers_pkey; and column city is gone from the source "
+        "and would leave the mirror raw_erp.customers, but view reporting.cities depends on column city of table "
+        "raw_erp.customers: change or drop that, and the next run goes on"), reason
+    assert primary_key(erp) == ["customer_no"]
+
+
 def test_C14_a_new_key_with_a_column_the_old_rows_of_the_change_log_lack_reads_each_stretch_by_its_own_key(erp):
     ok(erp)
     first = (erp.target(LOADED_AT)[0][0], rows(erp.target, MIRROR))

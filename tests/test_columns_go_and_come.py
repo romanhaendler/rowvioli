@@ -1,6 +1,7 @@
 """A column goes and comes back: the mirror follows the source, the change log keeps what was (spec tests, stage 2;
 the numbers are those of `.scratch/schema-changes/cases.md`)."""
 import json
+import re
 import time
 
 import psycopg
@@ -53,8 +54,12 @@ def test_A5_a_column_gone_from_the_source_leaves_the_mirror_and_its_values_stay_
     assert erp.target(CITY) == [("Bonn", first, second), (None, second, None)]
     # story 5: the mirror's rows are not rewritten for it
     assert erp.target("select customer_no, ctid::text from raw_erp.customers order by 1") == places
+    assert erp.target(COUNTS) == [(0, 0, 0)]  # the counts are the mirror's rows (H1 saw ~60 for 3 rows changed)
     assert erp.target(LAST) == [("U", "city", False, "source", None)]
     log_replays(erp)
+
+
+COUNTS = "select inserted, updated, deleted from _rowvioli.runs order by run desc limit 1"
 
 
 @pytest.mark.parametrize("table", ['{ key = ["customer_no"], log = false }', "{}"])
@@ -78,6 +83,11 @@ def test_a_column_goes_in_the_run_that_changes_deletes_and_inserts_rows(erp):  #
     again(erp)
     assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
     assert erp.target(LOG) == [("U", 1, None), ("D", 2, "Essen"), ("I", 4, None)]
+    assert erp.target(COUNTS) == [(1, 1, 1)]
+    erp.source("alter table customers drop column name")  # a U in the log for each row, none in the mirror
+    erp.source("update customers set customer_no = 5 where customer_no = 4")
+    again(erp)
+    assert erp.target(COUNTS) == [(1, 0, 1)]
     log_replays(erp)
 
 
@@ -145,6 +155,27 @@ def test_D6_a_view_on_the_history_view_stops_a_change_of_any_column_and_is_named
     assert columns(erp) == ["customer_no", "name", "city"]
     erp.target("drop view public.names")  # the way out
     again(erp)
+    log_replays(erp)
+
+
+def test_a_stop_names_every_object_in_the_way_through_the_layers_so_one_round_of_work_clears_it(erp):  # P20
+    ok(erp)
+    erp.target("create view public.v1 as select customer_no, name from raw_erp.customers__history;"
+               "create view public.v2 as select * from public.v1; create view public.v3 as select * from public.v2;"
+               "create materialized view public.m as select customer_no, city from raw_erp.customers;"
+               "create view public.w as select city from raw_erp.customers")
+    erp.source("alter table customers drop column city")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    assert reason == ("the columns of raw_erp.customers change, but view v1 depends on view "
+                      "raw_erp.customers__history; view v2 depends on view v1; view v3 depends on view v2; and column "
+                      "city is gone from the source and would leave the mirror raw_erp.customers, but materialized "
+                      "view m depends on column city of table raw_erp.customers; view w depends on column city of "
+                      "table raw_erp.customers: change or drop that, and the ne***t run goes on"), reason
+    assert columns(erp) == ["customer_no", "name", "city"]
+    erp.target("drop view public.v3, public.v2, public.v1, public.w; drop materialized view public.m")  # one round
+    again(erp)
+    assert columns(erp) == ["customer_no", "name"]
     log_replays(erp)
 
 
@@ -383,6 +414,13 @@ def test_A19_a_new_source_column_named_like_a_retired_one_stops_until_a_person_r
     log_replays(erp)
 
 
+def follow(rv, reason):
+    """Runs the statements a reason about retired names longer than 63 bytes gives, each column under its first
+    letter and _old, the same name in mirror and change log."""
+    statements = reason.split(" in one step: ", 1)[1]
+    rv.target(re.sub(r'"(\w)(\w*)" TO <a shorter name>', r'"\1\2" TO "\1_old"', statements))
+
+
 def test_a_retired_name_longer_than_postgres_takes_stops_and_says_what_to_rename(erp):  # story 10
     long = "y" * 62  # not x: the source's password is x, and the reason hides it
     erp.source(f"alter table customers add column {long} text")
@@ -392,11 +430,28 @@ def test_a_retired_name_longer_than_postgres_takes_stops_and_says_what_to_rename
     erp.source(f"alter table customers add column {long} integer")
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
-    assert reason.startswith(f"column {long} of the change log is to keep its old values under {long}__"), reason
-    assert "a name that is longer than 63 bytes: rename that column of the change log" in reason
-    erp.target(f"alter table raw_erp.customers__log rename column {long} to y_text")
-    erp.target("drop view raw_erp.customers__history")
+    assert reason.startswith(f"the change log is to keep the old values of {long} under {long}__"), reason
+    follow(erp, reason)  # the change log alone has it
     again(erp)
+    assert columns(erp, "raw_erp.customers__log")[-2:] == ["y_old", long]
+    log_replays(erp)
+
+
+def test_retired_names_longer_than_postgres_takes_are_named_together_and_one_round_of_the_way_out_leads_out(erp):
+    one, two = "y" * 62, "z" * 62  # P18 followed one column at a time into a second and a third stop
+    erp.source(f"alter table customers add column {one} text, add column {two} text")
+    erp.source(f"update customers set {one} = name, {two} = city")
+    ok(erp)
+    erp.source(f"alter table customers drop column {one}, drop column {two}")
+    erp.source(f"alter table customers add column {one} integer, add column {two} integer")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    assert reason.startswith(f"the change log is to keep the old values of {one} and {two} under {one}__"), reason
+    follow(erp, reason)  # mirror and change log have them
+    again(erp)
+    assert columns(erp) == ["customer_no", "name", "city", one, two]
+    assert erp.target("select y_old, z_old from raw_erp.customers__log where customer_no = 1 order by _loaded_at") == [
+        ("Anna", "Bonn"), (None, None)]  # the I of the first run, the U of the run they went in
     log_replays(erp)
 
 

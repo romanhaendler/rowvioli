@@ -1,4 +1,5 @@
 """Checks, schema changes, failure reasons and secrets (spec tests 12, 13, 15, 16, 17, 18)."""
+import json
 import time
 
 import psycopg
@@ -86,7 +87,9 @@ def test_a_new_column_waits_10s_for_a_reading_consumer_then_fails_and_loads_once
         consumer.execute(MIRROR)
         started = time.monotonic()
         reason = failed(erp)
-        assert "lock timeout" in reason and time.monotonic() - started >= 10
+        # asked without waiting, as for every change of columns (story 43)
+        assert reason.startswith("raw_erp.customers, its change log or its history view stayed in use for 10 s, so "
+                                 "its columns could not change") and time.monotonic() - started >= 10, reason
     assert rows(erp.target, MIRROR) == before
     erp.target("update _rowvioli.tables set requested_at = now()")
     ok(erp)
@@ -298,7 +301,7 @@ def test_a_value_postgres_quotes_in_its_message_stays_out_of_the_reason(erp, val
     erp.source("create view quoting as select k, n::int as n from texts")
     apply(erp, definition(erp, '"public.quoting" = {}\n'))
     reason = failed(erp)  # x is the harness's password, which a reason hides
-    assert reason.endswith(said.replace("x", "***")) and "secret" not in reason and "3000000000" not in reason, reason
+    assert reason == said.replace("x", "***") and "secret" not in reason and "3000000000" not in reason, reason
 
 
 def test_a_name_postgres_quotes_in_its_message_stays_in_the_reason(erp):
@@ -308,3 +311,114 @@ def test_a_name_postgres_quotes_in_its_message_stays_in_the_reason(erp):
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
     assert reason.endswith('new row for relation "customers" violates check constraint "c"'), reason
+
+
+def withheld(rv):
+    """A run that fails one table on a message a consumer wrote; returns the reason, after making sure that the row's
+    values are in none of the answer, the lines, the status and `runs`."""
+    r = rv.run("run")
+    assert r.returncode == 1, r.stdout
+    [reason] = [a["reason"] for a in json.loads(r.stdout)["tables"].values()]
+    assert rv.target("select reason from _rowvioli.status") == rv.target(
+        "select reason from _rowvioli.runs order by run desc limit 1") == [(reason,)]
+    assert "Anna2" not in r.stdout + r.stderr and "Secret" not in r.stdout + r.stderr, r.stdout + r.stderr
+    return reason
+
+
+@pytest.mark.parametrize("statement, sqlstate", [
+    ("raise exception 'bad row %', NEW", "P0001"),
+    ("raise exception using message = 'bad row ' || NEW::text, errcode = 'check_violation'", "23514"),
+    ("assert NEW.name <> 'Anna2', 'bad row ' || NEW::text", "P0004"),
+    # not raised by the code but by Postgres inside it, with the row's value: whatever the language, a message under
+    # a consumer's function is withheld
+    ("execute format('select from %I', NEW.name)", "42P01"),  # relation "Anna2" does not exist
+    ("perform 1 / (length(NEW.name) - 5)", "22012")])
+def test_a_message_a_consumers_trigger_raises_on_the_target_is_withheld_and_the_reason_names_the_function(
+        erp, statement, sqlstate):
+    ok(erp)
+    erp.target(f"create function public.guard() returns trigger language plpgsql as $$ begin {statement}; return NEW;"
+               " end $$")
+    erp.target("create trigger g before insert on raw_erp.customers for each row execute function public.guard()")
+    erp.source("update customers set name = 'Anna2' where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert withheld(erp) == (f"function guard() raised an error (SQLSTATE {sqlstate}) in the target; its message may "
+                             "hold a row's values, so it is left out here: the target's server log has it")
+
+
+@pytest.mark.parametrize("statement", ["raise exception 'bad name Secret %', n",
+                                       "execute format('select from %I', 'Secret' || n)"])
+def test_a_message_a_function_in_a_source_view_raises_is_withheld(erp, statement):
+    erp.source("create function check_name(n text) returns text language plpgsql as $$ begin "
+               f"if n = 'Anna' then {statement}; end if; return n; end $$")
+    erp.source("create view checked as select customer_no, check_name(name) as name from customers")
+    apply(erp, definition(erp, '"public.checked" = { key = ["customer_no"] }\n'))
+    # the driver gives a source's error while rows arrive as text only: no SQLSTATE. x is the harness's password
+    assert withheld(erp) == ("function check_name(te***t) raised an error in the source; its message may hold a row's "
+                             "values, so it is left out here: the source's server log has it")
+
+
+@pytest.mark.parametrize("constraint, change, says", [
+    ("add constraint u unique (city)", "city = 'Essen'", 'duplicate key value violates unique constraint "u"'),
+    ("add constraint f foreign key (city) references public.cities", "city = 'Ulm'",
+     'violates foreign key constraint "f"'),
+    ("alter name set not null", "name = null",
+     'null value in column "name" of relation "customers" violates not-null constraint')])
+def test_postgres_own_constraint_messages_keep_their_names(erp, constraint, change, says):
+    ok(erp)
+    erp.target("create table public.cities (city text primary key); insert into public.cities values ('Bonn'), ('Essen')")
+    erp.target(f"alter table raw_erp.customers {constraint}")
+    erp.source(f"update customers set {change} where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp).endswith(says)
+
+
+def test_a_source_table_created_anew_with_other_columns_says_what_it_may_be_and_the_setting_for_one_run(erp):  # H2
+    ok(erp)
+    erp.source("drop table customers; create table customers (customer_no int primary key, label text);"
+               "insert into customers values (7, 'a'), (8, 'b'), (9, 'c')")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp).replace("***", "x") == (  # the source's password is x, and the reason hides it
+        "100 % of the rows would be deleted, more than max_delete_share = 0.5 allows: the source table may have been "
+        "replaced or emptied; if so, max_delete_share = 1.0 on the table lets one run through")
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], max_delete_share = 1.0 }\n'))
+    ok(erp, "erp")
+    assert rows(erp.target, MIRROR) == [(7, "a"), (8, "b"), (9, "c")]
+
+
+CHILD = "select * from public.branch order by customer_no"
+BRANCH = ("create table public.branch () inherits (raw_erp.customers);"
+          "insert into public.branch values (7, 'Gus', 'Ulm'), (8, 'Hal', 'Ulm'), (9, 'Ida', 'Ulm'), (10, 'Jo', 'Ulm')")
+
+
+def test_a_consumers_table_that_inherits_from_the_mirror_keeps_its_rows_and_is_not_read_as_the_mirror(erp):
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], log = false }\n'))
+    ok(erp)
+    erp.target(BRANCH)
+    branch = erp.target(CHILD)
+    apply(erp, definition(erp))  # the change log begins with the mirror's rows, not the child's
+    erp.source("update customers set city = 'Köln' where customer_no = 1")
+    assert run(erp, "erp")[1]["tables"]["raw_erp.customers"] == {"status": "ok", "inserted": 0, "updated": 1,
+                                                                 "deleted": 0}
+    erp.source("update customers set city = 'Bonn' where customer_no = 1")
+    assert run(erp, "erp")[1]["tables"]["raw_erp.customers"] == {"status": "ok", "inserted": 0, "updated": 1,
+                                                                 "deleted": 0}
+    assert erp.target(CHILD) == branch
+    assert rows(erp.target, "select customer_no from only raw_erp.customers") == [(1,), (2,), (3,)]
+    assert erp.target("select _op, customer_no from raw_erp.customers__log order by _run, customer_no") == [
+        ("I", 1), ("I", 2), ("I", 3), ("U", 1)]
+
+
+def test_a_consumers_table_that_inherits_from_the_mirror_keeps_its_rows_when_the_key_changes(erp):
+    ok(erp)
+    erp.target(BRANCH + ";create table public.notes () inherits (raw_erp.customers__log);"
+               "insert into public.notes values (0, 'I', now(), 7, 'Gus', 'Ulm')")
+    branch = erp.target(CHILD)
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no", "name"] }\n'))
+    assert run(erp, "erp")[1]["tables"]["raw_erp.customers"] == {"status": "ok", "inserted": 3, "updated": 0,
+                                                                 "deleted": 3}
+    assert erp.target(CHILD) == branch
+    assert erp.target("select count(*) from only raw_erp.customers__log "
+                      "where _run = (select max(run) from _rowvioli.runs)") == [(6,)]
+    # the history view reads the change log, not a consumer's table that inherits from it
+    assert rows(erp.target, "select customer_no from raw_erp.customers__history where _valid_to is null") == [
+        (1,), (2,), (3,)]

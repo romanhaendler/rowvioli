@@ -36,7 +36,12 @@ def _cast(table, column, field):
     """A numeric's text as a decimal. Arrow's message for one that is none (`The string 'nan' is not a valid
     decimal256 number`) holds the value, which would end up in the status view and the log: the column instead, for
     any failed cast, so that no wording of Arrow's can show a value."""
+    digits = max(field.type.precision - field.type.scale, 0)
     try:
+        # Arrow wraps a value of far more digits than the decimal holds without an error (1.5e400 arrived as 0); the
+        # digits from the first that is not 0, since Postgres writes 0.12 for numeric(2,2)
+        if pc.any(pc.match_substring_regex(column.storage, rf"^-?0*[1-9]\d{{{digits}}}")).as_py():
+            raise pa.ArrowInvalid
         return column.storage.cast(field.type)
     except pa.ArrowInvalid:
         odd = pc.any(pc.match_substring_regex(column.storage, "nan|inf", ignore_case=True)).as_py()
@@ -82,9 +87,10 @@ def _decimal(field):
     becomes a decimal with the column's precision and scale: decimal128 up to 38 digits, which the target keeps,
     decimal256 beyond and for an unconstrained `numeric`, which arrive as `numeric`."""
     typmod = int((field.metadata or {}).get(b"POSTGRESQL:typmod", b"-1"))
-    if typmod < 0:
-        # unconstrained: 38 digits on either side of the point; more fails the run (docs/connectors.md "Types")
-        return pa.decimal256(76, 38)
     # the scale is 11 bits with a sign since Postgres 15: numeric(5,-2) rounds to hundreds
     p, s = (typmod - 4) >> 16, (((typmod - 4) & 0x7FF) ^ 1024) - 1024
+    if typmod < 0 or p > 76:
+        # unconstrained, or more digits than any decimal: 38 digits on either side of the point; more fails the run
+        # (docs/connectors.md "Types")
+        return pa.decimal256(76, 38)
     return pa.decimal128(p, s) if p <= 38 else pa.decimal256(p, s)

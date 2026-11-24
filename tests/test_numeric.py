@@ -1,4 +1,6 @@
 """A numeric keeps its precision and scale, and a target column's own precision and scale are taken over (ticket 14)."""
+import pytest
+
 from test_checks import failed
 from test_columns_go_and_come import log_replays
 from test_run import apply, column_types, definition, erp, ok, run  # noqa: F401 (erp is a fixture)
@@ -84,13 +86,50 @@ def test_a_view_on_the_mirror_lets_values_that_fit_load_and_stops_the_widening_o
     erp.source("insert into prices values (3, 1.2345)")
     reason = failed(erp, "erp")
     assert reason.startswith('"raw_erp"."prices" would be widened for values of the source, column price to '
-                             'numeric(14,4), but rule _RETURN on view priced depends on column "price": change or drop '
-                             "that, and the ne"), reason  # the harness's password is x, which the reason hides
+                             'numeric(14,4), but view priced depends on column price of table raw_erp.prices: change or '
+                             "drop that, and the ne"), reason  # the harness's password is x, which the reason hides
     assert erp.target("select id, price::text from public.priced order by id") == [(1, "137.00"), (2, "1.50")]
     erp.target("drop view public.priced")  # the way out
     assert run(erp, "erp")[1]["tables"]["raw_erp.prices"] == {**UNCHANGED, "inserted": 1}
     assert erp.target("select price::text from raw_erp.prices__history where id = 3") == [("1.2345",)]
     log_replays(erp, "raw_erp.prices")
+
+
+def test_a_widening_names_every_view_on_the_column_and_on_those_views_where_postgres_names_one(erp):  # P20
+    prices(erp, "price numeric(12, 2)", "(1, 137.00)")
+    ok(erp)
+    erp.target("create view public.w1 as select id, price from raw_erp.prices;"
+               "create view public.w2 as select price from raw_erp.prices; create view public.w3 as select * from public.w1;"
+               "create materialized view public.m as select price from raw_erp.prices")
+    erp.source("alter table prices alter price type numeric(12, 4)")
+    erp.source("insert into prices values (2, 1.2345)")
+    reason = failed(erp, "erp")
+    assert reason.endswith("would be widened for values of the source, column price to numeric(14,4), but materialized "
+                           "view m depends on column price of table raw_erp.prices; view w1 depends on column price of "
+                           "table raw_erp.prices; view w2 depends on column price of table raw_erp.prices; view w3 "
+                           "depends on view w1: change or drop that, and the ne***t run goes on"), reason
+    erp.target("drop view public.w3, public.w2, public.w1; drop materialized view public.m")  # one round
+    assert run(erp, "erp")[1]["tables"]["raw_erp.prices"] == {**UNCHANGED, "inserted": 1}
+    log_replays(erp, "raw_erp.prices")
+
+
+@pytest.mark.parametrize("consumer, named", [
+    ("create policy p on raw_erp.prices using (price > 0)", "policy p on table raw_erp.prices"),
+    ("create table public.audit (price numeric); create rule r as on update to raw_erp.prices do also "
+     "insert into public.audit values (new.price)", "rule r on table raw_erp.prices"),
+    ("create function public.f() returns trigger language plpgsql as $$ begin return new; end $$;"
+     "create trigger t before update on raw_erp.prices for each row when (new.price > 0) execute function public.f()",
+     "trigger t on table raw_erp.prices")])
+def test_a_widening_names_a_policy_a_rule_or_a_trigger_on_the_column_beside_a_view_on_another(erp, consumer, named):
+    prices(erp, "price numeric(12, 2), cost numeric(12, 2)", "(1, 137.00, 1.00)")
+    ok(erp)
+    erp.target(f"create view public.w as select cost from raw_erp.prices; {consumer}")
+    erp.source("alter table prices alter price type numeric(12, 4), alter cost type numeric(12, 4)")
+    erp.source("insert into prices values (2, 1.2345, 1.2345)")
+    assert failed(erp, "erp").endswith(
+        "would be widened for values of the source, column price to numeric(14,4), column cost to numeric(14,4), but "
+        f"{named} depends on column price of table raw_erp.prices; view w depends on column cost of table "
+        "raw_erp.prices: change or drop that, and the ne***t run goes on")
 
 
 def test_a_change_log_narrower_than_its_mirror_is_widened_instead_of_rounding(erp):

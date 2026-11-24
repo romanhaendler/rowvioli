@@ -1,10 +1,13 @@
 """The columns of every mirror, kept like rows: `_rowvioli.columns`, its log and its history (spec tests, stage 1)."""
+import concurrent.futures
 import importlib.metadata
 import json
+import time
 
 import psycopg
 import pytest
 
+from conftest import until
 from test_checks import failed
 from test_history import again
 from test_run import apply, definition, erp, ok  # noqa: F401 (erp is a fixture)
@@ -129,8 +132,8 @@ def test_a_type_widened_by_hand_stops_at_a_consumers_view_on_the_change_log_with
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
     assert reason.startswith('"raw_erp"."prices__log" would be widened to follow the mirror, which a person widened, '
-                             'column amount to numeric(12,2), but rule _RETURN on view amounts depends on column '
-                             '"amount"'), reason
+                             'column amount to numeric(12,2), but view amounts depends on column amount of table '
+                             'raw_erp.prices__log'), reason
 
 
 def test_a_column_a_person_added_to_the_change_log_is_recorded_as_hand_and_not_in_the_mirror(erp):
@@ -193,6 +196,53 @@ def heard(c):
     return [json.loads(n.payload) for n in c.notifies(timeout=1, stop_after=1)]
 
 
+def test_a_run_stopped_by_a_consumers_view_never_waits_for_it_while_holding_the_mirror(erp):  # story 43
+    ok(erp)
+    erp.target("create view public.cities as select city from raw_erp.customers")
+    # a consumer's event trigger holds the run before its drop of the column, with the mirror locked
+    erp.target("create function public.slow() returns event_trigger language plpgsql as $$ begin "
+               "perform pg_sleep(2); end $$; create event trigger slow on ddl_command_start when tag in ('ALTER TABLE') "
+               "execute function public.slow()")
+    erp.source("alter table customers drop column city")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    worker = erp.start("run")
+    until(lambda: erp.target("select 1 from pg_stat_activity where wait_event = 'PgSleep' and query like '%DROP COLUMN%'"))
+    time.sleep(1.3)  # the consumer comes late enough that its own check for a deadlock would find one, at 1 s
+
+    def read():  # holds the view and waits for the mirror
+        with psycopg.connect(erp.target_url, autocommit=True) as c:
+            return c.execute("select count(*) from public.cities").fetchone()
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        consumer = pool.submit(read)
+        worker.communicate(timeout=20)
+        assert consumer.result(timeout=20) == (3,)
+    reason = erp.target("select reason from _rowvioli.runs order by run desc limit 1")[0][0]
+    assert reason.startswith("column city is gone from the source and would leave the mirror raw_erp.customers, but "
+                             "an object that depends on it was in use"), reason
+
+
+def test_a_run_that_adds_a_column_never_waits_for_its_change_log_while_holding_the_mirror(erp):  # story 43
+    ok(erp)
+    erp.target("create function public.slow() returns event_trigger language plpgsql as $$ begin "
+               "perform pg_sleep(2); end $$; create event trigger slow on ddl_command_start when tag in ('ALTER TABLE') "
+               "execute function public.slow()")
+    erp.source("alter table customers add column phone text")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    worker = erp.start("run")
+    until(lambda: erp.target("select 1 from pg_stat_activity where wait_event = 'PgSleep' and query like "
+                             "'%customers__log%ADD COLUMN%'"))
+    time.sleep(1.3)  # as above: late enough that the consumer's own check for a deadlock would find one
+
+    def read():  # a consumer joining the history view with its mirror, history first
+        with psycopg.connect(erp.target_url, autocommit=True) as c:
+            return c.execute("select count(*) from raw_erp.customers__history h join raw_erp.customers m "
+                             "using (customer_no)").fetchone()
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        consumer = pool.submit(read)
+        assert worker.wait(timeout=20) == 0
+        assert consumer.result(timeout=20) == (3,)
+
+
 def test_a_run_that_changes_columns_notifies_on_commit_and_one_that_fails_does_not(erp):
     ok(erp)
     listener = listen(erp)
@@ -209,7 +259,7 @@ def test_a_run_that_changes_columns_notifies_on_commit_and_one_that_fails_does_n
                "for each row execute function no_koeln()")
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert erp.run("run").returncode == 1
-    assert "no Köln" in erp.target("select reason from _rowvioli.tables")[0][0]
+    assert "function no_koeln() raised an error" in erp.target("select reason from _rowvioli.tables")[0][0]
     assert heard(listener) == []
     assert erp.target("select count(*) from _rowvioli.columns where \"column\" = 'fax'") == [(0,)]
     listener.close()
@@ -236,13 +286,47 @@ def test_one_right_on_the_history_view_is_all_an_auditor_needs(erp):
         with psycopg.connect(url) as c:
             assert c.execute("select count(*) from _rowvioli.columns__history").fetchone()[0] == 4
             # what changed, and why, and the listener's recipe of docs/target.md
-            changed = c.execute("""SELECT _valid_from, _run, _op, "column", type, mirror, was, "by", note
-                                     FROM _rowvioli.columns__history
-                                    WHERE target_schema = 'raw_erp' AND target_table = 'customers' AND _valid_from > %s
-                                    ORDER BY _valid_from, "column" """, [first]).fetchall()
-            assert [r[1:] for r in changed] == [(run, "U", "city", "text", False, None, "source", None)]
-            assert c.execute("""SELECT _op, "column", type, mirror, was, "by", note FROM _rowvioli.columns__history
-                                 WHERE _run = %s""", [run]).fetchall() == [r[2:] for r in changed]
+            changed = c.execute("""
+                SELECT _valid_from, _run, _op, "column", type, mirror, was, "by", note, _valid_to, _valid_to_run,
+                       _valid_to_by, _valid_to_note
+                  FROM _rowvioli.columns__history
+                 WHERE target_schema = 'raw_erp' AND target_table = 'customers'
+                   AND (_valid_from > %s OR _valid_to > %s)
+                 ORDER BY _valid_from, "column" """, [first, first]).fetchall()
+            assert [r[1:9] + r[10:] for r in changed] == [
+                (run - 1, "I", "city", "text", True, None, "found", None, run, "source", None),
+                (run, "U", "city", "text", False, None, "source", None, None, None, None)]
+            assert sorted(c.execute("""
+                SELECT target_table, "column", _run, _op, type, mirror, was, "by", note, _valid_to_run, _valid_to_by,
+                       _valid_to_note
+                  FROM _rowvioli.columns__history WHERE _run = %s OR _valid_to_run = %s""", [run, run]).fetchall(),
+                          key=repr) == sorted([("customers", r[3], *r[1:3], *r[4:9], *r[10:]) for r in changed], key=repr)
     finally:
         erp.target("drop owned by auditor")
         erp.target("drop role auditor")
+
+
+# the listener's recipe of docs/target.md: what a run began and what it ended
+ENDED = """SELECT target_table, "column", _run, _op, "by", _valid_to_run, _valid_to_by, _valid_to_note
+             FROM _rowvioli.columns__history WHERE _run = %s OR _valid_to_run = %s ORDER BY 1, 2, _valid_from"""
+
+
+def test_the_history_view_says_the_run_that_ended_a_version_also_for_a_column_closed_by_hand(erp):  # story 37
+    ok(erp)
+    [(first,)] = erp.target("select max(run) from _rowvioli.runs")
+    erp.source("alter table customers drop column city")  # and a person drops it, from mirror and change log
+    erp.target("drop view raw_erp.customers__history; alter table raw_erp.customers drop column city;"
+               "alter table raw_erp.customers__log drop column city")
+    again(erp)
+    [(run,)] = erp.target("select max(run) from _rowvioli.runs")
+    assert erp.target(ENDED, [run, run]) == [("customers", "city", first, "I", "found", run, "hand", None)]
+    for old, new in [("customers", "clients"), ("customers__log", "clients__log")]:
+        erp.target(f"alter table raw_erp.{old} rename to {new}")
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], target_table = "clients" }\n'))
+    again(erp)
+    [(renamed,)] = erp.target("select max(run) from _rowvioli.runs")
+    assert erp.target(ENDED, [renamed, renamed]) == [
+        ("clients", "customer_no", renamed, "I", "found", None, None, None),
+        ("clients", "name", renamed, "I", "found", None, None, None),
+        ("customers", "customer_no", first, "I", "found", renamed, "hand", None),
+        ("customers", "name", first, "I", "found", renamed, "hand", None)]

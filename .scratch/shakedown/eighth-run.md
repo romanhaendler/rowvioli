@@ -1,6 +1,6 @@
 # Shakedown 2026-11-24: schema changes, before the release after 0.4.1
 
-Status: needs-triage (what is fixed before the merge is in `.scratch/schema-changes/issues/11-after-the-shakedown.md`; what stays is marked "left")
+Status: needs-triage (what is fixed before the merge is in `.scratch/schema-changes/issues/11-after-the-shakedown.md`; what was marked "left" is fixed or documented by `.scratch/schema-changes/issues/12-what-the-shakedown-left.md`, as each line says)
 
 One wave of six Sonnet agents on a wheel built from the branch `schema-changes` (its version set to
 `0.5.0.dev0` for the run), narrowed to what the branch changes: a mirror follows its source's columns, types
@@ -31,7 +31,8 @@ the rest are leads from one agent, and a ticket that starts from one reproduces 
    `amt__3`. Who follows the reason ends with the old values under a name cut off from the history.
 5. **A consumer's own trigger or constraint message with the row in it reaches the status, `_rowvioli.runs`
    and stderr** (P18: `raise exception 'bad row %', NEW`). Postgres's own messages showed no value. For the
-   owner: whether the rule "a reason never shows a value" covers a message a consumer wrote.
+   owner: whether the rule "a reason never shows a value" covers a message a consumer wrote. The owner: it does;
+   fixed by ticket 12, item 3.
 
 ## What they found
 
@@ -41,7 +42,7 @@ the rest are leads from one agent, and a ticket that starts from one reproduces 
 | H1, P18, P20 | 2 above ✓ | ticket 11 |
 | P18 | 3 above ✓ | ticket 11 |
 | H2 | 4 above | ticket 11 |
-| P18 | 5 above | left: for the owner |
+| P18 | 5 above | fixed: ticket 12, item 3 (the message withheld, the function named) |
 | P20 | The query "what changed, and why" in `docs/target.md` and the listener's recipe read `columns__log`, which the documented auditor's role may not read | ticket 11 (documents) |
 | P20, H4 | "A prepared `SELECT *` fails once" holds only for a statement prepared anew: one that stays prepared fails on every call until it is prepared again; a widened type does it too | ticket 11 (documents) |
 | P20 | A reader that lists the columns from `information_schema` and then selects them gets `column does not exist` across a change of shape (11 of 11) | ticket 11 (documents) |
@@ -51,19 +52,19 @@ the rest are leads from one agent, and a ticket that starts from one reproduces 
 | H2 | A REST column whose type does not match the JSON stops with `column amt is not text`, no way out; `_op cannot be freed` says no way out | ticket 11 |
 | P18 | A newline in a column's name cuts the reason at it, and the way out is lost | ticket 11 |
 | P18 | A comment on `_op` edited by hand gives Postgres's own message (`column "i" does not exist`), which does not name the comment. It never reached SQL as code | ticket 11 |
-| P18 | The way out of "the retired name is longer than 63 bytes" leads into a second and third stop, one column each | left |
+| P18 | The way out of "the retired name is longer than 63 bytes" leads into a second and third stop, one column each | fixed: ticket 12, item 4 |
 | P18 | Who may read `columns__history` reads every schema's column names, and the indexes and grants in the notes; `docs/operation.md` offers the view to consumers | ticket 11 (documents say so) |
-| P20 | A stop names the dependent objects of one layer; three nested views cost three runs | left |
-| P20 | The columns table says `city` for a past moment where the history view already says `town`: a rename is applied to old rows too, and `was` is the only bridge | left: by design, documents |
-| P20, H4 | A dropped column or a changed key costs a log row or two per row; "what changed yesterday" on the log then lists every row. 40 changes of a 100,000-row table: 4.2 million log rows, 383 MB | left: the price the spec accepted |
-| H1 | The count `~N` of a run that drops a column counts change-log rows (`~60` for 3 changed rows) | left |
-| H1 | The worker needs no `SELECT` on `columns__log`, the documents grant it | left |
-| H2 | A `numeric(10,2)` widened to plain `numeric` loses its trailing zeros (`3.00` reads `3`); the values are equal | left: documents |
-| H2 | A CSV header that loses a column leaves it empty in the mirror for good, and no page says how to be rid of it on purpose | left: documents |
-| H1 | pgbouncer in transaction mode: no clear message, and tables stay `loading` until the pooler restarts. Not compared with 0.4.1 | left |
-| H2 | A source table dropped and created anew with other columns stops with "76 % of the rows would be deleted" only; `max_delete_share = 1.0` loads it right | left |
-| H4 | A table that never loaded starves while older ones stay overdue (`claimable.sql`, unchanged since 0.4.1 ✓): 34 of 50 tables still `new` after four minutes with `max_age = "1s"` | left: not of this branch |
-| H4 | The target restarted during a run: the last line is Postgres's bare `FATAL: terminating connection` | left |
+| P20 | A stop names the dependent objects of one layer; three nested views cost three runs | fixed: ticket 12, item 5 |
+| P20 | The columns table says `city` for a past moment where the history view already says `town`: a rename is applied to old rows too, and `was` is the only bridge | by design, documented: ticket 12, item 13 |
+| P20, H4 | A dropped column or a changed key costs a log row or two per row; "what changed yesterday" on the log then lists every row. 40 changes of a 100,000-row table: 4.2 million log rows, 383 MB | the price the spec accepted, documented with the numbers: ticket 12, item 13 |
+| H1 | The count `~N` of a run that drops a column counts change-log rows (`~60` for 3 changed rows) | fixed: ticket 12, item 11 |
+| H1 | The worker needs no `SELECT` on `columns__log`, the documents grant it | not a fault: a run reads it for the text to put back when the comment on `_op` is lost; documented, ticket 12, item 13 |
+| H2 | A `numeric(10,2)` widened to plain `numeric` loses its trailing zeros (`3.00` reads `3`); the values are equal | documented: ticket 12, item 13 |
+| H2 | A CSV header that loses a column leaves it empty in the mirror for good, and no page says how to be rid of it on purpose | fixed: ticket 12, item 7 (the drop by hand, tested and documented) |
+| H1 | pgbouncer in transaction mode: no clear message, and tables stay `loading` until the pooler restarts. Not compared with 0.4.1 | fixed: ticket 12, item 9 |
+| H2 | A source table dropped and created anew with other columns stops with "76 % of the rows would be deleted" only; `max_delete_share = 1.0` loads it right | fixed: ticket 12, item 6 (the reason says so) |
+| H4 | A table that never loaded starves while older ones stay overdue (`claimable.sql`, unchanged since 0.4.1 ✓): 34 of 50 tables still `new` after four minutes with `max_age = "1s"` | fixed: ticket 12, item 8 |
+| H4 | The target restarted during a run: the last line is Postgres's bare `FATAL: terminating connection` | fixed: ticket 12, item 10 |
 
 ## What held up
 
