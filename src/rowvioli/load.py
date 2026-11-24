@@ -95,9 +95,11 @@ def load(conn, t):
 def check(conn, t, staged, mirror, log_columns):
     """Step 4 (docs/loading.md "Checks before publishing") and the plan (decision 12): what the run does to the columns
     besides adding the new ones, which publish adds (decision 2). Every stop a rule makes is here, before anything is
-    written. The plan: `gone`, the mirror's columns that leave it and stay in the change log (decision 3)."""
+    written. The plan: `gone`, the mirror's columns that leave it and stay in the change log (decision 3), and
+    `retired`, the change log's columns that keep their values under another name as one of another family comes
+    (decision 2), old name to new."""
     types, logged = dict(staged), dict(log_columns)
-    plan = {"gone": []}
+    plan = {"gone": [], "retired": {}}
     for name, type in mirror:
         if name not in types:
             if not (t["key"] and t["log"] and log_columns):
@@ -110,6 +112,11 @@ def check(conn, t, staged, mirror, log_columns):
             plan["gone"].append(name)
         elif types[name] != type:
             raise Exception(f"column {name} has changed its type from {type} to {types[name]}")
+    had = dict(mirror)
+    for name, type in staged:
+        if name in had or name not in logged or family(logged[name]) == family(type):
+            continue
+        plan["retired"][name] = f"{name}__{t['run']}"
     key = t["key"] or []
     drop = (f"drop it with its history view (DROP TABLE {t['log_table']} CASCADE), or rename both"
             + (" with the mirror" if mirror else ""))
@@ -145,6 +152,16 @@ def check(conn, t, staged, mirror, log_columns):
     return plan
 
 
+# decision 4: the families of types; every other type, without its modifier, is a family of its own
+FAMILIES = {"smallint": "exact", "integer": "exact", "bigint": "exact", "numeric": "exact", "real": "float",
+            "double precision": "float", "date": "time", "timestamp without time zone": "time"}
+
+
+def family(type):
+    base = re.sub(r"\(.*?\)", "", type)  # numeric(10,2), timestamp(3) without time zone
+    return FAMILIES.get(base, base)
+
+
 def fit(conn, t, staged, mirror, log_columns):
     """A staged column whose type differs from the target's only in its precision or scale (numeric and
     numeric(10,2)) counts as the mirror's, so that the comparison happens in the target type, when every value
@@ -162,6 +179,10 @@ def fit(conn, t, staged, mirror, log_columns):
     # the others are a real change, which check() catches. The staging table is not altered: numbers compare equal
     # whatever their modifier, and the mirror's type applies on insert, where it now changes no value
     taken = {name: into for (table, name, into), (same, _) in zip(pairs, kinds) if same and table == t["name"]}
+    # a column back in its family takes the change log's type, as one of the mirror keeps the mirror's (cases A12)
+    had, types = dict(mirror), dict(staged)
+    taken.update({name: into for table, name, into in pairs
+                  if table != t["name"] and name not in had and family(into) == family(types[name])})
     return [(name, taken.get(name, type)) for name, type in staged]
 
 
@@ -324,8 +345,8 @@ def publish(conn, t, staged, delivered, mirror, log, rows_read, counts, plan):
             only = f" AND NOT EXISTS (SELECT FROM {t['mirror']} m WHERE {on})"
         sql(conn, f"DELETE FROM {t['mirror']} m USING _diff d WHERE d._op IN ('D', 'U') AND {on}{kept}")
         sql(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _diff d WHERE _op IN ('I', 'U'){only}")
-        if t["log"]:
-            write_log(conn, t, staged, log, logged)
+        if t["log"]:  # the change log's columns under the names the plan gave them
+            write_log(conn, t, staged, [(plan["retired"].get(n, n), type) for n, type in log], logged)
     else:  # without a key: replaced as a whole, no change log
         deleted = rowcount(conn, f"DELETE FROM {t['mirror']}")
         counts = {"inserted": rowcount(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _stage"),
@@ -385,6 +406,9 @@ def carry_out(conn, t, plan):
     creates it again), then the plan. Returns what the columns table says beyond the catalogue (decisions 19, 22)."""
     alter(conn, f"the columns of {t['name']} change", f"DROP VIEW IF EXISTS {t['history']}")
     changes = {}
+    for old, new in plan["retired"].items():
+        sql(conn, f"ALTER TABLE {t['log_table']} RENAME COLUMN {quote(old)} TO {quote(new)}")
+        changes[new] = {"was": old}
     for name in plan["gone"]:
         [(note,)] = sql(conn, DROPS_WITH, [t["mirror"], name])
         changes[name] = {"note": f"{note} went with it" if note else None}

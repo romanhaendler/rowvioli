@@ -139,3 +139,90 @@ def test_A10_a_gone_key_column_stops_the_run_as_before(erp):
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert failed(erp) == "table public.customers has no column customer_no; it has: name, city"
     assert columns(erp) == ["customer_no", "name", "city"]
+
+
+def test_A11_A15_a_column_back_with_its_type_continues_its_log_column_and_the_record_shows_the_gap(erp):
+    ok(erp)
+    first = erp.target(LOADED_AT)[0][0]
+    attnum = "select attnum from pg_attribute where attrelid = 'raw_erp.customers__log'::regclass and attname = 'city'"
+    before = erp.target(attnum)
+    erp.source("alter table customers drop column city")
+    second = again(erp)
+    erp.source("alter table customers add column city text")
+    erp.source("update customers set city = 'Bonn' where customer_no = 1")
+    third = again(erp)
+    assert columns(erp) == ["customer_no", "name", "city"]
+    assert erp.target(attnum) == before
+    assert erp.target(LOG) == [("U", 1, "Bonn")]
+    assert erp.target(CITY) == [("Bonn", first, second), (None, second, third), ("Bonn", third, None)]
+    # A15: nothing tells another meaning under the same name and type; the gap in the record is the only sign
+    assert erp.target("select mirror, _valid_from from _rowvioli.columns__history where \"column\" = 'city' "
+                      "order by _valid_from") == [(True, first), (False, second), (True, third)]
+    log_replays(erp)
+
+
+def test_A16_a_column_dropped_and_added_again_between_two_runs_is_a_U_for_each_row_whose_value_differs(erp):
+    ok(erp)
+    erp.source("alter table customers drop column city")
+    erp.source("alter table customers add column city text")
+    erp.source("update customers set city = 'Bonn' where customer_no = 1")
+    again(erp)
+    assert erp.target(LOG) == [("U", 2, None)]
+    assert erp.target(LAST) == []
+    log_replays(erp)
+
+
+def test_A13_a_column_back_in_another_family_begins_anew_and_the_log_keeps_the_old_values_under_its_run(erp):
+    ok(erp)
+    first = erp.target(LOADED_AT)[0][0]
+    erp.source("alter table customers drop column city")
+    again(erp)
+    erp.source("alter table customers add column city integer")
+    erp.source("update customers set city = 53111 where customer_no = 1")
+    third = again(erp)
+    [(run,)] = erp.target("select max(run) from _rowvioli.runs")
+    assert columns(erp, "raw_erp.customers__log")[-2:] == [f"city__{run}", "city"]
+    assert erp.target("select format_type(atttypid, atttypmod) from pg_attribute where attname = 'city' "
+                      "and attrelid in ('raw_erp.customers'::regclass, 'raw_erp.customers__log'::regclass)") == [
+        ("integer",), ("integer",)]
+    assert erp.target(f"select city__{run}, city, _valid_from from raw_erp.customers__history where customer_no = 1 "
+                      "order by _valid_from")[::2] == [("Bonn", None, first), (None, 53111, third)]
+    assert erp.target('select _op, "column", type, mirror, was from _rowvioli.columns__log where _run = %s '
+                      'order by "column"', [run]) == [("U", "city", "integer", True, None),
+                                                      ("I", f"city__{run}", "text", False, "city")]
+    log_replays(erp)
+
+
+def test_A14_text_then_integer_then_text_retires_two_log_columns_and_the_third_does_not_continue_the_first(erp):
+    ok(erp)
+    for type in ["integer", "text"]:
+        erp.source("alter table customers drop column city")
+        again(erp)
+        erp.source(f"alter table customers add column city {type}")
+        erp.source("update customers set city = 1 where customer_no = 1")
+        again(erp)
+    retired = [c for c in columns(erp, "raw_erp.customers__log") if c.startswith("city__")]
+    assert len(retired) == 2
+    assert erp.target(f"select count({retired[0]}), count({retired[1]}), count(city) "
+                      "from raw_erp.customers__log") == [(2, 1, 1)]
+    log_replays(erp)
+
+
+def test_A12_a_column_back_in_a_wider_type_of_its_family_keeps_the_logs_type_while_the_values_fit(erp):
+    erp.source("create table prices (id int primary key, amount integer)")
+    erp.source("insert into prices values (1, 10), (2, null)")
+    apply(erp, definition(erp, '"public.prices" = { key = ["id"] }\n'))
+    ok(erp)
+    erp.source("alter table prices drop column amount")
+    again(erp)
+    erp.source("alter table prices add column amount bigint")
+    erp.source("update prices set amount = 20 where id = 1")
+    again(erp)
+    assert erp.target("select format_type(atttypid, atttypmod) from pg_attribute where attname = 'amount' "
+                      "and attrelid in ('raw_erp.prices'::regclass, 'raw_erp.prices__log'::regclass)") == [
+        ("integer",), ("integer",)]
+    assert columns(erp, "raw_erp.prices__log") == ["_run", "_op", "_loaded_at", "id", "amount"]
+    assert erp.target("select type, source_type, mirror from _rowvioli.columns where \"column\" = 'amount'") == [
+        ("integer", "bigint", True)]
+    assert erp.target("select amount from raw_erp.prices order by id") == [(20,), (None,)]
+    log_replays(erp, "raw_erp.prices")
