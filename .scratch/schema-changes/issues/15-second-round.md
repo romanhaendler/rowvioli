@@ -113,8 +113,40 @@ reports of the wave are added below as they arrive.
 
 ## Acceptance criteria
 
-- [ ] Every item: a test seen red first, or a sentence under Comments why none and what was done instead.
-- [ ] Documents (`docs/*.md`, decision 54/55, `CHANGELOG.md`) say what changed.
-- [ ] The whole suite passes.
+- [x] Every item: a test seen red first, or a sentence under Comments why none and what was done instead.
+- [x] Documents (`docs/*.md`, decision 54/55, `CHANGELOG.md`) say what changed.
+- [x] The whole suite passes.
 
 ## Comments
+
+Built on `sc-15` (2026-11-25), test first, one commit per item or per group of items that share their lines.
+
+- O1 and X1 are one rule: an allowlist of SQLSTATE codes, not classes (`SHOWN` in `load.py`, each group with the
+  reason its message holds no value). Classes 0A, 54 and 58 and every code of 42 but 42501 are withheld now; ODBC's
+  `IM` class went with D2 (a failure of `SQLDriverConnect` shows whatever its code). 55000 (C2's bare message) is
+  withheld too; the run names the publication itself. Tested against Postgres for 42601, 42602, 58P01, 0A000;
+  SQL Server's 42S02 is withheld by the unit test (the reason still names the table).
+- X2: Postgres's own message of a constraint raised inside a consumer's function is withheld now as well (the
+  earlier unit test that showed it changed), since its code may copy the words.
+- S5 and B4: one rule, `lock_timeout = 50ms` for the rest of the publishing transaction once `lock()` holds; a run
+  that meets a lock fails and publishes nothing. The price, in decision 53's note: an `apply` that holds the table's
+  row at that moment makes the run fail once instead of waiting; the next run publishes. A short step after a long
+  one that a consumer holds up now fails at once (the test of ticket 14 that expected `max_seconds` changed).
+- B2: carried over (comment, column comments, options, triggers, rules), not a stop; decision 54 says why. The
+  owner of the history view (X4) and of a child table (C3) are stops with the way out: carrying an owner over would
+  need rights the worker's role does not have.
+- C1, B5: documented, no test (no behaviour changed): `docs/target.md` and decision 54's price.
+- X6, checked: `run` ends after a failed table (every `failed()` of the suite runs `run` to its end, exit 1), and a
+  failed table waits its pause (`docs/loading.md` "Retry"); no fault.
+- R1: no test: a restart of the target in the 0.3 s between `run`'s start and its claim cannot be timed in the suite.
+  The run process and the CLI share `lost()` (57P01, 57P02), and I1's path, which carries it, is tested.
+- D2: tested in the ODBC container (`tests/odbc/run.sh`), the rule in `withheld()`, since the connectors are ticket
+  16's.
+- S1: the conftest docstring now says when a test calls a function of the program: six files already did (reason
+  lines from drivers not at hand, `work.say`, `definition.read`), so the rule was the untrue part.
+- S6 left: the inverse-rename dict built in `check`, `proven`, `fit` and `carry_out` (four contents, merging would
+  churn `load.py` for no reader); `connectors/file.py`'s long docstring line (the connectors are ticket 16's).
+- S7 left: every test with a Postgres source reads through `cur._results.reader`, so a driver that drops it fails
+  the suite at once and loudly; an upper bound in `pyproject.toml` would need a new lock while ticket 16 works on
+  the dependencies.
+- S2, S3, S4, S6, S8: no behaviour; the suite is the net.

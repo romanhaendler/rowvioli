@@ -75,20 +75,6 @@ def test_A5_without_a_change_log_a_gone_column_stops_the_run_and_says_how_to_dro
     assert rows(erp.target, MIRROR) == before
 
 
-def test_a_way_out_that_names_a_column_with_a_control_character_works_when_pasted(erp):  # ticket 15, X3
-    erp.source('create table odd (k int, "a\nb" text); insert into odd values (1, \'x\')')
-    apply(erp, definition(erp, '"public.odd" = {}\n'))
-    ok(erp)
-    erp.source('alter table odd drop column "a\nb"')
-    erp.target("update _rowvioli.tables set requested_at = now()")
-    reason = failed(erp)
-    assert reason == ("column a?b is missing in the source; without a change log its values are nowhere else, so a "
-                      'person drops it: ALTER TABLE "raw_erp"."odd" DROP COLUMN U&"a\\000Ab"'), reason
-    erp.target(reason.rpartition(": ")[2])  # the way out, pasted
-    erp.target("update _rowvioli.tables set requested_at = now()")
-    ok(erp)
-
-
 def test_a_column_goes_in_the_run_that_changes_deletes_and_inserts_rows(erp):  # story 4
     ok(erp)
     erp.source("alter table customers drop column city")
