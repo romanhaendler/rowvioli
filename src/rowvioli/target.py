@@ -8,6 +8,9 @@ import adbc_driver_postgresql.dbapi as adbc
 SCHEMA_VERSION = 4
 # schema.sql is version 3; the step at index i brings version 3 + i to 3 + i + 1 (decision 24)
 MIGRATIONS = ["sql/migrate_3_4.sql"]
+# what a worker's role needs on the objects each step creates; the program grants nothing, so init prints it
+GRANTS = ["GRANT SELECT, INSERT, UPDATE, DELETE ON _rowvioli.columns TO worker;\n"
+          "GRANT SELECT, INSERT ON _rowvioli.columns__log TO worker;"]
 
 # docs/target.md "Failures": a dead client or network is noticed by Postgres within seconds to a minute. The URL's
 # keepalive is libpq's, so the worker notices a dead server; SESSION is the server's, so Postgres notices a dead worker
@@ -66,6 +69,10 @@ def connect(init=False, versioned=True):
     if init and (version is None or 3 <= version < SCHEMA_VERSION):  # below 3 there is no step: refused below
         steps = ["sql/schema.sql", *MIGRATIONS] if version is None else MIGRATIONS[version - 3:]
         transaction(conn, "".join(files(__package__).joinpath(step).read_text() for step in steps))
+        if version is not None:
+            print(f"the schema _rowvioli is brought from version {version} to {SCHEMA_VERSION}; a worker's role needs "
+                  "these rights on its new objects, which the program does not grant (worker stands for that role):\n"
+                  + "\n".join(GRANTS[version - 3:]))
         version = SCHEMA_VERSION
     if version is None:
         raise SystemExit(NO_SCHEMA)

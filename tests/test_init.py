@@ -2,6 +2,8 @@ import re
 
 import pytest
 
+from test_run import erp  # noqa: F401 (a fixture)
+
 SHAPE = """
 select table_name, column_name, data_type from information_schema.columns
  where table_schema = '_rowvioli' order by 1, 2
@@ -48,6 +50,42 @@ def test_init_brings_a_version_3_target_to_4_and_changes_nothing_else(rv):
     assert rv.target(SHAPE) == shape
     assert rv.target("select schema_version from _rowvioli.meta") == [(4,)]
     assert rv.target("select name from _rowvioli.sources") == [("erp",)]
+
+
+READY = "the schema _rowvioli is ready in the target\n"
+
+
+def test_init_from_version_3_prints_the_grants_a_worker_needs_and_they_are_enough_to_load(erp):
+    assert erp.run("init").stdout == READY  # a target of version 4 is told nothing new
+    version_3(erp)
+    r = erp.run("init")
+    assert r.returncode == 0, r.stderr
+    grants = [line for line in r.stdout.splitlines() if line.startswith("GRANT")]
+    assert grants and all(line.endswith(" TO worker;") for line in grants), r.stdout
+    assert erp.run("init").stdout == READY
+    # a worker's role with the grants of docs/operation.md and those printed (roles belong to the cluster: its own name)
+    role, db = f"worker_{erp.target_url.rsplit('/', 1)[1]}", erp.target_url.rsplit("/", 1)[1]
+    for statement in [f"CREATE ROLE {role} LOGIN PASSWORD 'w'", f"GRANT USAGE ON SCHEMA _rowvioli TO {role}",
+                      f"GRANT SELECT ON _rowvioli.sources, _rowvioli.tables, _rowvioli.meta, _rowvioli.status TO {role}",
+                      f"GRANT UPDATE ON _rowvioli.tables TO {role}",
+                      f"GRANT SELECT, INSERT, UPDATE ON _rowvioli.runs TO {role}",
+                      f"GRANT USAGE ON ALL SEQUENCES IN SCHEMA _rowvioli TO {role}",
+                      f"GRANT CREATE ON DATABASE {db} TO {role}",
+                      *(g.replace(" TO worker;", f" TO {role}") for g in grants)]:
+        erp.target(statement)
+    url = {"ROWVIOLI_TARGET_URL": erp.target_url.replace("postgres:x@", f"{role}:w@")}
+    for change in (None, "alter table customers drop column city"):  # a first fill, then a column that goes
+        if change:
+            erp.source(change)
+            erp.target("update _rowvioli.tables set requested_at = now()")
+        r = erp.run("run", env=url)
+        assert r.returncode == 0, r.stdout + r.stderr
+    assert erp.target("select mirror from _rowvioli.columns where \"column\" = 'city'") == [(False,)]
+
+
+def test_init_on_an_empty_target_prints_only_that_it_is_ready(rv):
+    r = rv.run("init")
+    assert r.returncode == 0 and r.stdout == READY, r.stderr
 
 
 def test_init_refuses_a_target_older_than_version_3_and_leaves_it(rv):  # the steps begin at 3
