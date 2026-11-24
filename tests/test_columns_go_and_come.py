@@ -247,9 +247,10 @@ def test_A12_a_column_back_in_a_wider_type_of_its_family_keeps_the_logs_type_whi
     log_replays(erp, "raw_erp.prices")
 
 
-@pytest.mark.parametrize("type, value", [("timestamp", "2024-01-01 12:30"), ("numeric", "1.5")])
-def test_A12_a_column_back_in_its_family_with_a_value_the_logs_type_would_change_stops_and_changes_nothing(
-        erp, type, value):
+@pytest.mark.parametrize("type, value, wide", [("timestamp", "2024-01-01 12:30", "timestamp without time zone"),
+                                               ("numeric", "1.5", "numeric")])
+def test_A12_a_column_back_in_its_family_with_a_value_the_logs_type_would_change_widens_the_log_column(
+        erp, type, value, wide):
     erp.source("create table events (id int primary key, day date, n integer)")
     erp.source("insert into events values (1, '2024-01-01', 1)")
     apply(erp, definition(erp, '"public.events" = { key = ["id"] }\n'))
@@ -259,10 +260,13 @@ def test_A12_a_column_back_in_its_family_with_a_value_the_logs_type_would_change
     again(erp)
     erp.source(f"alter table events add column {column} {type}")
     erp.source(f"update events set {column} = '{value}'")
-    erp.target("update _rowvioli.tables set requested_at = now()")
-    # never is a value cut to the change log's type (decision 5 will widen it instead)
-    assert failed(erp).startswith(f"column {column} holds a value that its type ")
-    assert columns(erp, "raw_erp.events") == ["id", "n" if column == "day" else "day"]
+    again(erp)
+    # never is a value cut to the change log's type (decision 5): the log column is widened and continues
+    assert erp.target(f"select format_type(atttypid, atttypmod) from pg_attribute where attname = '{column}' and "
+                      "attrelid in ('raw_erp.events'::regclass, 'raw_erp.events__log'::regclass)") == [(wide,)] * 2
+    assert erp.target(f"select {column}::text from raw_erp.events") == erp.source(f"select {column}::text from events")
+    assert [c for c in columns(erp, "raw_erp.events__log") if c.startswith(column)] == [column]
+    log_replays(erp, "raw_erp.events")
 
 
 @pytest.mark.parametrize("earlier", [True, False])

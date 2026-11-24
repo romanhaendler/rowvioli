@@ -88,8 +88,8 @@ def load(conn, t):
                                                       and (not log_columns or n in dict(log_columns))]):
         sql(conn, "ALTER TABLE _stage " + ", ".join(f"ADD {quote(n)} {type}" for n, type in missing))
         staged = sql(conn, COLUMNS, ["pg_temp._stage"])
-    staged = fit(conn, t, staged, mirror, log_columns)
-    plan = check(conn, t, staged, mirror, log_columns)
+    staged, widened = fit(conn, t, staged, mirror, log_columns)
+    plan = check(conn, t, staged, mirror, log_columns) | {"widen": widened}
     t["step"] = "comparing with the mirror"
     counts = diff(conn, t, staged, mirror, plan) if t["key"] else None
     if mirror:
@@ -116,7 +116,7 @@ def check(conn, t, staged, mirror, log_columns):
                                 "the source; drop it from the mirror, or add it to the change log too and the next run "
                                 "takes it out of the mirror")
             plan["gone"].append(name)
-        elif types[name] != type:
+        elif family(types[name]) != family(type):  # one of the same family fit() keeps or widens
             raise Exception(f"column {name} has changed its type from {type} to {types[name]}")
     had = dict(mirror)
     way = ("rename that column of the change log and drop its history view, which the next run creates again: "
@@ -180,49 +180,57 @@ def family(type):
     return FAMILIES.get(base, base)
 
 
+def wider(a, b):
+    """Decision 5: the type of the family of `a` and `b` that holds the values of both."""
+    if a == b:
+        return a
+    if family(a) in ("float", "time"):
+        return {"float": "double precision", "time": "timestamp without time zone"}[family(a)]
+    if a in INTEGERS and b in INTEGERS:
+        return max(a, b, key=INTEGERS.get)
+
+    def digits(type):  # before and after the point, an integer as many as its largest value; none for plain numeric
+        m = re.fullmatch(r"numeric\((\d+),(\d+)\)", type)
+        return (INTEGERS[type], 0) if type in INTEGERS else (int(m[1]) - int(m[2]), int(m[2])) if m else None
+    if not (digits(a) and digits(b)):
+        return "numeric"
+    before, after = (max(x, y) for x, y in zip(digits(a), digits(b)))
+    return f"numeric({before + after},{after})" if before + after <= 1000 else "numeric"
+
+
+INTEGERS = {"smallint": 5, "integer": 10, "bigint": 19}
+
+
 def fit(conn, t, staged, mirror, log_columns):
-    """A staged column whose type differs from the target's only in its precision or scale (numeric and
-    numeric(10,2)) counts as the mirror's, so that the comparison happens in the target type, when every value
-    passes unchanged into the mirror and the change log (decision 49). Returns the staged columns with the types
-    they are checked and published in."""
-    pairs = [(table, name, into) for table, columns in ((t["name"], mirror), (t["name"] + "__log", log_columns))
-             for name, type in staged if (into := dict(columns).get(name, type)) != type]
-    if not pairs:
-        return staged
-    # in one query: which differ only in their modifier, and which target has none, so that a cast changes no value
-    kinds = sql(conn, """SELECT (v->>0)::regtype = (v->>1)::regtype, (v->>1)::regtype::text = v->>1
-                           FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY e(v, n) ORDER BY n""",
-                [json.dumps([[dict(staged)[name], into] for _, name, into in pairs])])
-    misfit(conn, [p for p, (same, plain) in zip(pairs, kinds) if same and not plain])
-    # the others are a real change, which check() catches. The staging table is not altered: numbers compare equal
-    # whatever their modifier, and the mirror's type applies on insert, where it now changes no value
-    taken = {name: into for (table, name, into), (same, _) in zip(pairs, kinds) if same and table == t["name"]}
-    # a column back in its family takes the change log's type, as one of the mirror keeps the mirror's (cases A12),
-    # and a value it would change stops the run rather than being cut
-    had, types = dict(mirror), dict(staged)
-    back = [(table, name, into) for table, name, into in pairs
-            if table != t["name"] and name not in had and family(into) == family(types[name])]
-    misfit(conn, back)
-    taken.update({name: into for _, name, into in back})
-    return [(name, taken.get(name, type)) for name, type in staged]
+    """Decision 5: a staged column of the family of the mirror's or the change log's column keeps that type while every
+    value fits it, so that the comparison happens in the target type; where one does not, that column is widened to
+    the type that holds both. Returns the staged columns with the types they are checked and published in, and the
+    widenings as (table, column, type)."""
+    types, had = dict(staged), dict(mirror)
+    pairs = [(table, name, into) for table, columns in ((t["mirror"], mirror), (t["log_table"], log_columns))
+             for name, type in staged if (into := dict(columns).get(name, type)) != type
+             and family(into) == family(type)]  # another family is a column that goes and comes, check() plans it
+    # only a target that does not hold the staged type already needs the scan
+    widened = [(table, name, wider(into, types[name]))
+               for table, name, into in misfits(conn, [p for p in pairs if wider(p[2], types[p[1]]) != p[2]])]
+    # the staging table is not altered: the target's type applies on insert, where it now changes no value. A column
+    # back in its family takes the change log's type (cases A12)
+    taken = {name: into for table, name, into in pairs + widened if table == t["mirror"] or name not in had}
+    return [(name, taken.get(name, type)) for name, type in staged], widened
 
 
-def misfit(conn, columns):
-    """Fails on the first value of the (table, column, type) `columns` that its type would change, in one scan."""
+def misfits(conn, columns):
+    """The (table, column, type) of `columns` with a staged value that the type would change, in one scan."""
     if not columns:
-        return
-    changed = [f"{quote(name)}::{type} IS DISTINCT FROM {quote(name)}" for _, name, type in columns]
-    values = ", ".join(f"CASE WHEN {c} THEN {quote(name)}::text END" for c, (_, name, _) in zip(changed, columns))
+        return []
+    changed = [f"bool_or({quote(name)}::{type} IS DISTINCT FROM {quote(name)})" for _, name, type in columns]
     try:
-        row = sql(conn, f"SELECT {values} FROM _stage WHERE {' OR '.join(changed)} LIMIT 1")
-    except Exception as e:  # a value too large for the precision raises instead; column by column finds which
-        if len(columns) > 1:
-            for column in columns:
-                misfit(conn, [column])
-        row = [[reason_line([], e, "checking the data")]]
-    for (table, name, type), value in zip(columns, row[0] if row else []):
-        if value is not None:
-            raise Exception(f"column {name} holds a value that its type {type} in {table} does not hold ({value})")
+        [row] = sql(conn, f"SELECT {', '.join(changed)} FROM _stage")
+    except Exception as e:  # a value too large for the type raises instead; column by column finds which
+        if getattr(e, "sqlstate", None) != "22003":  # numeric_value_out_of_range
+            raise
+        return columns if len(columns) == 1 else [c for column in columns for c in misfits(conn, [column])]
+    return [c for c, changes in zip(columns, row) if changes]
 
 
 def check_delete_share(conn, t, rows_read, counts):
@@ -435,6 +443,11 @@ def carry_out(conn, t, plan):
         changes[name] = {"note": f"{note} went with it" if note else None}
         alter(conn, f"column {name} is gone from the source and would leave the mirror {t['name']}",
               f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
+    for table in (t["mirror"], t["log_table"]):  # decision 5, one ALTER per table, so it is rewritten at most once
+        if widened := [(name, type) for into, name, type in plan["widen"] if into == table]:
+            alter(conn, f"{table} would be widened for values of the source, "
+                        + ", ".join(f"column {name} to {type}" for name, type in widened),
+                  f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(n)} TYPE {type}" for n, type in widened))
     return changes
 
 
