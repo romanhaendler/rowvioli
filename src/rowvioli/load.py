@@ -592,9 +592,21 @@ DROPS_WITH = """
       FROM pg_attribute a WHERE attrelid = $1::regclass AND attname = $2"""
 
 
+# the grants on a view but its owner's, as (privilege, column or None, grantee, grant option)
+GRANTS = """
+    SELECT a.privilege_type, NULL::text, CASE a.grantee WHEN 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END,
+           a.is_grantable FROM pg_class r, aclexplode(r.relacl) a WHERE r.oid = to_regclass($1) AND a.grantee <> r.relowner
+    UNION ALL
+    SELECT a.privilege_type, c.attname::text, CASE a.grantee WHEN 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END,
+           a.is_grantable FROM pg_attribute c, aclexplode(c.attacl) a WHERE c.attrelid = to_regclass($1)"""
+
+
 def carry_out(conn, t, plan):
     """Decision 54, under the lock: the history view goes, since Postgres alters no column a view reads (write_log
-    creates it again), then the plan. Returns what the columns table says beyond the catalogue (decision 54)."""
+    creates it again and gives its grants again, a renamed column's under its new name), then the plan. Returns what
+    the columns table says beyond the catalogue (decision 54)."""
+    renamed = {old: new for new, old in plan["renamed"].items()}
+    t["grants"] = [(p, renamed.get(c, c), *rest) for p, c, *rest in sql(conn, GRANTS, [t["history"]])]
     alter(conn, f"the columns of {t['name']} change", f"DROP VIEW IF EXISTS {t['history']}")
     changes = {}
     logged = dict(sql(conn, COLUMNS, [t["log_table"]]))
@@ -729,6 +741,9 @@ def write_log(conn, t, staged, log, names):
               FROM {t['log_table']}{' WHERE ' + ' AND '.join(cut) if cut else ''}) h
          WHERE _op <> 'D'""")
     sql(conn, f"CREATE OR REPLACE VIEW {t['history']} AS" + "\n        UNION ALL".join(branches))
+    for privilege, column, grantee, option in t.pop("grants", []):  # those carry_out found before it dropped the view
+        sql(conn, f"GRANT {privilege}{f' ({quote(column)})' if column else ''} ON {t['history']} TO {grantee}"
+                  + (" WITH GRANT OPTION" if option else ""))
 
 
 def record_columns(conn, t, delivered, mirror, log, changes):
