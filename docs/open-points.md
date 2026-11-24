@@ -14,6 +14,8 @@ Closed by decision 54: a REST column that is absent from every row of a page, an
 
 Closed after the shakedown before the merge of schema changes: a primary key that a person changed by hand before the upgrade is no longer taken for a change of key on the first run after it; the run tells the two by the definition of the table's last successful run or by the change log, and asks where neither tells ([A key](loading.md#columns)).
 
+Closed by ticket 12 of schema changes: a column gone for good from the files of a table with a change log leaves the mirror by the drop that [What a person does by hand](loading.md#what-a-person-does-by-hand) gives, with its history kept.
+
 Closed by decision 55: a consumer's table that inherits from a mirror keeps its rows ([What a person does by hand](loading.md#what-a-person-does-by-hand)).
 
 ## Left open

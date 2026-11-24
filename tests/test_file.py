@@ -262,6 +262,26 @@ def test_F1_F6_files_with_more_or_fewer_columns_load_and_a_column_missing_from_a
     log_replays(files, "raw_files.orders")
 
 
+def test_a_column_gone_from_the_files_for_good_leaves_the_mirror_by_hand_and_keeps_its_history(files):  # H2
+    orders(files, 1, 2)
+    d = files.dir / "files"
+    (d / "orders_3.csv").write_text("order_no;amount;note\n3;30;n3\n")
+    assert load(files, '"orders_*.csv" = { key = ["order_no"], sep = ";", target_table = "orders" }\n')[0] == 0
+    [(before,)] = files.target("select loaded_at from _rowvioli.tables")
+    (d / "orders_3.csv").write_text("order_no;amount\n3;30\n")  # note is gone from every file
+    assert files.run("run", "files").returncode == 0  # a run empties it
+    files.target('ALTER TABLE "raw_files"."orders" DROP COLUMN "note"')  # the way docs/loading.md gives
+    assert files.run("run", "files").returncode == 0
+    assert files.target("select * from raw_files.orders order by 1") == [("1", "10"), ("2", "20"), ("3", "30")]
+    assert files.target("select note from raw_files.orders__history where order_no = '3' and _valid_from <= %s "
+                        "and (_valid_to > %s or _valid_to is null)", [before, before]) == [("n3",)]
+    assert files.target("select _op, mirror, \"by\" from _rowvioli.columns__history where \"column\" = 'note' "
+                        "order by _valid_from") == [("I", True, "found"), ("U", False, "hand")]
+    assert files.run("run", "files").returncode == 0  # and it does not come back
+    assert files.target("select count(*) from raw_files.orders__log where note is not null") == [(1,)]
+    log_replays(files, "raw_files.orders")
+
+
 @pytest.mark.parametrize("table", ['key = ["order_no"], log = false, ', ""])
 def test_without_a_change_log_a_column_missing_from_the_files_stops_and_says_how_to_drop_it(files, table):  # story 8
     orders(files, 1, 2)
