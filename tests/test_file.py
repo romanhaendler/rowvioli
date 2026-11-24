@@ -563,6 +563,22 @@ def test_a_timestamp_finer_than_microseconds_arrives_cut_to_microseconds(files):
     assert files.target("select t from raw_files.ns") == [(datetime(2026, 1, 1, 0, 0, 0, 123456),)]
 
 
+def test_a_struct_or_a_map_of_a_parquet_file_arrives_as_jsonb_as_a_nested_value_of_a_json_file(files):
+    """One rule for the nested values of a file; the target has no type for a struct or a map."""
+    pq.write_table(pa.table({
+        "id": [1, 2], "s": [{"a": "x", "b": 1}, None], "ls": [[{"a": "y"}], []], "l": [["a"], []],
+        "m": pa.array([[("k", 1)], []], pa.map_(pa.string(), pa.int64())), "ll": [[[1, 2]], []]}),
+        files.dir / "files" / "nested.parquet")
+    for _ in range(2):  # the second run changes nothing
+        code, answer = load(files, '"nested.parquet" = { key = ["id"] }\n')
+        assert code == 0, answer
+    assert answer["raw_files.nested"] == {"status": "ok", "inserted": 0, "updated": 0, "deleted": 0}
+    assert types(files, "nested") == [("id", "bigint"), ("s", "jsonb"), ("ls", "jsonb"), ("l", "ARRAY"),
+                                      ("m", "jsonb"), ("ll", "jsonb")]
+    assert files.target("select s, ls, l, m, ll from raw_files.nested order by id") == [
+        ({"a": "x", "b": 1}, [{"a": "y"}], ["a"], {"k": 1}, [[1, 2]]), (None, [], [], {}, [])]
+
+
 def write(rv, name, rows):
     """A JSON or an Excel file of `rows`, dicts of text; a key a row lacks is a field the file lacks."""
     path = rv.dir / "files" / name
