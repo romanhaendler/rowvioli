@@ -1,5 +1,6 @@
 import json
 import re
+import signal
 
 import psycopg
 import pytest
@@ -386,3 +387,15 @@ def test_init_by_a_role_that_does_not_own_the_bookkeeping_names_the_owner(rv, ow
         rv.target(f"drop owned by {other}")
         rv.target(f"drop role {other}")
 
+def test_init_interrupted_says_that_nothing_was_changed(rv):
+    rv.run("init")
+    version_3(rv)
+    with psycopg.connect(rv.target_url) as held:
+        held.execute("lock table _rowvioli.runs in access exclusive mode")
+        p = rv.start("init")
+        until(lambda: rv.target(WAITING)[0][0] == 1)
+        p.send_signal(signal.SIGINT)
+        _, err = p.communicate(timeout=30)
+    assert p.returncode == 1
+    assert err == "init was interrupted; nothing was changed\n", err
+    assert rv.target("select schema_version from _rowvioli.meta") == [(3,)]
