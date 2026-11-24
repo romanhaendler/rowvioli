@@ -119,6 +119,20 @@ def test_a_type_widened_by_hand_stops_naming_a_consumers_view_on_the_history_vie
     replays(erp)
 
 
+def test_a_type_widened_by_hand_stops_at_a_consumers_view_on_the_change_log_with_its_cause(erp):  # story 40
+    erp.source("create table prices (id int primary key, amount numeric(10,2))")
+    erp.source("insert into prices values (1, 1.50)")
+    apply(erp, definition(erp, '"public.prices" = { key = ["id"] }\n'))
+    ok(erp)
+    erp.target("create view public.amounts as select amount from raw_erp.prices__log")
+    erp.target("alter table raw_erp.prices alter column amount type numeric(12,2)")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    assert reason.startswith('"raw_erp"."prices__log" would be widened to follow the mirror, which a person widened, '
+                             'column amount to numeric(12,2), but rule _RETURN on view amounts depends on column '
+                             '"amount"'), reason
+
+
 def test_a_column_a_person_added_to_the_change_log_is_recorded_as_hand_and_not_in_the_mirror(erp):
     ok(erp)
     erp.target("alter table raw_erp.customers__log add column memo text")

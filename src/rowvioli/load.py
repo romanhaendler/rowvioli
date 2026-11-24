@@ -100,7 +100,7 @@ def load(conn, t):
         sql(conn, "ALTER TABLE _stage " + ", ".join(f"ADD {quote(n)} {type}" for n, type in missing))
         staged = sql(conn, COLUMNS, ["pg_temp._stage"])
     plan = check(conn, t, staged, mirror, log_columns)
-    staged, plan["widen"] = fit(conn, t, staged, mirror, log_columns, plan["renamed"])
+    staged, plan["widen"], plan["followed"] = fit(conn, t, staged, mirror, log_columns, plan["renamed"])
     t["step"] = "comparing with the mirror"
     counts = diff(conn, t, staged, mirror, plan) if t["key"] else None
     if mirror:  # under another key the mirror is replaced as a whole, and only its shrinkage counts
@@ -303,8 +303,8 @@ def fit(conn, t, staged, mirror, log_columns, renamed):
     """Decision 54: a staged column of the family of the mirror's or the change log's column keeps that type while every
     value fits it, so that the comparison happens in the target type; where one does not, that column is widened to
     the type that holds both. A renamed column is fitted to its old one. Returns the staged columns with the types
-    they are checked and published in, and the widenings as (table, column under its new name, type). A type a person
-    widened in the mirror is followed in the change log like a widening the source needs, under the plan's lock."""
+    they are checked and published in, the widenings as (table, column under its new name, type), and the change
+    log's columns among them that follow a type a person widened in the mirror, under the plan's lock."""
     types, had = dict(staged), dict(mirror)
     moved = {old: new for new, old in renamed.items()}
     # not one the source retires: that log column takes another name in this run
@@ -318,13 +318,14 @@ def fit(conn, t, staged, mirror, log_columns, renamed):
     # only a target that does not hold the staged type already needs the scan
     widened = [(table, name, wider(into, types[name]))
                for table, name, into in misfits(conn, [p for p in pairs if wider(p[2], types[p[1]]) != p[2]])]
-    widened += [(t["log_table"], moved.get(n, n), into) for n, into in followed.items()
-                if (t["log_table"], moved.get(n, n)) not in {w[:2] for w in widened}]
+    follow = [(t["log_table"], moved.get(n, n), into) for n, into in followed.items()
+              if (t["log_table"], moved.get(n, n)) not in {w[:2] for w in widened}]
+    widened += follow
     # the staging table is not altered: the target's type applies on insert, where it now changes no value. A column
     # back in its family takes the change log's type (cases A12)
     taken = {name: into for table, name, into in pairs + widened
              if table == t["mirror"] or renamed.get(name, name) not in had}
-    return [(name, taken.get(name, type)) for name, type in staged], widened
+    return [(name, taken.get(name, type)) for name, type in staged], widened, [name for _, name, _ in follow]
 
 
 def misfits(conn, columns):
@@ -606,7 +607,10 @@ def carry_out(conn, t, plan):
         if widened := [(name, type) for into, name, type in plan["widen"] if into == table]:
             columns = ", ".join(f"column {name} to {type}" for name, type in widened)
             say(widening=f"{table}, {columns}")  # the worker names it if it ends the run meanwhile (decision 54)
-            alter(conn, f"{table} would be widened for values of the source, {columns}",
+            hand = set(plan["followed"]) if table == t["log_table"] else set()
+            why = " and ".join(w for w, some in [("for values of the source", len(widened) > len(hand)),
+                                                 ("to follow the mirror, which a person widened", hand)] if some)
+            alter(conn, f"{table} would be widened {why}, {columns}",
                   f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(n)} TYPE {type}" for n, type in widened))
     return changes
 
