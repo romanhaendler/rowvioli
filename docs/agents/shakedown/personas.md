@@ -35,6 +35,9 @@ person changed by hand, a key changed in the definition, grants for a worker and
 upgrade as `docs/operation.md` says it, and as people get it wrong: `init` as the wrong role, an old worker
 left running, the grants forgotten. Every table must load or give a reason with its way out, the history at
 every moment before the upgrade must stay what it was, and the change log replayed must give the mirror. Run: 2026-11-24.
+`tests/test_upgrade.py` does this with 0.4.1 in the suite (its source from the tag, run with the suite's
+libraries); the host adds what the suite has not: the wheel as released, a fleet over days, an old worker left
+running, a worker's role of least rights. When 0.5.0 is released, the test moves to its tag.
 
 ## Personas
 
