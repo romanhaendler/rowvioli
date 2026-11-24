@@ -395,7 +395,8 @@ def record_columns(conn, t, delivered, mirror, log):
         if (before := old.get(name)) is None:
             row.update(op="I", by="found" if not old else "source" if name not in found else "hand")
         else:
-            hand = found.get(name) != (before["type"], before["mirror"])
+            # a mirror's column the change log lost by hand: the run adds it again, the state alone shows nothing
+            hand = found.get(name) != (before["type"], before["mirror"]) or bool(log) and name not in dict(log)
             if not hand and all(before[f] == row[f] for f in ("type", "source_type", "key", "mirror")):
                 continue
             row.update(op="U", by="hand" if hand else "source", was=before["was"])
@@ -426,7 +427,8 @@ def record_columns(conn, t, delivered, mirror, log):
     sql(conn, f"""INSERT INTO _rowvioli.columns SELECT {fields}, $2::int FROM {x} WHERE op <> 'D'
                   ON CONFLICT (target_schema, target_table, "column") DO UPDATE SET type = excluded.type,
                   source_type = excluded.source_type, "key" = excluded."key", mirror = excluded.mirror,
-                  was = excluded.was, "by" = excluded."by", note = excluded.note""", [changes, t["id"]])
+                  was = excluded.was, "by" = excluded."by", note = excluded.note, id = excluded.id""",
+        [changes, t["id"]])
     if any(r["by"] != "found" for r in rows):
         sql(conn, "SELECT pg_notify('rowvioli_schema', json_build_object('schema', $1::text, 'table', $2::text,"
                   " 'run', $3::bigint)::text)", [t["schema"], t["table"], t["run"]])

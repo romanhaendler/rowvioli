@@ -70,6 +70,14 @@ def test_a_column_dropped_from_the_mirror_by_hand_and_added_again_by_the_run_is_
     replays(erp)
 
 
+def test_a_column_dropped_from_the_change_log_by_hand_and_added_again_by_the_run_is_recorded_as_hand(erp):
+    ok(erp)
+    erp.target("alter table raw_erp.customers__log drop column city cascade")  # the history view goes with it
+    again(erp)
+    assert erp.target(LAST) == [("U", "city", True, "hand", None)]
+    replays(erp)
+
+
 def test_a_type_widened_by_hand_in_the_mirror_is_followed_in_the_change_log_and_recorded_as_hand(erp):
     erp.source("create table prices (id int primary key, amount numeric(10,2))")
     erp.source("insert into prices values (1, 1.50)")
@@ -105,6 +113,21 @@ def test_a_mirror_renamed_by_hand_appears_under_its_new_name_and_the_old_name_is
     assert erp.target("select distinct _op, \"by\" from _rowvioli.columns__log where target_table = 'customers' "
                       "and _run = (select max(run) from _rowvioli.runs)") == [("D", "hand")]
     assert erp.target("select count(*) from _rowvioli.columns where target_table = 'customers'") == [(0,)]
+    replays(erp)
+
+
+def test_a_name_left_behind_by_one_table_and_taken_by_another_is_recorded_once_under_the_other(erp):
+    erp.source("create table clients (customer_no int primary key, name text, city text)")
+    erp.source("insert into clients select * from customers")
+    ok(erp)  # customers into raw_erp.customers; then customers moves on and clients takes the table it left
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], target_table = "moved" }\n'
+                               '"public.clients" = { key = ["customer_no"], target_table = "customers" }\n'))
+    for _ in range(2):  # the second run of clients changes nothing, so it records nothing
+        erp.target("update _rowvioli.tables set requested_at = now()")
+        ok(erp, "erp", "public.clients")
+    assert erp.target(LAST) == []
+    assert erp.target("select distinct c.id = t.id from _rowvioli.columns c join _rowvioli.tables t "
+                      "on t.source_table = 'public.clients' where c.target_table = 'customers'") == [(True,)]
     replays(erp)
 
 
