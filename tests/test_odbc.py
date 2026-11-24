@@ -220,3 +220,15 @@ def test_arrow_odbcs_own_message_of_a_value_keeps_what_comes_before_the_value():
             OSError("External error: " + message), "dbo.t")) == f"dbo.t: {kept}"
     record = RuntimeError("ODBC emitted an error calling 'SQLFetch': State: 22P02, Native error: 1, Message: x")
     assert without_value(record, "dbo.t") is record
+
+
+@needs_driver
+@pytest.mark.parametrize("value", ["4713-01-01 BC", "-infinity"])
+def test_a_timestamp_the_targets_type_cannot_hold_names_the_column_and_the_way_out(ready, value):
+    """psqlODBC delivers 4713 BC a year early and -infinity as the year -9999, before the least timestamp of
+    Postgres, which refuses the row in staging."""
+    ready.source(f"create table t (id int primary key, ts timestamp); insert into t values (1, '{value}')")
+    erp(ready, '"public.t" = { key = ["id"] }')
+    assert failed(ready, "erp") == ("public.t: column ts has a value its type in the target, timestamp without time "
+                                    "zone, cannot hold (SQLSTATE 22008); cast it in a view of the source or change it "
+                                    "there")

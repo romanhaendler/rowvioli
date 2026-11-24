@@ -330,7 +330,9 @@ def test_a_latin1_target_stores_the_sources_text_and_refuses_one_it_has_no_chara
     assert r.returncode == 0 and "raw_ü.customers" in r.stdout, r.stderr
     rv.source("update customers set name = 'Ω'")
     rv.target("update _rowvioli.tables set requested_at = now()")
-    assert "(SQLSTATE 22P05) in the target" in failed(rv)
+    assert failed(rv).replace("***", "x") == (  # the harness's password is x
+        "public.customers: column name has a value its type in the target, text, cannot hold (SQLSTATE 22P05); cast "
+        "it in a view of the source or change it there")
 
 
 def test_a_latin1_source_delivers_its_text(rv, servers):

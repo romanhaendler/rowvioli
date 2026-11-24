@@ -518,13 +518,13 @@ def test_a_nul_byte_in_a_text_value_is_removed_and_a_second_run_changes_nothing(
 
 def test_a_value_the_target_refuses_while_rows_are_staged_is_the_targets_in_the_reason(files):
     """A NUL inside a list reaches the target (decision 51's shortcut), which refuses it: an error of the target, not
-    of the source, and withheld by its SQLSTATE (decision 54, item 8)."""
+    of the source, which names the column Postgres names and not the value (decision 54, item 8)."""
     pq.write_table(pa.table({"id": [1], "tags": [["Secret\x00"]]}), files.dir / "files" / "nul.parquet")
     code, answer = load(files, '"nul.parquet" = { key = ["id"] }\n')
     assert code == 1
     assert answer["raw_files.nul"]["reason"] == (
-        "a statement raised an error (SQLSTATE 22021) in the target; its message may hold a row's values, so it is "
-        "left out here: the target's server log has it")
+        "nul.parquet: column tags has a value its type in the target, text[], cannot hold (SQLSTATE 22021); cast it "
+        "in a view of the source or change it there")
 
 
 def test_a_csv_header_with_one_name_twice_arrives_with_the_second_numbered(files):  # cases A22, as it is today

@@ -478,10 +478,18 @@ def stage(conn, t):
         raised = []
         try:
             rows_read = c.adbc_ingest("_stage", without_nul(batches, raised), mode="append", temporary=True)
-        except Exception:  # the driver gives what the connector raised in its stream as its own error, cut and wrapped
+        except Exception as e:  # the driver gives what the connector raised in its stream as its own error, wrapped
             if raised:
                 raise raised[0] from None
             t["step"] = "staging the rows"  # the target refused them, not the source
+            # a value its column's type cannot hold (a timestamp before 4713 BC): Postgres names the column, no value
+            at = re.fullmatch(r"COPY _stage, line \d+, column (.+)", dict(getattr(e, "details", None) or []).get(
+                b"PG_DIAG_CONTEXT", b"").decode(errors="replace"))
+            if (getattr(e, "sqlstate", None) or "").startswith("22") and at and \
+                    at[1] in (types := dict(sql(conn, COLUMNS, ["pg_temp._stage"]))):
+                raise Exception(f"{t['source_table']}: column {at[1]} has a value its type in the target, "
+                                f"{types[at[1]]}, cannot hold (SQLSTATE {e.sqlstate}); cast it in a view of the source "
+                                "or change it there") from None
             raise
     # zero rows protect a mirror that has rows; a first load or an empty mirror publishes them
     if rows_read == 0 and t["max_delete_share"] < 1 and sql(conn, "SELECT to_regclass($1)", [t["mirror"]])[0][0] and \
