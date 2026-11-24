@@ -128,6 +128,43 @@ def test_A6_a_gone_column_a_consumers_view_reads_stops_the_run_naming_the_view_a
     log_replays(erp)
 
 
+def test_D6_a_view_on_the_history_view_stops_a_change_of_any_column_and_is_named(erp):  # story 41
+    ok(erp)
+    erp.target("create view public.names as select customer_no, name from raw_erp.customers__history")
+    erp.source("alter table customers drop column city")  # a column the view does not read
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    assert reason.startswith("the columns of raw_erp.customers change, but view names depends on view "
+                             "raw_erp.customers__history: change or drop that"), reason
+    assert columns(erp) == ["customer_no", "name", "city"]
+    erp.target("drop view public.names")  # the way out
+    again(erp)
+    log_replays(erp)
+
+
+def test_G6_a_column_gone_from_a_mirror_that_is_a_parent_leaves_its_children_too(erp):
+    ok(erp)
+    erp.target("create table public.branch () inherits (raw_erp.customers)")
+    erp.source("alter table customers drop column city")
+    again(erp)
+    assert columns(erp, "public.branch") == ["customer_no", "name"]
+    log_replays(erp)
+
+
+def test_H3_several_changes_in_one_run_are_published_together_with_one_record_each(erp):  # story 44
+    ok(erp)
+    erp.source("alter table customers drop column city")
+    erp.source("alter table customers add column phone text")
+    erp.source("alter table customers alter column customer_no type bigint")
+    erp.source("insert into customers values (3000000000, 'Dora', '0228')")
+    loaded_at = again(erp)
+    assert erp.target(LAST) == [("U", "city", False, "source", None), ("U", "customer_no", True, "source", None),
+                                ("I", "phone", True, "source", None)]
+    assert erp.target("select distinct _loaded_at from _rowvioli.columns__log where _run = "
+                      "(select max(run) from _rowvioli.runs)") == [(loaded_at,)]
+    log_replays(erp)
+
+
 def test_A7_A9_indexes_checks_and_column_grants_that_go_with_a_column_are_in_the_note(erp):
     ok(erp)
     role = "consumer_" + erp.target("select current_database()")[0][0]
