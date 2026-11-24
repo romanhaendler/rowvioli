@@ -365,3 +365,31 @@ def test_renamed_applied_while_a_run_loads_stops_it_from_publishing_and_the_next
     assert erp.target("""select "by", was from _rowvioli.columns where "column" = 'state'""") == [
         ("definition", "flag")]
     log_replays(erp, "raw_erp.flags")
+
+
+def test_renamed_applied_while_a_file_table_loads_stops_it_from_publishing_and_the_next_run_renames(files):
+    """Ticket 15, P4: a file's column the data lack is filled empty, not let go, so the guard above missed it, and the
+    run that added the new column left the rename nothing to act on."""
+    import psycopg
+    from conftest import until
+    csv = files.dir / "files" / "people.csv"
+    csv.write_text("id;city\n1;Bonn\n2;Essen\n")
+    table = '"people.csv" = {{ key = ["id"], sep = ";"{} }}\n'
+    assert load_file(files, table.format(""))[0] == 0
+    csv.write_text("id;town\n1;Bonn\n2;Essen\n")
+    with psycopg.connect(files.target_url) as reader:  # holds the run at its lock while renamed is applied
+        reader.execute("lock table raw_files.people in access share mode")
+        files.target("update _rowvioli.tables set requested_at = now()")
+        loading = files.start("run", "files")
+        until(lambda: files.target("select status from _rowvioli.status") == [("loading",)])
+        text = (files.dir / "sources" / "files.toml").read_text()
+        files.definition({"files.toml": text.replace('sep = ";" }', 'sep = ";", renamed = { town = "city" } }')})
+        assert files.run("apply", "sources").returncode == 0
+        reader.rollback()
+    assert loading.wait(timeout=30) == 1, loading.stdout.read()
+    assert files.target("select reason from _rowvioli.runs order by run desc limit 1")[0][0].startswith(
+        "the definition renames column city to town since this run claimed raw_files.people; nothing was published")
+    assert columns(files, "raw_files.people") == ["id", "city"]
+    assert load_file(files, table.format(', renamed = { town = "city" }'))[0] == 0
+    assert columns(files, "raw_files.people") == ["id", "town"]
+    assert files.target("select * from raw_files.people order by id") == [("1", "Bonn"), ("2", "Essen")]

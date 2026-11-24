@@ -97,9 +97,7 @@ def load(conn, t):
     # have is renamed. REST delivers every column under `columns`, even one no row has: the definition is its catalog,
     # and a column taken out of it goes as one a database drops
     had, logged = dict(mirror), dict(log_columns)
-    # decision 54: a rename the definition states acts once its old column is gone and its new one has come
-    renamed = {new: old for new, old in (t["options"].get("renamed") or {}).items() if old in had
-               and old not in dict(staged) and new in dict(staged) and new not in had and (not logged or old in logged)}
+    renamed = acting(t["options"].get("renamed"), had, dict(staged), logged)
     if t["catalog"] == "data" and (missing := [(n, type) for n, type in mirror if n not in dict(staged)
                                             and n not in renamed.values() and n in logged]):
         sql(conn, "ALTER TABLE _stage " + ", ".join(f"ADD {quote(n)} {type}" for n, type in missing))
@@ -121,6 +119,13 @@ def load(conn, t):
         check_delete_share(conn, t, rows_read, None if plan["key"] else counts)
     t["step"] = "publishing"
     return publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, plan)
+
+
+def acting(stated, had, delivered, logged):
+    """Decision 54: the renames of `stated`, new name to old, that act: the old column is gone from what the source
+    delivered and the new one has come."""
+    return {new: old for new, old in (stated or {}).items() if old in had and old not in delivered
+            and new in delivered and new not in had and (not logged or old in logged)}
 
 
 def check(conn, t, staged, mirror, log_columns, renamed):
@@ -626,9 +631,11 @@ def publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, 
         raise Exception(f"the target name changed to {name} while this run loaded {t['name']}; nothing was published, "
                         f"the next run loads {name}" if enabled else
                         f"the table left the definition while this run loaded {t['name']}; nothing was published")
-    # decision 54: a rename stated since the claim of a column this run lets go could act no more after it
-    if lost := [f"{old} to {new}" for new, old in json.loads(claimed[0][0] or "{}").items()
-                if old in plan["gone"] and new in dict(staged) and (t["options"].get("renamed") or {}).get(new) != old]:
+    # decision 54: a rename stated since the claim that would act could act no more after this run, which adds the new
+    # column (and lets the old one go, or fills it empty for a file)
+    if lost := [f"{old} to {new}" for new, old in acting(json.loads(claimed[0][0] or "null"), dict(mirror),
+                                                          dict(delivered), dict(log_columns)).items()
+                if plan["renamed"].get(new) != old]:
         raise Exception(f"the definition renames column {' and '.join(lost)} since this run claimed {t['name']}; "
                         "nothing was published, the next run renames it")
     sql(conn, """UPDATE _rowvioli.runs SET status = 'ok', finished_at = clock_timestamp(), rows_read = $2,
