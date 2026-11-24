@@ -587,8 +587,8 @@ def test_a_run_never_waits_for_a_lock_while_holding_one_and_gives_up_after_10s(e
 
 
 IN_USE = ("raw_erp.customers, its change log and its history view were held by this run when an object it needed was "
-          "in use (a table with a foreign key to it, or its row in _rowvioli.tables while apply ran), so the run did not "
-          "wait for it: nothing was published, the next run tries again")
+          "in use (such as a table with a foreign key to it, or its row in _rowvioli.tables while apply ran), so the run "
+          "did not wait for it: nothing was published, the next run tries again")
 
 
 def test_a_run_that_holds_the_mirror_waits_for_no_consumers_table_with_a_foreign_key_to_it(erp):  # ticket 15, B4

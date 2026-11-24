@@ -124,8 +124,8 @@ def load(conn, t):
         if not (t.get("locked") and getattr(e, "sqlstate", None) == "55P03"):  # lock_not_available
             raise
         raise Exception(f"{t['name']}, its change log and its history view were held by this run when an object it "
-                        "needed was in use (a table with a foreign key to it, or its row in _rowvioli.tables while "
-                        "apply ran), so the run did not wait for it: nothing was published, the next run tries "
+                        "needed was in use (such as a table with a foreign key to it, or its row in _rowvioli.tables "
+                        "while apply ran), so the run did not wait for it: nothing was published, the next run tries "
                         "again") from None
 
 
@@ -206,8 +206,11 @@ def check(conn, t, staged, mirror, log_columns, renamed):
                 raise Exception(f"column {name} is missing in the source; without a change log its values are nowhere "
                                 f"else, so a person drops it: ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
             plan["gone"].append(name)
-        elif family(types[name]) != family(type):  # another family goes and comes (decision 54); fit() did the same
+        elif family(types[name]) != family(type):  # another family goes and comes (decision 54)
             changed = f"column {name} has changed its type from {type} to {types[name]}"
+            if name in (t["key"] or []):  # first: a drop would take the key column for good
+                raise Exception(f"{changed}, a type of another family in the key, so a row before cannot be told "
+                                "from one after: give the table another target_table, which begins a new mirror")
             # where the definition names the columns it is the catalog. CSV, Excel and JSON deliver every other column
             # as text or jsonb, so another family there is a pin taken out; a type the file brings itself can flip
             if t["catalog"] == "data" and name not in t["pinned"]:
@@ -217,9 +220,6 @@ def check(conn, t, staged, mirror, log_columns, renamed):
                                     f"and the next run adds it anew: ALTER TABLE {t['mirror']} DROP COLUMN "
                                     f"{quote(name)}")
                 plan["unpinned"].append(name)
-            if name in (t["key"] or []):
-                raise Exception(f"{changed}, a type of another family in the key, so a row before cannot be told "
-                                "from one after: give the table another target_table, which begins a new mirror")
             if not (t["key"] and t["log"] and log_columns):
                 raise Exception(f"{changed}; without a change log its values are nowhere else, so a person drops it "
                                 f"and the next run adds it anew: ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
