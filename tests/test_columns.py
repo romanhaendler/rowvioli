@@ -236,13 +236,47 @@ def test_one_right_on_the_history_view_is_all_an_auditor_needs(erp):
         with psycopg.connect(url) as c:
             assert c.execute("select count(*) from _rowvioli.columns__history").fetchone()[0] == 4
             # what changed, and why, and the listener's recipe of docs/target.md
-            changed = c.execute("""SELECT _valid_from, _run, _op, "column", type, mirror, was, "by", note
-                                     FROM _rowvioli.columns__history
-                                    WHERE target_schema = 'raw_erp' AND target_table = 'customers' AND _valid_from > %s
-                                    ORDER BY _valid_from, "column" """, [first]).fetchall()
-            assert [r[1:] for r in changed] == [(run, "U", "city", "text", False, None, "source", None)]
-            assert c.execute("""SELECT _op, "column", type, mirror, was, "by", note FROM _rowvioli.columns__history
-                                 WHERE _run = %s""", [run]).fetchall() == [r[2:] for r in changed]
+            changed = c.execute("""
+                SELECT _valid_from, _run, _op, "column", type, mirror, was, "by", note, _valid_to, _valid_to_run,
+                       _valid_to_by, _valid_to_note
+                  FROM _rowvioli.columns__history
+                 WHERE target_schema = 'raw_erp' AND target_table = 'customers'
+                   AND (_valid_from > %s OR _valid_to > %s)
+                 ORDER BY _valid_from, "column" """, [first, first]).fetchall()
+            assert [r[1:9] + r[10:] for r in changed] == [
+                (run - 1, "I", "city", "text", True, None, "found", None, run, "source", None),
+                (run, "U", "city", "text", False, None, "source", None, None, None, None)]
+            assert sorted(c.execute("""
+                SELECT target_table, "column", _run, _op, type, mirror, was, "by", note, _valid_to_run, _valid_to_by,
+                       _valid_to_note
+                  FROM _rowvioli.columns__history WHERE _run = %s OR _valid_to_run = %s""", [run, run]).fetchall(),
+                          key=repr) == sorted([("customers", r[3], *r[1:3], *r[4:9], *r[10:]) for r in changed], key=repr)
     finally:
         erp.target("drop owned by auditor")
         erp.target("drop role auditor")
+
+
+# the listener's recipe of docs/target.md: what a run began and what it ended
+ENDED = """SELECT target_table, "column", _run, _op, "by", _valid_to_run, _valid_to_by, _valid_to_note
+             FROM _rowvioli.columns__history WHERE _run = %s OR _valid_to_run = %s ORDER BY 1, 2, _valid_from"""
+
+
+def test_the_history_view_says_the_run_that_ended_a_version_also_for_a_column_closed_by_hand(erp):  # story 37
+    ok(erp)
+    [(first,)] = erp.target("select max(run) from _rowvioli.runs")
+    erp.source("alter table customers drop column city")  # and a person drops it, from mirror and change log
+    erp.target("drop view raw_erp.customers__history; alter table raw_erp.customers drop column city;"
+               "alter table raw_erp.customers__log drop column city")
+    again(erp)
+    [(run,)] = erp.target("select max(run) from _rowvioli.runs")
+    assert erp.target(ENDED, [run, run]) == [("customers", "city", first, "I", "found", run, "hand", None)]
+    for old, new in [("customers", "clients"), ("customers__log", "clients__log")]:
+        erp.target(f"alter table raw_erp.{old} rename to {new}")
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], target_table = "clients" }\n'))
+    again(erp)
+    [(renamed,)] = erp.target("select max(run) from _rowvioli.runs")
+    assert erp.target(ENDED, [renamed, renamed]) == [
+        ("clients", "customer_no", renamed, "I", "found", None, None, None),
+        ("clients", "name", renamed, "I", "found", None, None, None),
+        ("customers", "customer_no", first, "I", "found", renamed, "hand", None),
+        ("customers", "name", first, "I", "found", renamed, "hand", None)]

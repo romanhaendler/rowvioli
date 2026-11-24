@@ -135,7 +135,7 @@ SELECT customer_no, city
 
 ## The columns table
 
-Which columns and types a mirror had at a moment, and what caused each change, is kept the way rows are: `_rowvioli.columns` is to the columns of the mirrors what a mirror is to its rows, `_rowvioli.columns__log` its change log and `_rowvioli.columns__history` its history view, with `_op`, `_run`, `_loaded_at`, `_valid_from` and `_valid_to` as for any change log; the history view carries `_run` and `_op` as well, so that who may read only it reads what changed and in which run. `_loaded_at` is that of the rows published in the same transaction, so a column's change and the rows loaded with it carry the same moment. The three are written by the publishing transaction only, for every table, with or without a key.
+Which columns and types a mirror had at a moment, and what caused each change, is kept the way rows are: `_rowvioli.columns` is to the columns of the mirrors what a mirror is to its rows, `_rowvioli.columns__log` its change log and `_rowvioli.columns__history` its history view, with `_op`, `_run`, `_loaded_at`, `_valid_from` and `_valid_to` as for any change log; the history view carries `_run` and `_op` as well, and for each version the run that ended it with that run's `by` and `note` (`_valid_to_run`, `_valid_to_by`, `_valid_to_note`, empty while it is current), so that who may read only it reads what changed, in which run and why, also where a version ended with none after it. `_loaded_at` is that of the rows published in the same transaction, so a column's change and the rows loaded with it carry the same moment. The three are written by the publishing transaction only, for every table, with or without a key.
 
 ```
 columns   target_schema, target_table, column     the key
@@ -165,19 +165,29 @@ SELECT "column", type, "key" FROM _rowvioli.columns__history
  ORDER BY "column";
 ```
 
-What changed in a table since a moment, in which run, by whom, and what the note says:
+What changed in a table since a moment, in which run, by whom, and what the note says, with the versions that ended since:
 
 ```sql
-SELECT _valid_from, _run, _op, "column", type, mirror, was, "by", note FROM _rowvioli.columns__history
- WHERE target_schema = 'raw_erp' AND target_table = 'customers' AND _valid_from > '2026-03-01 00:00:00+00'
+SELECT _valid_from, _run, _op, "column", type, mirror, was, "by", note, _valid_to, _valid_to_run, _valid_to_by,
+       _valid_to_note
+  FROM _rowvioli.columns__history
+ WHERE target_schema = 'raw_erp' AND target_table = 'customers'
+   AND (_valid_from > '2026-03-01 00:00:00+00' OR _valid_to > '2026-03-01 00:00:00+00')
  ORDER BY _valid_from, "column";
 ```
 
-`_op` is `I` for a column the record did not have and `U` for a change. A column a person dropped from mirror and change log, and every column of a mirror renamed by hand under its old name, is closed instead: its last version ends then (`_valid_to`) and none follows, so the query above does not list it; `columns__log` has it as a `D` row.
+`_op` is `I` for a column the record did not have and `U` for a change. A column a person dropped from mirror and change log, and every column of a mirror renamed by hand under its old name, is closed instead: its last version ends then and none follows, and that version says the run that closed it, `by = hand` (`_valid_to_run`, `_valid_to_by`); `columns__log` has it as a `D` row.
 
 The reader of `columns__history` needs `SELECT` on that view and nothing else in `_rowvioli`, as for the history of a mirror ([Rights](operation.md#the-target)). With it the reader sees the columns of every table of the target, in every schema, and in the notes the names of the indexes and constraints that went with a column and of the roles that had a grant on it.
 
-**The notification.** A run that records a change of columns, a key or a name notifies the channel `rowvioli_schema` in the transaction that publishes it, once per run, so a listener hears it at the COMMIT and never for a run that was rolled back. The payload is small and fixed: `{"schema" : "raw_erp", "table" : "customers", "run" : 812}`, as Postgres writes a JSON object. A listener reads what changed from the history view, `SELECT _op, "column", type, mirror, was, "by", note FROM _rowvioli.columns__history WHERE _run = 812`, which needs no right on `columns__log`. A column closed in that run, as above, is not among those rows; a listener that must hear of it reads `columns__log` with the same condition, which needs `SELECT` on it. It is not sent for a first fill where every column is `found`: a table's first fill is no change of columns. A first fill that changed a column, such as the first run after the upgrade on a table whose source dropped one, sends it. A change `by = hand` or `by = reader` is sent as well.
+**The notification.** A run that records a change of columns, a key or a name notifies the channel `rowvioli_schema` in the transaction that publishes it, once per run, so a listener hears it at the COMMIT and never for a run that was rolled back. The payload is small and fixed: `{"schema" : "raw_erp", "table" : "customers", "run" : 812}`, as Postgres writes a JSON object. A listener reads what changed from the history view, the versions the run began and those it ended, a column it closed among them, which needs no right on `columns__log`:
+
+```sql
+SELECT target_table, "column", _run, _op, type, mirror, was, "by", note, _valid_to_run, _valid_to_by, _valid_to_note
+  FROM _rowvioli.columns__history WHERE _run = 812 OR _valid_to_run = 812;
+```
+
+The notification is not sent for a first fill where every column is `found`: a table's first fill is no change of columns. A first fill that changed a column, such as the first run after the upgrade on a table whose source dropped one, sends it. A change `by = hand` or `by = reader` is sent as well.
 
 ```sql
 LISTEN rowvioli_schema;
