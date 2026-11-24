@@ -344,3 +344,45 @@ def test_two_inits_at_once_both_end_as_on_a_ready_target(rv):
     assert [code for _, _, code in out] == [0, 0], out
     assert rv.target("select schema_version from _rowvioli.meta") == [(4,)]
 
+def as_role(rv, role):
+    return {"ROWVIOLI_TARGET_URL": rv.target_url.replace("postgres:x@", f"{role}:secret_o@")}
+
+
+@pytest.fixture
+def owner(rv):
+    """A version 3 target whose bookkeeping a role of its own owns, as when that role ran the first init (roles
+    belong to the cluster: a name of its own)."""
+    db = rv.target_url.rsplit("/", 1)[1]
+    role = f"owner_{db}"
+    rv.target(f"create role {role} login password 'secret_o'")
+    rv.target(f"grant create on database {db} to {role}")
+    try:
+        assert rv.run("init", env=as_role(rv, role)).returncode == 0
+        version_3(rv)
+        yield role
+    finally:
+        rv.target(f"drop owned by {role}")
+        rv.target(f"drop role {role}")
+
+
+def test_init_by_a_superuser_gives_the_new_objects_the_owner_of_the_bookkeeping(rv, owner):
+    r = rv.run("init")
+    assert r.returncode == 0, r.stderr
+    assert rv.target("select relname, relowner::regrole::text from pg_class where relnamespace = "
+                     "'_rowvioli'::regnamespace and relowner::regrole::text <> %s", [owner]) == []
+
+
+def test_init_by_a_role_that_does_not_own_the_bookkeeping_names_the_owner(rv, owner):
+    other = owner.replace("owner_", "other_")
+    rv.target(f"create role {other} login password 'secret_o'")
+    try:
+        rv.target(f"grant all on schema _rowvioli to {other}; grant all on all tables in schema _rowvioli to {other}")
+        r = rv.run("init", env=as_role(rv, other))
+        assert r.returncode == 1
+        assert r.stderr == (f"_rowvioli belongs to the role {owner}: run rowvioli init as {owner} or as a "
+                            "superuser; nothing was changed\n"), r.stderr
+        assert rv.target("select schema_version from _rowvioli.meta") == [(3,)]
+    finally:
+        rv.target(f"drop owned by {other}")
+        rv.target(f"drop role {other}")
+

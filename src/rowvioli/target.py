@@ -92,7 +92,15 @@ def connect(init=False, versioned=True, pooler=True):
     if init and (version is None or 3 <= version < SCHEMA_VERSION):  # below 3 there is no step: refused below
         steps = [step for step, _ in MIGRATIONS[0 if version is None else version - 3:]]
         steps = ["sql/schema.sql", *steps] if version is None else steps
-        transaction(conn, "".join(files(__package__).joinpath(step).read_text() for step in steps))
+        role = ""
+        if version is not None:  # the new objects get the owner of the old ones, also when a superuser runs the step
+            [(owner, member)] = sql(conn, "SELECT relowner::regrole::text, pg_has_role(relowner, 'MEMBER') "
+                                          "FROM pg_class WHERE oid = '_rowvioli.runs'::regclass")
+            if not member:
+                raise SystemExit(f"_rowvioli belongs to the role {owner}: run rowvioli init as {owner} or as a "
+                                 "superuser; nothing was changed")
+            role = f"SET LOCAL ROLE {owner};\n"
+        transaction(conn, role + "".join(files(__package__).joinpath(step).read_text() for step in steps))
         if version is not None:
             print(f"the schema _rowvioli is brought from version {version} to {SCHEMA_VERSION}; a worker's role needs "
                   "these rights on its new objects, which the program does not grant (worker stands for that role):\n"
