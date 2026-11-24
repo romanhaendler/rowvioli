@@ -159,6 +159,19 @@ def test_D6_a_view_on_the_history_view_stops_a_change_of_any_column_and_is_named
     log_replays(erp)
 
 
+def test_a_consumers_event_trigger_that_needs_the_search_path_sees_the_run_change_columns(erp):
+    ok(erp)  # a trigger on every change of a table's definition, whose function finds its table on the search path
+    erp.target("create table public.changes (tag text);"
+               "create function public.note() returns event_trigger language plpgsql as "
+               "$$ begin insert into changes values (tg_tag); end $$;"
+               "create event trigger note on ddl_command_end execute function public.note()")
+    erp.source("alter table customers drop column city")
+    again(erp)
+    assert columns(erp) == ["customer_no", "name"]
+    assert ("ALTER TABLE",) in erp.target("select tag from public.changes")
+    log_replays(erp)
+
+
 def test_a_stop_names_every_object_in_the_way_through_the_layers_so_one_round_of_work_clears_it(erp):  # P20
     ok(erp)
     erp.target("create view public.v1 as select customer_no, name from raw_erp.customers__history;"

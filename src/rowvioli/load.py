@@ -809,8 +809,9 @@ def alter(conn, t, why, statement, table, columns=(), constraint=None, drop=True
     and the catalogue gives all (IN_THE_WAY). Says whether the change was made.
     A drop locks what depends on what it drops before it refuses: a consumer who reads such a view while the run holds
     the mirror waits for the run, so the run does not wait for the view, which would be a deadlock (story 43); the
-    catalogue names it then. Every object is named with its schema, also one on the search path."""
-    sql(conn, "SET LOCAL search_path = ''")  # before the savepoint, whose rollback would undo it
+    catalogue names it then. Every object is named with its schema, also one on the search path: the catalogue names
+    them under an empty search path, while the change runs under the run's own, which a consumer's code it calls (a
+    check constraint's function, an event trigger) may need."""
     sql(conn, "SAVEPOINT alter")
     sql(conn, "SET LOCAL lock_timeout = '50ms'")  # far below the second after which Postgres looks for a deadlock
     try:
@@ -824,8 +825,9 @@ def alter(conn, t, why, statement, table, columns=(), constraint=None, drop=True
             raise
         sql(conn, "ROLLBACK TO SAVEPOINT alter")
         done = False
-        found = sql(conn, IN_THE_WAY, [table, json.dumps(columns), t["history"], constraint, drop]) \
-            if state == "55P03" or not drop else []
+        sql(conn, "SET LOCAL search_path = ''")  # pg_describe_object then names every object with its schema
+        found = sql(conn, IN_THE_WAY, [table, json.dumps(columns), t["history"], constraint, drop])
+        sql(conn, "ROLLBACK TO SAVEPOINT alter")  # the search path as it was
         named = "; ".join(f"{d} depends on {w}" for d, w, history in found if not history)
         if state == "55P03":
             t.setdefault("blocked", []).append(f"{why}, but {named}, in use, so the run did not wait for it" if named
@@ -835,7 +837,6 @@ def alter(conn, t, why, statement, table, columns=(), constraint=None, drop=True
             detail = named or details["PG_DIAG_MESSAGE_DETAIL"].replace("\n", "; ")
             t.setdefault("blocked", []).append(f"{why}, but {detail}")
     sql(conn, "SET LOCAL lock_timeout TO DEFAULT")
-    sql(conn, "SET LOCAL search_path TO DEFAULT")
     return done
 
 
