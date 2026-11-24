@@ -276,6 +276,7 @@ The prototype claimed this way with 6 workers of 4 slots, two sources with `para
 | The target fails over to another node | connections drop, running loads end without publishing, the retry catches up | with the connection |
 | An object of a consumer depends on a column, type or key that would change | the run fails and names the object, nothing is published | right after; the next run goes on once the object is changed |
 | Target Postgres is unreachable | workers wait and retry. Nothing is loaded. | |
+| Target Postgres restarts during a run | the run fails with `connection to the target lost`. `work` records it once the target is back, and loads on. `rowvioli run`, whose own connection is gone too, ends with the line `connection to the target lost` and exit code 1, and the status shows `worker lost` until the table's next run | with the connection |
 
 In no case does anything half-done become visible: a COMMIT needs a command from the worker, and the worker is gone by then.
 

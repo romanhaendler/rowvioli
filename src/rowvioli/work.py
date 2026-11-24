@@ -117,6 +117,10 @@ def loop(slots, source="", table="", once=False):
                 down = None
         except adbc.Error as e:  # the target is unreachable: try again in two seconds (open point E11)
             if once:
+                try:  # a connection that still answers had another failure, said as the target says it
+                    sql(conn, "SELECT 1")
+                except adbc.Error:  # the driver says it in Postgres's words, `FATAL:  terminating connection ...`
+                    raise SystemExit("connection to the target lost") from None
                 raise
             if conn:
                 down = time.monotonic()

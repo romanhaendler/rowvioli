@@ -177,7 +177,8 @@ def test_a_run_whose_server_process_is_killed_fails_and_run_says_so(slow):
 
 
 def test_run_whose_own_connection_the_target_drops_says_so_in_one_line(slow):
-    """Ticket 11: the target's message without the query that was sent."""
+    """Ticket 11: no query that was sent; ticket 12 of schema changes: the last line is ours, not Postgres's bare
+    `FATAL:  terminating connection due to administrator command` (H4, a target restarted during a run)."""
     with psycopg.connect(slow.target_url) as holder:
         holder.execute("lock table raw_erp.slow in access exclusive mode")
         worker = slow.start("run")
@@ -188,7 +189,7 @@ def test_run_whose_own_connection_the_target_drops_says_so_in_one_line(slow):
         out, err = worker.communicate(timeout=20)
         holder.rollback()
     assert worker.returncode == 1 and out == ""
-    assert "SELECT" not in err and "terminating connection" in err.splitlines()[-1], err
+    assert "SELECT" not in err and "FATAL" not in err and err.splitlines()[-1] == "connection to the target lost", err
 
 
 def test_a_reader_never_sees_an_empty_or_half_loaded_mirror(slow):
