@@ -11,7 +11,7 @@ Added:
   - A column the data prove renamed, or the table says is, is renamed in mirror and change log with no row written, and a consumer's view on it keeps working.
   - A run stops where a consumer's view, foreign key or other object depends on what would change; Postgres refuses, nothing is published and the reason names the object.
 - `renamed = { new = "old" }`, a setting of a table for a rename the data cannot prove (docs/definition.md).
-- `_rowvioli.columns`, `columns__log` and `columns__history`: which columns and types every mirror and change log had at a moment, what caused each change (`source`, `definition`, `reader`, `hand`, `found`) and a note. `NOTIFY` on `rowvioli_schema` when a run commits a change of columns, key or name, not for a first fill. Queries in docs/target.md.
+- `_rowvioli.columns`, `columns__log` and `columns__history`: which columns and types every mirror and change log had at a moment, what caused each change (`source`, `definition`, `reader`, `hand`, `found`) and a note. `NOTIFY` on `rowvioli_schema` when a run commits a change of columns, key or name, not for a first fill that changes nothing. Queries in docs/target.md.
 - Version 4 of `_rowvioli`: `rowvioli init` brings a target of version 3 to 4, changes nothing else and prints the `GRANT` statements a worker's role needs. `_rowvioli.runs` records the version of the program and of the driver. A connector may report its driver's version (`driver_version`); the shipped ones report the package they read with.
 
 Changed (a working set-up can notice these):
@@ -20,15 +20,16 @@ Changed (a working set-up can notice these):
 - A change log is complete from its last change of key: replaying it from there gives the mirror.
 - A changed key no longer stops the table. A key taken away still stops while a change log exists, and a key column of another family stops.
 - A column missing from one file, one page or one run of a file or REST table is empty, and with a change log never goes. A REST column absent from every row of a page no longer fails the run, and the files of a pattern may have different columns. Where the definition names the columns it is the catalog: a type under `columns` that changes to another family goes and comes back, a pin taken out of a CSV, Excel or JSON column goes back to `text` or `jsonb` the same way, and a column taken out of a REST table's `columns` leaves the mirror, all recorded `by = definition`. A Parquet column of another family than before stops with the hint to pin it, and the drop where a pin was taken out.
-- A table without a change log stops at a column that is gone or of another family, as before, and the reason now says the way out (`ALTER TABLE ... DROP COLUMN ...`). So does a file or REST table without one at a mirror column missing from the data. A column a person added to the mirror, or dropped from the change log, is never dropped or written, also when the source brings its name: the run stops with `is not in the change log` and says to drop it. A type a person changed in the mirror to another family stops, and the reason says to drop the column.
+- A table without a change log stops at a column that is gone or of another family, as before, and the reason now says the way out (`ALTER TABLE ... DROP COLUMN ...`). So does a file or REST table without one at a mirror column missing from the data. A column a person added to the mirror, or dropped from the change log, is never dropped or written, also when the source brings its name: the run stops with `is not in the change log` and says to drop it, after copying its values. A type a person changed in the mirror to another family stops, and the reason says to drop the column.
 - The history view is dropped and created again whenever a run does more than add columns, so a consumer's view on a history view stops a change to any column of it. A prepared `SELECT *` on a mirror fails once after a new column.
 - A source that delivers a type of another family than before writes a row per row into the change log, once, on every affected table, at the first run of this version.
 - docs/loading.md: the table of checks and "What a person does by hand" are rewritten. The recipes for a dropped column, a changed type, more digits and a changed key are gone for tables with a change log and stay for tables without one; every stop gives its reason and its way out.
 
 Fixed:
 
-- A table stuck on `is missing in the source` or `has changed its type` resolves with the first run of this version, if it has a change log.
-- A reason no longer shows a value of the source: a value a type under `columns` does not take names the file, the column and the type instead of DuckDB's message with the value; a `numeric` `NaN` or `Infinity` from the `postgres` connector names its column; a value that Postgres quotes in its message is written `"***"`. An ODBC driver's message is not covered (docs/open-points.md).
+- A table stuck on `is missing in the source` or `has changed its type` resolves with the first run of this version, if it has a change log; what that run changes is recorded `by = reader` and notified.
+- A column name longer than 63 bytes from a file or REST source fails the run before anything is written and names the column, and two names equal in their first 63 bytes name both. Before, the driver's message did.
+- A reason no longer shows a value of the source: a value a type under `columns` does not take names the file, the column and the type instead of DuckDB's message with the value; a `numeric` that no decimal holds from the `postgres` connector names its column; a value that Postgres quotes in its message is written `"***"`. An ODBC driver's message is not covered (docs/open-points.md).
 
 ## 0.4.1 (2026-11-23)
 

@@ -36,7 +36,7 @@ The rules are in `strategy.md` and are cited here as "rule 4". "With a log" mean
 | A17 | Columns reordered | nothing, columns go by name | the same | code |
 | A18 | New column named `_op`, or `_run`, `_loaded_at`, `_valid_from`, `_valid_to` with a log | fails for ever; `log = false` frees four of them, nothing frees `_op` | the same. A source that gains such a column stops this table, and there is no way to leave a column out. Open point of its own | code |
 | A19 | New column whose name is a retired one (`city__812`) | | fails and says so; a person renames the log column | desk |
-| A20 | Name longer than 63 bytes | the staging table gets the cut name and every later step sees that; a key naming the long column fails with `has no column`. Two names equal in their first 63 bytes: not tried | fail and name the column, and both if two collide | PG, code, open |
+| A20 | Name longer than 63 bytes | a file's or REST source's long name fails the run with the driver's `does not exist in target table`; two names equal in their first 63 bytes fail with `specified more than once`. A Postgres source cuts the name itself, so a key naming the long column fails with `has no column` | fail and name the column, and both if two collide, before anything is written (done: `tests/test_file.py`) | PG, code |
 | A21 | Two columns that differ only in case (`City`, `city`) | two columns, both kept | the same | PG |
 | A22 | The source delivers one name twice (CSV header, a query) | | open | open |
 | A23 | Hundreds of drops and adds on one table over the years | | Postgres counts dropped columns towards its limit of 1600 per table. The `ADD` then fails; the reason names the way out (rewrite the table by dump and restore) | PG |
@@ -122,7 +122,7 @@ Families: the exact numbers (`smallint`, `integer`, `bigint`, `numeric`); the fl
 | E8 | The source object is a view whose definition changes | | as any change of columns | desk |
 | E9 | A mirror name is taken over from a table that was already there | taken over (`docs/target.md`) | its columns enter the ledger with `by = found` | code, desk |
 | E10 | New table in the source | not seen; `rowvioli list` prints it for a person | the same, on purpose | code |
-| E11 | First run after this is installed, existing mirrors | | every column enters the ledger with `by = found`; the ledger's history begins there, later than the log's | desk |
+| E11 | First run after this is installed, existing mirrors | | every column the run does not change enters the ledger with `by = found`; what it changes has its cause (`reader`, since the version before recorded none) and notifies; the ledger's history begins there, later than the log's | code |
 | E12 | A table stuck on `missing in the source` when stage 2 arrives | | resolves itself with the next run if the table has a log and the log has the column; a column only the mirror has stops as G1, a table without a log stops as today | desk |
 
 ## F. Sources without a catalog (files, REST)
@@ -182,4 +182,4 @@ Said plainly, because a list that claims everything is not believed.
 
 ## Open lines
 
-Not tried: A22 (one name twice), B14 (enum and domain types), B16 (timestamps finer than microseconds), F8 (CSV without a header), the second half of A20 (two names that collide at 63 bytes), and D8 (how long a large log is locked). The first five are one small test each against the program as it is, and stage 0 of the strategy; D8 is a measurement in `bench/`, run when the owner asks.
+Not tried: A22 (one name twice), B14 (enum and domain types), B16 (timestamps finer than microseconds), F8 (CSV without a header), and D8 (how long a large log is locked). The first five are one small test each against the program as it is, and stage 0 of the strategy; D8 is a measurement in `bench/`, run when the owner asks.
