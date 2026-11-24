@@ -197,10 +197,13 @@ def fit(conn, t, staged, mirror, log_columns):
     # the others are a real change, which check() catches. The staging table is not altered: numbers compare equal
     # whatever their modifier, and the mirror's type applies on insert, where it now changes no value
     taken = {name: into for (table, name, into), (same, _) in zip(pairs, kinds) if same and table == t["name"]}
-    # a column back in its family takes the change log's type, as one of the mirror keeps the mirror's (cases A12)
+    # a column back in its family takes the change log's type, as one of the mirror keeps the mirror's (cases A12),
+    # and a value it would change stops the run rather than being cut
     had, types = dict(mirror), dict(staged)
-    taken.update({name: into for table, name, into in pairs
-                  if table != t["name"] and name not in had and family(into) == family(types[name])})
+    back = [(table, name, into) for table, name, into in pairs
+            if table != t["name"] and name not in had and family(into) == family(types[name])]
+    misfit(conn, back)
+    taken.update({name: into for _, name, into in back})
     return [(name, taken.get(name, type)) for name, type in staged]
 
 

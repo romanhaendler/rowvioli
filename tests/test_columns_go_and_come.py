@@ -250,6 +250,26 @@ def test_A12_a_column_back_in_its_family_with_a_value_the_logs_type_would_change
     assert columns(erp, "raw_erp.events") == ["id", "n" if column == "day" else "day"]
 
 
+@pytest.mark.parametrize("earlier", [True, False])
+def test_a_retired_name_the_source_takes_stops_and_says_what_to_rename(erp, earlier):  # story 10
+    ok(erp)
+    erp.source("alter table customers drop column city")
+    again(erp)
+    [(run,)] = erp.target("select max(run) + 1 + %s::int from _rowvioli.runs", [earlier])  # the run that retires
+    erp.source(f"alter table customers add column city__{run} text")
+    erp.source(f"update customers set city__{run} = 'new'")
+    if earlier:  # a source column that took the name a run before
+        again(erp)
+    erp.source("alter table customers add column city integer")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    assert erp.target("select max(run) from _rowvioli.runs") == [(run,)]
+    assert reason.startswith(f"column city of the change log is to keep its old values under city__{run}, a name "
+                             "that is taken: rename that column of the change log"), reason
+    assert erp.target("select count(*) from raw_erp.customers__log where city = 'Bonn'") == [(1,)]
+    log_replays(erp)
+
+
 def test_A19_a_new_source_column_named_like_a_retired_one_stops_until_a_person_renames_the_log_column(erp):
     ok(erp)
     erp.source("alter table customers drop column city")
