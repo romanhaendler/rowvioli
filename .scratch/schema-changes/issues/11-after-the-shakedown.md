@@ -76,9 +76,30 @@ A fix starts from the host's red as its first test (`docs/agents/shakedown/READM
 
 ## Acceptance criteria
 
-- [ ] 1 to 4: a test each, seen red first, at the existing seam; the replay invariant and the history at an
+- [x] 1 to 4: a test each, seen red first, at the existing seam; the replay invariant and the history at an
       earlier moment where they apply.
-- [ ] 5 to 9: a test each where the seam reaches it.
-- [ ] The whole suite passes.
+- [x] 5 to 9: a test each where the seam reaches it.
+- [x] The whole suite passes.
 
 ## Comments
+
+Implementation on `sc-11` (2026-11-24), what is not done or not tested, each with why:
+
+- 1: a table **without** a change log whose definition changed since its last successful run is taken as a key
+  changed in the definition (`by = definition`), not stopped: the mirror is replaced as a whole under the
+  definition's key either way, so only `by` can be wrong, and stopping it would undo story 45 for such tables
+  (docs/open-points.md says so). Where the change log fits both keys the run stops as the ticket says, though
+  both readings then give the same history; that case only protects `by`.
+- 1: a 0.4.1 change log written under **two** keys (a person changed primary key and definition together) fits
+  neither and stops with the two comments; not tested, since 0.4.1 never wrote such a log itself.
+- 2: the view's owner is not set back if a person gave the view to another role (the run creates it as its
+  own role, as before); a grant a grantee passed on with its grant option is given again by the run's role, not
+  by that grantee. Neither tested: the ticket's case is a grant given by name, which is.
+- 4: the run does not take the next free name; it stops once and says the next run retires the column under
+  its own number, which keeps `<name>__<run>` true.
+- 8: only a reason the program raises itself is cleaned; a name inside a connector's message that the driver
+  wraps while it reads the stream (a CSV header with a line break in a quoted name) comes as the driver's
+  error and may still be cut at the line break. Not tried: the reasons of the file connector name columns
+  from a header, which nothing in the ticket's repro used.
+- 3 ("another family" half): the test of a source column `_run`/`_loaded_at`/`_op` of another family was
+  green before the fix; it stays as a guard, the red was the `renamed` half.
