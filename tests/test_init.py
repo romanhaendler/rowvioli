@@ -29,6 +29,12 @@ def test_init_twice_leaves_the_same_schema_and_meta(rv):
     assert rv.target("select schema_version, max_running from _rowvioli.meta") == [(4, 20)]
 
 
+def test_the_columns_table_and_its_log_are_read_by_the_tables_id_through_an_index(rv):  # every run reads them so
+    rv.run("init")
+    assert rv.target("select tablename from pg_indexes where schemaname = '_rowvioli' and tablename like 'columns%%' "
+                     "and indexdef like '%%(id)' order by 1") == [("columns",), ("columns__log",)]
+
+
 def test_init_keeps_what_is_there(rv):
     rv.run("init")
     rv.target("update _rowvioli.meta set max_running = 7")

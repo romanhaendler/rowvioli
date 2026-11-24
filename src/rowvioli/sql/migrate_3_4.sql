@@ -17,6 +17,8 @@ CREATE TABLE _rowvioli.columns (
     note          text,
     id            int NOT NULL,
     PRIMARY KEY (target_schema, target_table, "column"));
+-- every run reads the rows of its table (load.check, load.record_columns)
+CREATE INDEX ON _rowvioli.columns (id);
 
 CREATE TABLE _rowvioli.columns__log (_run bigint, _op text, _loaded_at timestamptz, LIKE _rowvioli.columns);
 -- a run whose change log lost its comment on _op looks here for the last change of key (load.check)
