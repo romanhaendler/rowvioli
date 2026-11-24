@@ -2,6 +2,8 @@
 stream of batches whose schema follows the driver's column descriptions. The driver is installed by the operator."""
 import re
 
+import pyarrow as pa
+
 try:
     import arrow_odbc
 except OSError as e:  # no driver manager: arrow-odbc's own message is a dlopen path
@@ -22,9 +24,26 @@ def read(connection, table, options):
     if not PLAIN.fullmatch(table):
         raise Exception(f"{table}: an odbc table name is dotted parts of letters, digits and underscores")
     # shortcut: 1 MiB per text value, a longer one fails the run; when sources hold more, add an option
-    return arrow_odbc.read_arrow_batches_from_odbc(
+    reader = arrow_odbc.read_arrow_batches_from_odbc(
         "SELECT * FROM " + table, connection["string"],
         max_bytes_per_batch=16 * 2**20, max_text_size=2**20).into_pyarrow_record_batch_reader()
+
+    def batches():
+        try:
+            yield from reader
+        except Exception as e:
+            raise without_value(e, table) from None
+    return pa.RecordBatchReader.from_batches(reader.schema, batches())
+
+
+def without_value(e, table):
+    """Decision 54, item 8: a driver's record says its SQLSTATE, which decides in the reason; arrow-odbc's own text of
+    a value it cannot hold in Arrow ends in the value (`Timestamp is not representable in arrow: 9999-12-31 ...`,
+    `Lossy representation of value: ...`), so only what comes before it stays, with the table."""
+    if re.search(r"\bState: [^,]{5}, Native error: ", str(e)):
+        return e
+    first = re.sub(r"^External error: ", "", str(e).split("\n")[0])  # Arrow's word for an error of the stream
+    return Exception(f"{table}: {first.split(': ')[0].strip()}")
 
 
 def tables(connection):

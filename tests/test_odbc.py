@@ -190,7 +190,7 @@ def test_a_column_goes_and_comes_widens_changes_family_is_renamed_and_the_key_ch
     ("(body || '1e40')::float8::numeric(40, 0)", "a statement raised an error (SQLSTATE 22003) in the source, reading public.v;"),
     ("guard(body)", "a function raised an error (SQLSTATE P0001) in the source"),
     # arrow-odbc's own, for a numeric beyond the 28 digits psqlODBC describes: it names no value
-    ("(body || '1e40')::numeric", "A value (at least one) is too large to be written into the allocated buffer")])
+    ("(body || '1e40')::numeric", "public.v: A value (at least one) is too large to be written into the allocated buffer")])
 def test_a_value_the_source_or_the_driver_cannot_convert_stays_out_of_the_reason(ready, column, said):
     """Decision 54, item 8, through a driver whose message words the value its own way (psqlODBC appends a ;)."""
     ready.source("create function guard(b text) returns text language plpgsql as $$ begin if b <> '' then "
@@ -204,3 +204,19 @@ def test_a_value_the_source_or_the_driver_cannot_convert_stays_out_of_the_reason
     assert said in ready.target("select reason from _rowvioli.runs")[0][0]
     for value in ("Secret4711", "4711"):
         assert leaks(ready, value, r) == [], value
+
+
+@needs_driver
+def test_arrow_odbcs_own_message_of_a_value_keeps_what_comes_before_the_value():
+    """Decision 54, item 8: psqlODBC delivers no value arrow-odbc cannot hold (invalid bytes arrive replaced, and
+    'infinity' as a timestamp), so its two messages that end in the value are tried on their words."""
+    from rowvioli.connectors.odbc import without_value
+    for message, kept in [("Timestamp is not representable in arrow: 9999-12-31 23:59:59.9999999\nTimestamps with "
+                           "nanoseconds precision are represented using a signed 64 Bit integer.",
+                           "Timestamp is not representable in arrow"),
+                          ("Datasource returned invalid UTF-8. Lossy representation of value: Secret\ufffd",
+                           "Datasource returned invalid UTF-8. Lossy representation of value")]:
+        assert str(without_value(OSError(message), "dbo.t")) == str(without_value(
+            OSError("External error: " + message), "dbo.t")) == f"dbo.t: {kept}"
+    record = RuntimeError("ODBC emitted an error calling 'SQLFetch': State: 22P02, Native error: 1, Message: x")
+    assert without_value(record, "dbo.t") is record

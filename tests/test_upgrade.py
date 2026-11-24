@@ -150,7 +150,7 @@ def test_a_target_of_the_released_0_4_1_with_every_stuck_state_is_upgraded_by_in
     # 0.4.1 hashed the whole definition and its change log has first rows only: either key could have written it
     assert after["keyed"].startswith("the primary key of raw_erp.keyed is (id), the definition's key is (id2), and "
                                      "nothing in the target tells"), after["keyed"]
-    assert 'view consumer depends on column gone of table raw_erp.viewed' in after["viewed"]
+    assert 'view public.consumer depends on column gone of table raw_erp.viewed' in after["viewed"]
     assert after["own"].startswith("column mine of the mirror is not in the change log")
     for t, c in (("nokey", "b"), ("nolog", "v")):
         assert after[t].endswith(f'ALTER TABLE "raw_erp"."{t}" DROP COLUMN "{c}"'), after[t]
@@ -176,3 +176,54 @@ def test_a_target_of_the_released_0_4_1_with_every_stuck_state_is_upgraded_by_in
                      "raw_erp.keyed__log) group by 1 order by 1") == [("D", 10), ("I", 10)]
     for t in ("keyed", "viewed", "own"):
         log_replays(rv, f"raw_erp.{t}")
+
+
+# the grants 0.4.1's docs/operation.md "The target" gives a worker's role
+OLD_WORKER = """GRANT USAGE ON SCHEMA _rowvioli TO {0};
+GRANT SELECT ON _rowvioli.sources, _rowvioli.tables, _rowvioli.meta, _rowvioli.status TO {0};
+GRANT UPDATE ON _rowvioli.tables TO {0};
+GRANT SELECT, INSERT, UPDATE ON _rowvioli.runs TO {0};
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA _rowvioli TO {0};
+GRANT CREATE ON DATABASE {1} TO {0}"""
+
+
+def test_a_worker_role_of_least_rights_loads_under_0_4_1_and_after_init_with_the_grants_it_prints(rv, released):
+    """The shakedown's U1 with the worker's role the documents give: it owns the mirrors 0.4.1 made, and after `init`
+    by the owner of _rowvioli, and the grants init prints, it takes them on, a table stuck under 0.4.1 included."""
+    db = rv.target("select current_database()")[0][0]
+    worker = f"worker_{db}"
+    env = {"ROWVIOLI_TARGET_URL": rv.target_url.replace("postgres:x@", f"{worker}:w@")}
+    for args in (["init"], ["key", "new"]):
+        assert old(rv, released, *args).returncode == 0
+    for statement in SOURCE.strip().split(";\n")[:4]:  # customers and dropped
+        rv.source(statement)
+    tables = {"customers": '{ key = ["id"] }', "dropped": '{ key = ["id"] }'}
+    definition(rv, tables)
+    assert old(rv, released, "apply", "sources").returncode == 0
+    rv.target(f"create role {worker} login password 'w'")
+    try:
+        for statement in OLD_WORKER.format(worker, db).split(";\n"):
+            rv.target(statement)
+        assert old(rv, released, "run", env=env).returncode == 0
+        rv.source("alter table dropped drop column gone; update customers set city = 'Bonn' where id = 1")
+        rv.target("update _rowvioli.tables set requested_at = now()")
+        assert old(rv, released, "run", env=env).returncode == 1
+        assert reasons(rv)["dropped"] == "column gone is missing in the source"
+        r = rv.run("init")
+        grants = [line for line in r.stdout.splitlines() if line.startswith("GRANT")]
+        assert r.returncode == 0 and grants, r.stdout + r.stderr
+        rv.target("update _rowvioli.tables set requested_at = now()")
+        r = rv.run("run", env=env)  # the worker's role lacks the rights on the new objects
+        assert r.returncode == 1 and "rowvioli init printed with the upgrade to version 4" in r.stdout, r.stdout
+        for grant in grants:
+            rv.target(grant.replace(" TO worker", f" TO {worker}"))
+        rv.source("update customers set city = 'Ulm' where id = 2")
+        rv.target("update _rowvioli.tables set requested_at = now()")
+        r = rv.run("run", env=env)
+        assert r.returncode == 0 and set(reasons(rv).values()) == {"ok"}, reasons(rv)
+        assert "gone" not in rv.target("select attname from pg_attribute where attrelid = 'raw_erp.dropped'::regclass")
+        for t in tables:
+            log_replays(rv, f"raw_erp.{t}")
+    finally:
+        rv.target("drop schema if exists raw_erp cascade")
+        rv.target(f"drop owned by {worker} cascade; drop role {worker}")
