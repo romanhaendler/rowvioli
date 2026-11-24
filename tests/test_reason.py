@@ -35,6 +35,17 @@ def test_a_line_ending_in_a_colon_is_joined_with_the_next():
                                "Message: FATAL:  password authentication failed for user \"reader\"")
 
 
+def test_a_value_postgres_quotes_in_its_message_stays_out_and_a_name_stays_in():
+    source = ("IO: nanoarrow call failed: ArrowArrayStreamGetNext(&bind.value, &current.value, &na_error) = (5) "
+              "Input/output error. IOError: [libpq] Execution error [PGRES_FATAL_ERROR]: ERROR:  ")
+    assert reason(source + 'invalid input syntax for type integer: "my "secret": value"\nCONTEXT: x').endswith(
+        'invalid input syntax for type integer: "***"')
+    assert reason(source + 'value "3000000000" is out of range for type integer').endswith(
+        'value "***" is out of range for type integer')
+    assert reason('ERROR:  new row for relation "customers" violates check constraint "c"\nDETAIL: Failing row') \
+        == 'new row for relation "customers" violates check constraint "c"'
+
+
 def test_the_wrapper_of_a_failed_statement_goes_whatever_its_sql_holds():
     sql = "INSERT INTO t SELECT * FROM _diff\nWHERE _op IN ('I', 'U')"
     assert reason(f"ALREADY_EXISTS: [libpq] Failed to execute query '{sql}': ERROR:  duplicate key value\nDETAIL: x") \

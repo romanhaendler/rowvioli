@@ -9,6 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from rowvioli.connectors import file
 from test_columns_go_and_come import log_replays
 
 CUSTOMERS = [(1, "Anna", 2.5), (2, "Ben", None), (3, "Cleo", 10.0)]
@@ -349,6 +350,41 @@ def test_columns_casts_a_json_value_from_its_text(files):
     assert files.target("select id, day, mixed, amount, big from raw_files.people order by id") == [
         (1, date(2024, 1, 2), "1", Decimal("2.50"), 123456789012345678901234567890),
         (2, date(2024, 2, 3), "two", Decimal("3.00"), 1)]
+
+
+@pytest.mark.parametrize("name, content, table", [
+    ("pins.csv", "id;n;d\n1;42;2024-01-01\n2;secret-value;2024-01-02\n", '{ key = ["id"], sep = ";", columns = '
+                                                                          '{ d = "date", n = "integer" } }'),
+    ("pins.json", '{"id": 1, "n": 42}\n{"id": 2, "n": "secret-value"}\n',
+     '{ key = ["id"], columns = { n = "integer" } }'),
+])
+def test_a_value_a_type_under_columns_does_not_take_names_table_column_and_type_but_not_the_value(
+        files, name, content, table):
+    (files.dir / "files" / name).write_text(content)
+    code, answer = load(files, f'"{name}" = {table}\n')
+    assert code == 1
+    assert answer["raw_files.pins"]["reason"] == (
+        f"{name}: column n is not integer in every row; change the value in the file, or its type under columns")
+    r = files.run("run", "files")
+    assert "secret-value" not in r.stdout + r.stderr + str(files.target(
+        "select reason from _rowvioli.tables union all select reason from _rowvioli.runs"))
+
+
+def test_a_value_a_type_under_columns_does_not_take_in_a_later_read_of_a_pattern_is_named_the_same(tmp_path):
+    # among several files of the second read, where DuckDB fails only once batches are read
+    for i in range(file.FILES_PER_READ + 10):
+        (tmp_path / f"o_{i:02}.csv").write_text(f"id;n\n{i};{'secret-value' if i == file.FILES_PER_READ + 5 else i}\n")
+    with pytest.raises(Exception) as e:
+        list(file.read({"path": str(tmp_path)}, "o_*.csv", {"sep": ";", "columns": {"n": "integer"}}))
+    assert str(e.value) == "o_*.csv: column n is not integer in every row; change the value in the file, or its type " \
+                           "under columns"
+
+
+def test_a_value_a_reader_option_of_duckdb_does_not_take_is_named_without_the_value(tmp_path):
+    (tmp_path / "o.csv").write_text("id;n\n1;secret-value\n")
+    with pytest.raises(Exception) as e:
+        list(file.read({"path": str(tmp_path)}, "o.csv", {"sep": ";", "types": {"n": "INTEGER"}}))
+    assert str(e.value) == "o.csv: a value in the file does not convert to the type its column is read as"
 
 
 def test_a_json_file_whose_later_rows_differ_from_its_first_arrives_whole(files):

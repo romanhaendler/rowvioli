@@ -188,9 +188,33 @@ def test_G1_a_column_a_person_added_whose_name_the_source_brings_in_another_fami
     erp.source("alter table amounts add column memo integer")
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert failed(erp) == (
-        "column memo of the mirror is not in the change log, so it is not known to be from the source; drop it from "
-        "the mirror, or add it to the change log too and the ne***t run takes it out of the mirror")
+        "column memo of the mirror is not in the change log, so it is not known to be from the source; the source "
+        "brings a column memo, which a run would write into: drop it from the mirror, after copying its values into "
+        'a table of your own if they are to be kept: CREATE TABLE <a table of yours> AS SELECT "id", "memo" FROM '
+        '"raw_erp"."amounts"; ALTER TABLE "raw_erp"."amounts" DROP COLUMN "memo"')
     assert erp.target("select memo from raw_erp.amounts") == [("mine",)]
+
+
+def test_G1_a_column_a_person_added_whose_name_the_source_brings_in_its_family_is_never_written(erp):  # story 8
+    amounts(erp, "integer", "(1, 10)")
+    erp.target("alter table raw_erp.amounts add column memo text")
+    erp.target("update raw_erp.amounts set memo = 'mine'")
+    erp.source("alter table amounts add column memo text")
+    erp.source("update amounts set memo = 'theirs'")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == (  # x is the harness's password, which a reason hides
+        "column memo of the mirror is not in the change log, so it is not known to be from the source; the source "
+        "brings a column memo, which a run would write into: drop it from the mirror, after copying its values into "
+        'a table of your own if they are to be kept: CREATE TABLE <a table of yours> AS SELECT "id", "memo" FROM '
+        '"raw_erp"."amounts"; ALTER TABLE "raw_erp"."amounts" DROP COLUMN "memo"')
+    assert erp.target("select memo from raw_erp.amounts") == [("mine",)]
+    # the way out as the reason says it: the person's values kept in a table of their own, the source's come
+    erp.target('CREATE TABLE public.my_memos AS SELECT "id", "memo" FROM "raw_erp"."amounts"; '
+               'ALTER TABLE "raw_erp"."amounts" DROP COLUMN "memo"')
+    again(erp)
+    assert erp.target("select memo from raw_erp.amounts") == [("theirs",)]
+    assert erp.target("select id, memo from public.my_memos") == [(1, "mine")]
+    log_replays(erp, "raw_erp.amounts")
 
 
 def test_a_run_ended_after_max_seconds_while_it_widened_says_so_and_names_the_column(erp):  # story 16
@@ -229,8 +253,25 @@ def test_F4_a_guessed_type_that_flips_to_another_family_stops_with_the_hint_to_p
     assert code == 1
     assert answer["raw_files.counts"]["reason"] == (
         "column n has changed its type from bigint to text; a source without a catalog guesses its types, so pin it "
-        "under columns in the table's definition")
+        "under columns in the table's definition; where its pin was taken out, a person drops it and the next run adds "
+        'it anew: ALTER TABLE "raw_files"."counts" DROP COLUMN "n"')
     assert files.target("select n from raw_files.counts order by id") == [(42,), (43,)]
+
+
+def test_F4_a_pin_taken_out_of_a_parquet_column_stops_and_the_drop_it_names_brings_the_file_s_type(files):
+    # Parquet's own types can flip, so the run cannot tell a pin taken out; the drop is the way to the file's type
+    parquet(files, [42, 43], pa.int64())
+    assert load(files, '"counts.parquet" = { key = ["id"], columns = { n = "varchar" } }\n')[0] == 0
+    code, answer = load(files, COUNTS)
+    assert code == 1
+    assert answer["raw_files.counts"]["reason"].endswith('ALTER TABLE "raw_files"."counts" DROP COLUMN "n"')
+    files.target('ALTER TABLE "raw_files"."counts" DROP COLUMN "n"')
+    assert load(files, COUNTS)[0] == 0
+    assert types(files, "n", "raw_files.counts") == ["bigint", "bigint"]
+    run = max_run(files)
+    assert files.target(f"select n__{run} from raw_files.counts__log where _run < {run} order by id") == [
+        ("42",), ("43",)]
+    log_replays(files, "raw_files.counts")
 
 
 def test_F5_a_guessed_type_that_widens_within_its_family_widens_the_target(files):
@@ -274,6 +315,39 @@ def test_B11_a_first_type_under_columns_for_a_csv_column_loaded_as_text_goes_and
                         'order by "column"', [run]) == [("U", "n", True, None, "definition"),
                                                        ("I", f"n__{run}", False, "n", "definition")]
     log_replays(files, "raw_files.counts")
+
+
+@pytest.mark.parametrize("file, content, back, old", [
+    ("counts.csv", "id;n\n1;42\n2;\n3;7\n", "text", "42"),
+    ("counts.json", '{"id": "1", "n": 42}\n{"id": "2"}\n{"id": "3", "n": 7}\n', "jsonb", "42")])
+def test_B11_a_pin_taken_out_of_columns_goes_and_comes_back_to_what_the_file_brings_by_definition(
+        files, file, content, back, old):
+    (files.dir / "files" / file).write_text(content)
+    table = f'"{file}" = {{{{ key = ["id"], sep = ";"{{}} }}}}\n' if file.endswith(".csv") else \
+        f'"{file}" = {{{{ key = ["id"]{{}} }}}}\n'
+    code, answer = load(files, table.format(', columns = { n = "integer" }'))
+    assert code == 0, answer
+    code, answer = load(files, table.format(""))
+    assert code == 0, answer
+    run = max_run(files)
+    assert types(files, "n", "raw_files.counts") == [back, back]
+    assert files.target(f"select id, n__{run}, n::text from raw_files.counts__log where _run = {run} order by id") == [
+        ("1", None, old), ("3", None, "7")]
+    assert files.target('select _op, "column", mirror, was, "by" from _rowvioli.columns__log where _run = %s '
+                        'order by "column"', [run]) == [("U", "n", True, None, "definition"),
+                                                       ("I", f"n__{run}", False, "n", "definition")]
+    log_replays(files, "raw_files.counts")
+
+
+def test_without_a_change_log_a_pin_taken_out_of_columns_stops_and_says_how_to_drop_it(files):
+    (files.dir / "files" / "counts.csv").write_text("id;n\n1;42\n")
+    table = '"counts.csv" = {{ key = ["id"], log = false, sep = ";"{} }}\n'
+    assert load(files, table.format(', columns = { n = "integer" }'))[0] == 0
+    code, answer = load(files, table.format(""))
+    assert code == 1
+    assert answer["raw_files.counts"]["reason"] == (
+        "column n has changed its type from integer to text; without a change log its values are nowhere else, so a "
+        'person drops it and the next run adds it anew: ALTER TABLE "raw_files"."counts" DROP COLUMN "n"')
 
 
 def test_without_a_change_log_a_type_under_columns_of_another_family_stops_and_says_how_to_drop_it(files):

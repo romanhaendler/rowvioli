@@ -112,7 +112,8 @@ def check(conn, t, staged, mirror, log_columns):
     (decision 2), old name to new, and `key` when the mirror's primary key is not the definition's (decision 7): the
     primary key it `was`, whether the change is `by` the definition or the primary key was changed by hand and is put
     back, and whether a change `log` exists. `renamed`, new name to old, the columns that keep their values and
-    history under another name (decision 10), and `proven`, the note of each one the data proved."""
+    history under another name (decision 10), and `proven`, the note of each one the data proved. `unpinned`, the
+    retired ones whose pin under `columns` was taken out (decision 19)."""
     types, logged, had = dict(staged), dict(log_columns), dict(mirror)
     way = ("rename that column of the change log and drop its history view, which the next run creates again: "
            f"ALTER TABLE {t['log_table']} RENAME COLUMN {{}} TO <another name>; DROP VIEW {t['history']}")
@@ -129,7 +130,7 @@ def check(conn, t, staged, mirror, log_columns):
     # the key after the renames: Postgres renames a column inside the primary key by itself (decision 7)
     moved = {old: new for new, old in renamed.items()}
     primary_key = [moved.get(k, k) for (k,) in sql(conn, PRIMARY_KEY, [t["mirror"]])] if mirror else []
-    plan = {"renamed": renamed, "proven": {}, "gone": [], "retired": {}, "key": {}}
+    plan = {"renamed": renamed, "proven": {}, "gone": [], "retired": {}, "key": {}, "unpinned": []}
     # nothing is proven without a catalog, a key or a change log, nor joined by a key of another family, which stops below
     if t["key"] and t["log"] and log_columns and t["type"] not in ("file", "rest") \
             and set(primary_key) == set(t["key"]) \
@@ -137,33 +138,42 @@ def check(conn, t, staged, mirror, log_columns):
         proofs = proven(conn, t, mirror, staged, log_columns, renamed)
         renamed.update({new: old for new, (old, _) in proofs.items()})
         plan["proven"] = {new: note for new, (_, note) in proofs.items()}
-    unknown = ("column {} of the mirror is not in the change log, so it is not known to be from the source; drop it "
-               "from the mirror, or add it to the change log too and the next run takes it out of the mirror")
     for name, type in mirror:
         if name in renamed.values():
             continue
+        # a run adds a column to mirror and change log together, so one only the mirror has is a person's (story 8)
+        if t["key"] and t["log"] and log_columns and name not in logged:
+            raise Exception(f"column {name} of the mirror is not in the change log, so it is not known to be from the "
+                            "source; " + (f"the source brings a column {name}, which a run would write into: drop it "
+                                          "from the mirror, after copying its values into a table of your own if they "
+                                          "are to be kept: CREATE TABLE <a table of yours> AS SELECT "
+                                          f"{', '.join(quote(c) for c in [*t['key'], name])} FROM {t['mirror']}; "
+                                          f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}" if name in types else
+                                          "drop it from the mirror, or add it to the change log too and the next run "
+                                          "takes it out of the mirror"))
         if name not in types:
             if not (t["key"] and t["log"] and log_columns):
                 raise Exception(f"column {name} is missing in the source; without a change log its values are nowhere "
                                 f"else, so a person drops it: ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
-            if name not in logged:
-                raise Exception(unknown.format(name))
             plan["gone"].append(name)
         elif family(types[name]) != family(type):  # another family goes and comes (decision 6); fit() did the same
             changed = f"column {name} has changed its type from {type} to {types[name]}"
             drop = ("so a person drops it and the next run adds it anew: "
                     f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
-            # where the definition names the columns it is the catalog; a file guesses the type of every other one
+            # where the definition names the columns it is the catalog. CSV, Excel and JSON deliver every other column
+            # as text or jsonb, so another family there is a pin taken out; Parquet's own types can flip
             if t["type"] == "file" and name not in dict(t["options"].get("columns") or {}):
-                raise Exception(f"{changed}; a source without a catalog guesses its types, so pin it under columns "
-                                "in the table's definition")
+                if not re.search(r"\.(csv|xlsx|json|jsonl|ndjson)$", t["source_table"], re.I):
+                    raise Exception(f"{changed}; a source without a catalog guesses its types, so pin it under "
+                                    "columns in the table's definition; where its pin was taken out, a person drops it "
+                                    f"and the next run adds it anew: ALTER TABLE {t['mirror']} DROP COLUMN "
+                                    f"{quote(name)}")
+                plan["unpinned"].append(name)
             if name in (t["key"] or []):
                 raise Exception(f"{changed}, a type of another family in the key, so a row before cannot be told "
                                 "from one after: give the table another target_table, which begins a new mirror")
             if not (t["key"] and t["log"] and log_columns):
                 raise Exception(f"{changed}; without a change log its values are nowhere else, {drop}")
-            if name not in logged:  # a person's column under a name the source brings now: no run brings its values
-                raise Exception(unknown.format(name))
             if family(logged[name]) != family(type):  # the mirror's type changed by hand (cases G4)
                 raise Exception(f"column {name} of the mirror has the type {type}, of another family than the "
                                 f"{types[name]} the source delivers, and a run does not change it back; drop it from "
@@ -571,6 +581,8 @@ def carry_out(conn, t, plan):
         alter(conn, f"column {name} " + ("has another type in the source" if name in plan["retired"]
                                          else "is gone from the source") + f" and would leave the mirror {t['name']}",
               f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
+    for name in plan["unpinned"]:  # decision 19: a type the definition gave, and took back
+        changes[name]["by"] = changes[plan["retired"][name]]["by"] = "definition"
     for table in (t["mirror"], t["log_table"]):  # decision 5, one ALTER per table, so it is rewritten at most once
         if widened := [(name, type) for into, name, type in plan["widen"] if into == table]:
             columns = ", ".join(f"column {name} to {type}" for name, type in widened)
@@ -709,8 +721,7 @@ def record_columns(conn, t, delivered, mirror, log, changes):
         if (before := old.get(name)) is None:
             row.update(op="I", by="found" if not old else "source" if name not in found else "hand")
         else:
-            # a mirror's column the change log lost by hand: the run adds it again, the state alone shows nothing
-            hand = found.get(name) != (before["type"], before["mirror"]) or bool(log) and name not in dict(log) \
+            hand = found.get(name) != (before["type"], before["mirror"]) \
                 or changes.get(name, {}).get("by") == "hand"  # a primary key put back: the record knew the key
             if not hand and all(before[f] == row[f] for f in ("type", "source_type", "key", "mirror")):
                 continue
@@ -814,16 +825,23 @@ WRAPPER = re.compile(r"^(?:[A-Z_]+: )?(?:\[libpq\] )?(?:nanoarrow call failed: )
                      r"(?:PGRES_[A-Z_]+ )?(?:ERROR:\s+)?", re.S)
 
 
+# a row's value Postgres quotes in a message: last, after a colon (`invalid input syntax for type integer: "abc"`), or
+# before `is out of range` (`value "…"` for an integer, bare for a float). Names are quoted too, but never there
+VALUE = re.compile(r'(?<=: )"[^\n]*"$|(?:^|(?<=\s))"[^\n]*"(?= is out of range)')
+
+
 def reason_line(values, e, step):
     """The reason as it is stored, shown and logged: scrubbed, the first line of the driver's message without its
-    wrapper, joined with the next when it ends in a colon. A message that holds a traceback gives the text before
-    it, or the exception's own line (the traceback's last) when nothing is before it; ADBC cuts long messages, so
-    the end may be missing. A line saying so, with the exception's type, when there is no message."""
+    wrapper, joined with the next when it ends in a colon, without a value of a row (VALUE). A message that holds a
+    traceback gives the text before it, or the exception's own line (the traceback's last) when nothing is before it;
+    ADBC cuts long messages, so the end may be missing. A line saying so, with the exception's type, when there is no
+    message."""
     text = scrub(values, str(e)).strip()
     before, _, traceback = text.partition("Traceback (most recent call last)")
     before = re.sub(r"\s*Detail: Python exception:\s*$", "", before)
     first, *rest = (WRAPPER.sub("", before).strip() or traceback.strip().split("\n")[-1]).split("\n")
     line = f"{first} {rest[0].strip()}" if first.endswith(":") and rest else first
+    line = VALUE.sub('"***"', line)
     return line.strip() or f"the driver gave no message while {step} ({type(e).__name__})"
 
 
