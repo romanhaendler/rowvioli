@@ -2,6 +2,7 @@
 import json
 
 import psycopg
+import pytest
 
 from test_history import again
 from test_run import apply, definition, erp, ok  # noqa: F401 (erp is a fixture)
@@ -107,15 +108,15 @@ def test_a_mirror_renamed_by_hand_appears_under_its_new_name_and_the_old_name_is
     replays(erp)
 
 
-def test_another_program_or_driver_version_marks_what_the_source_changed_as_reader_with_both_versions(erp):
+@pytest.mark.parametrize("before, was", [("'0.0.1', '9'", "program 0.0.1 to {}, driver 9 to none"),
+                                         ("null, null", "program none to {}, driver none to none")])
+def test_another_program_or_driver_version_or_none_marks_what_the_source_changed_as_reader_with_both(erp, before, was):
     ok(erp)
-    erp.target("update _rowvioli.runs set program_version = '0.0.1', driver_version = '9'")
+    erp.target(f"update _rowvioli.runs set (program_version, driver_version) = ({before})")
     erp.source("alter table customers add column phone text")
     again(erp)
-    [(op, by, note)] = erp.target("select _op, \"by\", note from _rowvioli.columns__log where \"column\" = 'phone'")
     version = erp.run("--version").stdout.split()[-1]
-    assert (op, by) == ("I", "reader")
-    assert all(v in note for v in ("0.0.1", version, "9"))
+    assert erp.target(LAST) == [("I", "phone", True, "reader", was.format(version))]
 
 
 def listen(rv):
@@ -137,9 +138,14 @@ def test_a_run_that_changes_columns_notifies_on_commit_and_one_that_fails_does_n
     assert heard(listener) == [{"schema": "raw_erp", "table": "customers", "run": run}]
     erp.source("alter table customers add column fax text")
     erp.source("update customers set city = 'Köln' where customer_no = 1")
-    erp.target("alter table raw_erp.customers add check (city <> 'Köln')")  # the run adds fax, then cannot insert
+    # a consumer's check that Postgres runs at COMMIT, after the run has recorded fax and notified
+    erp.target("create function no_koeln() returns trigger language plpgsql as "
+               "$$ begin if new.city = 'Köln' then raise exception 'no Köln'; end if; return null; end $$")
+    erp.target("create constraint trigger no_koeln after insert on raw_erp.customers deferrable initially deferred "
+               "for each row execute function no_koeln()")
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert erp.run("run").returncode == 1
+    assert "no Köln" in erp.target("select reason from _rowvioli.tables")[0][0]
     assert heard(listener) == []
     assert erp.target("select count(*) from _rowvioli.columns where \"column\" = 'fax'") == [(0,)]
     listener.close()
