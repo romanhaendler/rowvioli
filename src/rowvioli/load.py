@@ -83,14 +83,15 @@ def load(conn, t):
     delivered = staged = sql(conn, COLUMNS, ["pg_temp._stage"])
     mirror = sql(conn, COLUMNS, [t["mirror"]])  # empty before the first run
     log_columns = sql(conn, COLUMNS, [t["log_table"]])
-    # decision 3: a source without a catalog has no column that goes; one its data lack this run is empty. One a
-    # change log lacks is not known to be from the source, and check() stops it rather than empty a person's column.
-    # One the definition says is renamed to a column the data have is renamed (decision 10)
+    # decision 3: a file has no column that goes; one its data lack this run is empty. One a change log lacks, or
+    # every one without a change log, is not known to be from the source, and check() stops it rather than empty a
+    # person's column. One the definition says is renamed to a column the data have is renamed (decision 10). REST
+    # delivers every column under `columns`, even one no row has: the definition is its catalog, and a column taken
+    # out of it goes as one a database drops
     stated = {old for new, old in (t["options"].get("renamed") or {}).items()
               if new in dict(staged) and new not in dict(mirror)}
-    if t["type"] in ("file", "rest") and (missing := [(n, type) for n, type in mirror if n not in dict(staged)
-                                                      and n not in stated
-                                                      and (not log_columns or n in dict(log_columns))]):
+    if t["type"] == "file" and (missing := [(n, type) for n, type in mirror if n not in dict(staged)
+                                            and n not in stated and n in dict(log_columns)]):
         sql(conn, "ALTER TABLE _stage " + ", ".join(f"ADD {quote(n)} {type}" for n, type in missing))
         staged = sql(conn, COLUMNS, ["pg_temp._stage"])
     plan = check(conn, t, staged, mirror, log_columns)
@@ -136,6 +137,8 @@ def check(conn, t, staged, mirror, log_columns):
         proofs = proven(conn, t, mirror, staged, log_columns, renamed)
         renamed.update({new: old for new, (old, _) in proofs.items()})
         plan["proven"] = {new: note for new, (_, note) in proofs.items()}
+    unknown = ("column {} of the mirror is not in the change log, so it is not known to be from the source; drop it "
+               "from the mirror, or add it to the change log too and the next run takes it out of the mirror")
     for name, type in mirror:
         if name in renamed.values():
             continue
@@ -144,18 +147,14 @@ def check(conn, t, staged, mirror, log_columns):
                 raise Exception(f"column {name} is missing in the source; without a change log its values are nowhere "
                                 f"else, so a person drops it: ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
             if name not in logged:
-                raise Exception(f"column {name} of the mirror is not in the change log, so it is not known to be from "
-                                "the source; drop it from the mirror, or add it to the change log too and the next run "
-                                "takes it out of the mirror")
+                raise Exception(unknown.format(name))
             plan["gone"].append(name)
         elif family(types[name]) != family(type):  # another family goes and comes (decision 6); fit() did the same
             changed = f"column {name} has changed its type from {type} to {types[name]}"
             drop = ("so a person drops it and the next run adds it anew: "
                     f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
-            if t["type"] in ("file", "rest") and name in dict(t["options"].get("columns") or {}):  # pinned already
-                raise Exception(f"{changed} under columns in the table's definition; a source without a catalog takes "
-                                f"no column into another family by itself, {drop}")
-            if t["type"] in ("file", "rest"):
+            # where the definition names the columns it is the catalog; a file guesses the type of every other one
+            if t["type"] == "file" and name not in dict(t["options"].get("columns") or {}):
                 raise Exception(f"{changed}; a source without a catalog guesses its types, so pin it under columns "
                                 "in the table's definition")
             if name in (t["key"] or []):
@@ -163,8 +162,13 @@ def check(conn, t, staged, mirror, log_columns):
                                 "from one after: give the table another target_table, which begins a new mirror")
             if not (t["key"] and t["log"] and log_columns):
                 raise Exception(f"{changed}; without a change log its values are nowhere else, {drop}")
-            if family(logged.get(name, types[name])) != family(type):  # the mirror's type changed by hand (cases G4)
-                raise Exception(changed)
+            if name not in logged:  # a person's column under a name the source brings now: no run brings its values
+                raise Exception(unknown.format(name))
+            if family(logged[name]) != family(type):  # the mirror's type changed by hand (cases G4)
+                raise Exception(f"column {name} of the mirror has the type {type}, of another family than the "
+                                f"{types[name]} the source delivers, and a run does not change it back; drop it from "
+                                f"the mirror and the next run brings it again: "
+                                f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
             plan["gone"].append(name)
     for name, type in staged:
         if name not in logged or name in had and name not in plan["gone"]:
@@ -718,7 +722,8 @@ def record_columns(conn, t, delivered, mirror, log, changes):
     for r in rows:
         if (r["target_schema"], r["target_table"]) == (t["schema"], t["table"]):
             r.update(changes.get(r["column"], {}))
-            if r["by"] == "source" and r["column"] in pinned:
+            # REST's columns are all the definition's, also one taken out of it; a retired one is by its name's cause
+            if r["by"] == "source" and (t["type"] == "rest" or r["column"] in pinned or r["was"] in pinned):
                 r["by"] = "definition"
     if any(r["by"] == "source" for r in rows):  # another reader gave these columns, perhaps, not the source
         [(differs, note)] = sql(conn, """

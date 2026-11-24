@@ -1,4 +1,5 @@
 """`rowvioli run`: one table from the source to its mirror (spec tests 4 rest, 5, 6, 7, 8, 21)."""
+import importlib.metadata
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -97,10 +98,22 @@ def test_runs_has_one_row_per_run_with_worker_times_status_and_counts(erp):
     assert erp.target("select status, attempts from _rowvioli.status") == [("ok", 0)]
 
 
-def test_runs_record_the_version_of_the_program_and_none_for_a_driver_that_says_nothing(erp):
+def test_runs_record_the_version_of_the_program_and_of_the_driver_the_connector_reads_with(erp):  # story 38
     ok(erp)
     version = erp.run("--version").stdout.split()[-1]
-    assert erp.target("select program_version, driver_version from _rowvioli.runs") == [(version, None)]
+    assert erp.target("select program_version, driver_version from _rowvioli.runs") == [
+        (version, f"adbc-driver-postgresql {importlib.metadata.version('adbc-driver-postgresql')}")]
+
+
+def test_a_driver_installed_without_its_metadata_loads_and_its_version_is_none(erp):
+    (erp.dir / "site").mkdir()  # Python runs a sitecustomize it finds on the path at its start
+    (erp.dir / "site" / "sitecustomize.py").write_text(
+        "import importlib.metadata\nfound = importlib.metadata.version\n\n\ndef version(name):\n"
+        "    if name == 'adbc-driver-postgresql':\n        raise importlib.metadata.PackageNotFoundError(name)\n"
+        "    return found(name)\n\n\nimportlib.metadata.version = version\n")
+    r = erp.run("run", env={"PYTHONPATH": str(erp.dir / "site")})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert erp.target("select driver_version from _rowvioli.runs") == [(None,)]
 
 
 def test_a_column_name_longer_than_63_bytes_arrives_cut_and_a_key_naming_it_fails(erp):  # cases A20, as it is today
@@ -222,9 +235,14 @@ def test_a_mirror_with_a_json_column_from_before_fails_naming_the_column_and_sta
     ok(erp)
     erp.target("alter table raw_erp.docs alter j type json")  # as an earlier build left it
     assert run(erp, "erp")[0] == 1
-    assert erp.target("select reason from _rowvioli.status") == [
-        ("column j has changed its type from json to jsonb",)]
+    assert erp.target("select reason from _rowvioli.status") == [  # x is the harness's password, which a reason hides
+        ("column j of the mirror has the type json, of another family than the jsonb the source delivers, and a run "
+         'does not change it back; drop it from the mirror and the ne***t run brings it again: ALTER TABLE "raw_erp".'
+         '"docs" DROP COLUMN "j"',)]
     assert erp.target("select j::text from raw_erp.docs") == [('{"a": 1}',)]
+    erp.target('ALTER TABLE "raw_erp"."docs" DROP COLUMN "j"')  # the way out
+    ok(erp, "erp")
+    assert erp.target("select pg_typeof(j)::text, j::text from raw_erp.docs") == [("jsonb", '{"a": 1}')]
 
 
 def test_run_exits_1_when_a_table_fails_and_names_every_table_it_touched(erp):

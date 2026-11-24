@@ -2,8 +2,11 @@
 import adbc_driver_postgresql.dbapi as adbc
 import pyarrow as pa
 
-from ..contract import known_options
+from ..contract import known_options, version
 from ..target import quote
+
+# the reader's version, so that columns another one delivers are recorded as by = reader (decision 11)
+driver_version = version("adbc-driver-postgresql")
 
 
 def read(connection, table, options):

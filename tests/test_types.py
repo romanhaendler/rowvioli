@@ -166,6 +166,33 @@ def test_a_type_of_any_family_widened_by_hand_in_the_mirror_is_followed_in_the_c
     log_replays(erp, "raw_erp.amounts")
 
 
+def test_G4_a_type_changed_by_hand_to_another_family_stops_and_says_the_way_out_which_works(erp):  # story 47
+    amounts(erp, "integer", "(1, 10), (2, null)")
+    erp.target("alter table raw_erp.amounts alter a type text")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == (  # x is the harness's password, which a reason hides
+        "column a of the mirror has the type te***t, of another family than the integer the source delivers, and a run "
+        "does not change it back; drop it from the mirror and the ne***t run brings it again: "
+        'ALTER TABLE "raw_erp"."amounts" DROP COLUMN "a"')
+    erp.target('ALTER TABLE "raw_erp"."amounts" DROP COLUMN "a"')
+    again(erp)
+    assert types(erp, "a") == ["integer", "integer"]
+    assert erp.target("select id, a from raw_erp.amounts order by id") == [(1, 10), (2, None)]
+    log_replays(erp, "raw_erp.amounts")
+
+
+def test_G1_a_column_a_person_added_whose_name_the_source_brings_in_another_family_is_not_one_to_drop(erp):
+    amounts(erp, "integer", "(1, 10)")  # story 8: its values are nowhere else, so no next run brings them again
+    erp.target("alter table raw_erp.amounts add column memo text")
+    erp.target("update raw_erp.amounts set memo = 'mine'")
+    erp.source("alter table amounts add column memo integer")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == (
+        "column memo of the mirror is not in the change log, so it is not known to be from the source; drop it from "
+        "the mirror, or add it to the change log too and the ne***t run takes it out of the mirror")
+    assert erp.target("select memo from raw_erp.amounts") == [("mine",)]
+
+
 def test_a_run_ended_after_max_seconds_while_it_widened_says_so_and_names_the_column(erp):  # story 16
     erp.source("create table amounts (id int primary key, a integer)")
     erp.source("insert into amounts values (1, 1)")
@@ -228,6 +255,36 @@ def test_B11_a_cast_under_columns_that_changes_goes_by_the_same_rules_and_is_rec
     assert types(files, "n", "raw_files.counts") == ["numeric(14,2)", "numeric(14,2)"]
     assert files.target(RECORD, ["n"]) == [("numeric(14,2)", "numeric(14,2)", "definition")]
     log_replays(files, "raw_files.counts")
+
+
+def test_B11_a_first_type_under_columns_for_a_csv_column_loaded_as_text_goes_and_comes_by_definition(files):
+    (files.dir / "files" / "counts.csv").write_text("id;n\n1;42\n2;\n3;7\n")
+    table = '"counts.csv" = {{ key = ["id"], sep = ";"{} }}\n'
+    assert load(files, table.format(""))[0] == 0
+    code, answer = load(files, table.format(', columns = { n = "integer" }'))
+    assert code == 0, answer
+    run = max_run(files)
+    assert types(files, "n", "raw_files.counts") == ["integer", "integer"]
+    # a U for each row with a value; the old values end with it and stay in the log under n__<run>
+    assert files.target(f"select id, n__{run}, n from raw_files.counts__log where _run = {run} order by id") == [
+        ("1", None, 42), ("3", None, 7)]
+    assert files.target(f"select n__{run} from raw_files.counts__history where id = '1' order by _valid_from") == [
+        ("42",), (None,)]
+    assert files.target('select _op, "column", mirror, was, "by" from _rowvioli.columns__log where _run = %s '
+                        'order by "column"', [run]) == [("U", "n", True, None, "definition"),
+                                                       ("I", f"n__{run}", False, "n", "definition")]
+    log_replays(files, "raw_files.counts")
+
+
+def test_without_a_change_log_a_type_under_columns_of_another_family_stops_and_says_how_to_drop_it(files):
+    (files.dir / "files" / "counts.csv").write_text("id;n\n1;42\n")
+    table = '"counts.csv" = {{ key = ["id"], log = false, sep = ";"{} }}\n'
+    assert load(files, table.format(""))[0] == 0
+    code, answer = load(files, table.format(', columns = { n = "integer" }'))
+    assert code == 1
+    assert answer["raw_files.counts"]["reason"] == (
+        "column n has changed its type from text to integer; without a change log its values are nowhere else, so a "
+        'person drops it and the next run adds it anew: ALTER TABLE "raw_files"."counts" DROP COLUMN "n"')
 
 
 def test_a_retired_or_gone_column_keeps_in_the_record_the_type_the_source_last_delivered(erp):  # story 34

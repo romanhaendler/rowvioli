@@ -1,6 +1,7 @@
 """The `odbc` connector, tested against the PostgreSQL source through the open psqlODBC driver (spec tests 1 to 4,
 stories 20 and 22). They need an ODBC driver manager with psqlODBC; tests/odbc/run.sh runs them in a container that
 has both."""
+import importlib.metadata
 import shutil
 import subprocess
 from datetime import date, datetime
@@ -73,6 +74,8 @@ def test_a_table_is_mirrored_with_its_types_and_a_change_reaches_the_change_log(
     assert ready.target("select * from raw_erp.customers order by 1") == [
         (1, "Anna", Decimal("2.50"), date(1990, 5, 17), datetime(2026, 11, 12, 8, 30, 15)),
         (2, "Ben", None, None, None)]
+    assert ready.target("select driver_version from _rowvioli.runs") == [
+        (f"arrow-odbc {importlib.metadata.version('arrow-odbc')}",)]  # story 38
     ready.source("update customers set balance = 3.75 where customer_no = 2")
     r = ready.run("run", "erp")
     assert r.returncode == 0, r.stdout

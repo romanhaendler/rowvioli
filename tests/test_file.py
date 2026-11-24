@@ -1,4 +1,5 @@
 """The `file` connector: CSV, Excel, Parquet and JSON files and patterns from a directory (spec test 15)."""
+import importlib.metadata
 import json
 from datetime import date, datetime
 from decimal import Decimal
@@ -65,6 +66,8 @@ def test_a_csv_an_excel_and_a_parquet_file_are_mirrored(files):
     assert files.target("select * from raw_files.customers_csv order by 1") == as_text
     assert files.target("select * from raw_files.customers_xlsx order by 1") == as_text
     assert files.target("select * from raw_files.customers_parquet order by 1") == CUSTOMERS
+    assert files.target("select distinct driver_version from _rowvioli.runs") == [
+        (f"duckdb {importlib.metadata.version('duckdb')}",)]  # story 38
 
 
 def test_csv_and_excel_arrive_as_text_and_parquet_keeps_its_types(files):
@@ -257,6 +260,24 @@ def test_F1_F6_files_with_more_or_fewer_columns_load_and_a_column_missing_from_a
     assert files.run("run", "files", "orders_*.csv").returncode == 0
     assert files.target(mirror) == [("1", "10", None), ("2", "20", None), ("3", "30", None)]
     log_replays(files, "raw_files.orders")
+
+
+@pytest.mark.parametrize("table", ['key = ["order_no"], log = false, ', ""])
+def test_without_a_change_log_a_column_missing_from_the_files_stops_and_says_how_to_drop_it(files, table):  # story 8
+    orders(files, 1, 2)
+    tables = f'"orders_*.csv" = {{ {table}sep = ";", target_table = "orders" }}\n'
+    assert load(files, tables)[0] == 0
+    for n in (1, 2):
+        (files.dir / "files" / f"orders_{n}.csv").write_text(f"order_no\n{n}\n")
+    code, answer = load(files, tables)
+    assert code == 1
+    assert answer["raw_files.orders"]["reason"] == (
+        "column amount is missing in the source; without a change log its values are nowhere else, so a person drops "
+        'it: ALTER TABLE "raw_files"."orders" DROP COLUMN "amount"')
+    assert files.target("select amount from raw_files.orders order by 1") == [("10",), ("20",)]
+    files.target('ALTER TABLE "raw_files"."orders" DROP COLUMN "amount"')  # the way out
+    assert load(files, tables)[0] == 0
+    assert files.target("select * from raw_files.orders order by 1") == [("1",), ("2",)]
 
 
 def test_a_column_a_person_added_to_the_mirror_of_a_file_is_not_emptied_and_stops_the_run(files):  # story 8, G1

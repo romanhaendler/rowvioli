@@ -7,7 +7,11 @@ try:
 except OSError as e:  # no driver manager: arrow-odbc's own message is a dlopen path
     raise ImportError("the ODBC driver manager is missing; install unixodbc (libodbc)") from e
 
-from ..contract import known_options
+from ..contract import known_options, version
+
+# the reader's version, so that columns another one delivers are recorded as by = reader (decision 11); the ODBC
+# driver the operator installed is not in it
+driver_version = version("arrow-odbc")
 
 # not quoted, since quoting differs between sources, and a plain name needs none on any of them
 PLAIN = re.compile(r"\w+(\.\w+)*")

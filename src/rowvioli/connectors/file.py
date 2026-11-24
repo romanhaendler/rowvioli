@@ -17,7 +17,11 @@ from pathlib import Path
 import duckdb
 import pyarrow as pa
 
+from ..contract import version
 from ..target import quote
+
+# the reader's version, so that columns another one delivers are recorded as by = reader (decision 11)
+driver_version = version("duckdb")
 
 READERS = {".csv": "read_csv", ".xlsx": "read_xlsx", ".parquet": "read_parquet", ".json": "read_json",
            ".jsonl": "read_json", ".ndjson": "read_json"}
