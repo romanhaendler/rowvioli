@@ -281,11 +281,14 @@ def before_the_record(conn, t, primary_key, key, log_columns, renamed):
     if not log_columns:  # replaced as a whole and under the definition's key either way, with no history to get wrong
         return False
     defined, primary = ([renamed.get(c, c) for c in k] for k in (key, primary_key))  # the change log's names
-    fits = [bool(k) and set(k) <= dict(log_columns).keys() and not sql(conn, f"""
-        SELECT 1 FROM (SELECT _op, _loaded_at, lag(_op) OVER w AS before, lag(_loaded_at) OVER w AS at
-                       FROM ONLY {t['log_table']} WINDOW w AS (PARTITION BY {', '.join(quote(c) for c in k)}
-                                                          ORDER BY _loaded_at)) l
-         WHERE at = _loaded_at OR (_op = 'I') <> (before IS NULL OR before = 'D') LIMIT 1""") for k in (defined, primary)]
+    with long(f"reading the change log {t['name']}__log under the definition's key and the primary key, to tell which "
+              "of them wrote it; raise max_seconds once, until a run has told it"):  # 0.6 s per million rows
+        fits = [bool(k) and set(k) <= dict(log_columns).keys() and not sql(conn, f"""
+            SELECT 1 FROM (SELECT _op, _loaded_at, lag(_op) OVER w AS before, lag(_loaded_at) OVER w AS at
+                           FROM ONLY {t['log_table']} WINDOW w AS (PARTITION BY {', '.join(quote(c) for c in k)}
+                                                              ORDER BY _loaded_at)) l
+             WHERE at = _loaded_at OR (_op = 'I') <> (before IS NULL OR before = 'D') LIMIT 1""")
+                for k in (defined, primary)]
     if fits[0] != fits[1]:
         return fits[0]
     comment = f"COMMENT ON COLUMN {t['log_table']}._op IS " + "{}"

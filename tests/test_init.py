@@ -263,3 +263,27 @@ def test_the_control_connection_asks_postgres_to_notice_a_dead_worker_within_a_m
     names = ["tcp_keepalives_idle", "tcp_keepalives_interval", "tcp_keepalives_count", "tcp_user_timeout"]
     assert [target.sql(conn, f"SELECT current_setting('{n}')")[0][0] for n in names] == ["30", "10", "3", "60000"]
     conn.close()
+
+
+def test_a_first_run_after_the_upgrade_ended_while_it_reads_the_change_log_under_two_keys_names_that_step(erp):
+    """Ticket 14 of schema changes, item 6: the read takes about 0.6 s per million log rows (docs/measurements.md 16);
+    a consumer who holds the change log stands in for a log large enough to outlast max_seconds."""
+    table = '"public.customers" = {{ key = ["customer_no"], max_seconds = {} }}\n'
+    ok(erp)
+    erp.source("update customers set name = 'Anna2' where customer_no = 1")  # a U the other key never saw
+    again(erp)
+    erp.target(HAND)
+    apply(erp, definition(erp, table.format(2)))  # the definition no longer tells
+    released(erp)
+    holder = psycopg.connect(erp.target_url)
+    holder.execute("lock table raw_erp.customers__log in access exclusive mode")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    holder.close()
+    assert reason.replace("***", "x") == (
+        "ended after max_seconds = 2 while reading the change log raw_erp.customers__log under the definition's key "
+        "and the primary key, to tell which of them wrote it; raise max_seconds once, until a run has told it")
+    apply(erp, definition(erp, table.format(30)))
+    again(erp)
+    assert primary_key(erp) == ["customer_no"]
+    log_replays(erp)
