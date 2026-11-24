@@ -1080,22 +1080,34 @@ CONSTRAINT = re.compile(r'duplicate key value violates unique constraint "[^"]*"
                         r'|conflicting key value violates exclusion constraint "[^"]*"')
 
 
+# the classes of SQLSTATE whose messages Postgres writes with names and no value of a row, and which an operator needs
+# while publishing: a lost connection, a feature, a transaction's state, a dependent object, a deadlock, a missing right
+# or object, resources such as a full disk, a limit, an object in use, a cancel, a system error. A constraint's message
+# (class 23) is known by its words (CONSTRAINT)
+NAMES = {"08", "0A", "25", "2B", "40", "42", "53", "54", "55", "57", "58"}
+
+
 def raised_by_a_consumer(e, step):
     """Decision 54, a reason never shows a value: the reason for an error raised under a consumer's code, a trigger on
     the target, a constraint's or a column's function, a function a source view calls, whose message is free text
     that may hold a row (`raise exception 'bad row %', NEW`, `relation "Anna" does not exist` of an EXECUTE), or None
     for any other. Told by a function's frame in the context the driver gives, in its fields for a statement and in its
     text for a source's rows, whatever the function's language, and by the SQLSTATE only RAISE and ASSERT give;
-    Postgres's own messages of a violated constraint keep their names."""
+    Postgres's own messages of a violated constraint keep their names. While publishing, an error of the target outside
+    the classes of NAMES is withheld too: a function in C or in a language that names no frame (a consumer's trigger,
+    constraint or column) gives no other sign, and Postgres's own message of a value (`date field value out of range:
+    2000-13-01`) can hold a row's."""
     details = {k.decode(): v.decode(errors="replace") for k, v in getattr(e, "details", None) or []}
     state = details.get("PG_DIAG_SQLSTATE")
     text = str(e)
     function = FRAME.search(details.get("PG_DIAG_CONTEXT") or text.partition("\nCONTEXT:  ")[2])
     message = details.get("PG_DIAG_MESSAGE_PRIMARY") or WRAPPER.sub("", text).split("\n")[0]
-    if not function and state not in ("P0001", "P0004") or CONSTRAINT.fullmatch(message):  # raise_exception, assert
+    raised = state in ("P0001", "P0004")  # raise_exception, assert
+    if not (function or raised or step == "publishing" and state and state[:2] not in NAMES) \
+            or CONSTRAINT.fullmatch(message):
         return None
     where = "source" if step == "reading the source" else "target"
-    return (f"{f'function {function[1]}' if function else 'a function'} raised an error"
+    return (f"{f'function {function[1]}' if function else 'a function' if raised else 'a statement'} raised an error"
             f"{f' (SQLSTATE {state})' if state else ''} in the {where}; its message may hold a row's values, so it is "
             f"left out here: the {where}'s server log has it")
 
