@@ -5,6 +5,7 @@ import json
 import psycopg
 import pytest
 
+from test_checks import failed
 from test_history import again
 from test_run import apply, definition, erp, ok  # noqa: F401 (erp is a fixture)
 
@@ -71,9 +72,13 @@ def test_a_column_dropped_from_the_mirror_by_hand_and_added_again_by_the_run_is_
     replays(erp)
 
 
-def test_a_column_dropped_from_the_change_log_by_hand_and_added_again_by_the_run_is_recorded_as_hand(erp):
+def test_a_column_dropped_from_the_change_log_by_hand_is_not_known_to_be_from_the_source_and_stops(erp):  # story 8
     ok(erp)
     erp.target("alter table raw_erp.customers__log drop column city cascade")  # the history view goes with it
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp).startswith("column city of the mirror is not in the change log, so it is not known to be from "
+                                  "the source; the source brings a column city")
+    erp.target('alter table raw_erp.customers drop column "city"')  # the way out
     again(erp)
     assert erp.target(LAST) == [("U", "city", True, "hand", None)]
     replays(erp)

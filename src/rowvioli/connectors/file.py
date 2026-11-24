@@ -29,6 +29,8 @@ READERS = {".csv": "read_csv", ".xlsx": "read_xlsx", ".parquet": "read_parquet",
 TYPE = re.compile(r"[A-Za-z][A-Za-z0-9_ ]*(\(\d+(,\s*\d+)?\))?")
 # the files of a pattern DuckDB reads at once; at most so many are open
 FILES_PER_READ = 50
+# a cast that fails: DuckDB's own error, or Arrow's with its message once batches are read
+CONVERSION = (duckdb.ConversionException, OSError)
 
 
 def read(connection, table, options):
@@ -93,7 +95,7 @@ def read(connection, table, options):
     def order(present):
         return ", ".join(quote(c) if c in present else f"NULL::{t} AS {quote(c)}" for c, t in first.items())
 
-    def rows(group):  # the columns by name, not by position, then the casts
+    def rows(group, cast=True):  # the columns by name, not by position, then the casts
         if reader == "read_xlsx":  # its reader takes no list
             part = functools.reduce(lambda a, b: a.union(b), (relation(p).project(order(shapes[p])) for p in group))
         else:
@@ -101,12 +103,29 @@ def read(connection, table, options):
             # else the read of the list would drop or null one file's other columns
             by_name = {"union_by_name": True} if any(shapes[p].keys() != present for p in group) else {}
             part = relation(group, **by_name).project(order(present))
-        return part.project(f"* REPLACE ({casts})") if casts else part
+        return part.project(f"* REPLACE ({casts})") if casts and cast else part
+
+    def uncast(e):
+        """DuckDB's message for a value a cast does not take holds the value, which would end up in the status view
+        and the log: the reason names the column instead, found by trying each cast. Any other error as it is."""
+        if isinstance(e, OSError) and not str(e).startswith("Conversion Error"):
+            return e
+        for group in groups:
+            part = rows(group, cast=False)
+            for c, t in columns.items():
+                if part.filter(f"{quote(c)}{text} IS NOT NULL AND TRY_CAST({quote(c)}{text} AS {t}) IS NULL").limit(1) \
+                        .fetchall():
+                    return Exception(f"{table}: column {c} is not {t} in every row; change the value in the file, or "
+                                     "its type under columns")
+        return Exception(f"{table}: a value in the file does not convert to the type its column is read as")
     # a few files per read, one read after the other: DuckDB opened up to 600 files of one list at once, and a
     # union of more than 333 files is too deep for it
     groups = [paths[i:i + FILES_PER_READ] for i in range(0, len(paths), FILES_PER_READ)]
     result = rows(groups[0])
-    batches = result.to_arrow_reader()
+    try:
+        batches = result.to_arrow_reader()
+    except CONVERSION as e:
+        raise uncast(e) from None
     # DuckDB hands JSON over as text; as Arrow's json it becomes jsonb. Not by arrow_lossless_conversion: that
     # turns a hugeint into bytes and a boolean into a number
     schema = pa.schema([f.with_type(pa.json_()) if str(t) == "JSON" else f
@@ -117,6 +136,8 @@ def read(connection, table, options):
             for group in itertools.chain([batches], (rows(g).to_arrow_reader() for g in groups[1:])):
                 for batch in group:
                     yield batch.cast(schema)
+        except CONVERSION as e:
+            raise uncast(e) from None
         finally:
             db.close()
     return pa.RecordBatchReader.from_batches(schema, keep_open())
