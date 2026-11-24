@@ -166,6 +166,21 @@ def test_a_type_of_any_family_widened_by_hand_in_the_mirror_is_followed_in_the_c
     log_replays(erp, "raw_erp.amounts")
 
 
+def test_G4_a_type_changed_by_hand_to_another_family_stops_and_says_the_way_out_which_works(erp):  # story 47
+    amounts(erp, "integer", "(1, 10), (2, null)")
+    erp.target("alter table raw_erp.amounts alter a type text")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == (  # x is the harness's password, which a reason hides
+        "column a of the mirror was changed by hand to te***t, a type of another family than integer, which the source "
+        "delivers; drop it from the mirror and the ne***t run brings it again: "
+        'ALTER TABLE "raw_erp"."amounts" DROP COLUMN "a"')
+    erp.target('ALTER TABLE "raw_erp"."amounts" DROP COLUMN "a"')
+    again(erp)
+    assert types(erp, "a") == ["integer", "integer"]
+    assert erp.target("select id, a from raw_erp.amounts order by id") == [(1, 10), (2, None)]
+    log_replays(erp, "raw_erp.amounts")
+
+
 def test_a_run_ended_after_max_seconds_while_it_widened_says_so_and_names_the_column(erp):  # story 16
     erp.source("create table amounts (id int primary key, a integer)")
     erp.source("insert into amounts values (1, 1)")
