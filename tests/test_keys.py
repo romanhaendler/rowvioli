@@ -3,7 +3,10 @@ by stretches (spec tests, stage 4; the numbers are those of `.scratch/schema-cha
 import json
 from datetime import datetime
 
-from test_columns_go_and_come import log_replays
+import pytest
+
+from test_checks import failed
+from test_columns_go_and_come import columns, log_replays
 from test_history import LOADED_AT, MIRROR, again, at
 from test_run import apply, definition, erp, ok, rows  # noqa: F401 (erp is a fixture)
 
@@ -132,4 +135,68 @@ def test_C15_a_primary_key_changed_by_hand_is_put_back_and_recorded_by_hand(erp)
                       'order by "column"') == [
         ("U", column, key, "hand", "the primary key (customer_no, name) was put back to the definition's (customer_no)")
         for column, key in [("customer_no", 1), ("name", None)]]
+    log_replays(erp)
+
+
+@pytest.mark.parametrize("consumer, named", [
+    ("create table reporting.orders (id int, customer_no int references raw_erp.customers)",
+     "constraint orders_customer_no_fkey on table reporting.orders depends on index raw_erp.customers_pkey"),
+    ("create view reporting.names as select customer_no, name from raw_erp.customers group by customer_no",
+     "view reporting.names depends on constraint customers_pkey on table raw_erp.customers"),
+])
+def test_C12_a_consumers_foreign_key_or_view_on_the_primary_key_stops_another_key_and_is_named(erp, consumer, named):
+    ok(erp)  # story 23
+    erp.target("create schema reporting")
+    erp.target(consumer)
+    before = rows(erp.target, MIRROR), erp.target("select count(*) from raw_erp.customers__log")
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no", "name"] }\n'))
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp).replace("***", "x")  # the source's password is x, and the reason hides it
+    assert reason.startswith("the key of raw_erp.customers would change from (customer_no) to (customer_no, name), "
+                             f"but {named}"), reason
+    assert (rows(erp.target, MIRROR), erp.target("select count(*) from raw_erp.customers__log")) == before
+    assert primary_key(erp) == ["customer_no"]
+
+
+def test_C14_a_new_key_with_a_column_the_old_rows_of_the_change_log_lack_reads_each_stretch_by_its_own_key(erp):
+    ok(erp)
+    first = (erp.target(LOADED_AT)[0][0], rows(erp.target, MIRROR))
+    erp.source("alter table customers add column tenant text not null default 'a', drop constraint customers_pkey, "
+               "add primary key (customer_no, tenant)")
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no", "tenant"] }\n'))
+    seam = again(erp)
+    erp.source("insert into customers values (1, 'Anna', 'Bonn', 'b')")
+    last = again(erp)
+    assert primary_key(erp) == ["customer_no", "tenant"]
+    assert at(erp, first[0]) == first[1]
+    history = "select customer_no, tenant, _valid_from, _valid_to from raw_erp.customers__history order by 1, 3, 2"
+    assert erp.target(history) == [(1, None, first[0], seam), (1, "a", seam, None), (1, "b", last, None),
+                                   (2, None, first[0], seam), (2, "a", seam, None),
+                                   (3, None, first[0], seam), (3, "a", seam, None)]
+    log_replays(erp)
+
+
+def test_C9_a_key_column_renamed_in_the_source_without_renamed_is_another_key_and_the_old_one_stays_in_the_log(erp):
+    ok(erp)  # `renamed` in the definition, which makes it a rename, is ticket 06's
+    first = erp.target(LOADED_AT)[0][0]
+    erp.source("alter table customers rename column customer_no to id")
+    apply(erp, definition(erp, '"public.customers" = { key = ["id"] }\n'))
+    seam = again(erp)
+    assert primary_key(erp) == ["id"]
+    assert columns(erp) == ["name", "city", "id"]
+    assert erp.target("select customer_no, id, _valid_from, _valid_to from raw_erp.customers__history "
+                      "where name = 'Anna' order by _valid_from") == [(1, None, first, seam), (None, 1, seam, None)]
+    assert [k["key"] for k in comment(erp)] == [["customer_no"], ["id"]]
+    assert erp.target(f'select _op, "column", "key", mirror, "by" from _rowvioli.columns__log {THIS_RUN} '
+                      'order by "column"') == [("U", "customer_no", None, False, "source"),
+                                               ("I", "id", 1, True, "definition")]
+    log_replays(erp)
+
+
+def test_C13_a_key_value_that_changes_is_a_D_and_an_I(erp):
+    ok(erp)
+    erp.source("update customers set customer_no = 8 where customer_no = 1")
+    again(erp)
+    assert erp.target(f"select _op, customer_no, name from raw_erp.customers__log {THIS_RUN} order by _op") == [
+        ("D", 1, "Anna"), ("I", 8, "Anna")]
     log_replays(erp)
