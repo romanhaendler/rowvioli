@@ -2,7 +2,7 @@
 
 **Blocked by:** 11
 
-**Status:** claimed
+**Status:** resolved
 
 **Model:** Opus
 
@@ -133,3 +133,5 @@ Implementation on `sc-12` (2026-11-24), one commit per item; what is not done or
 - 14: the columns are `_valid_to_run`, `_valid_to_by`, `_valid_to_note`.
 - 2: a history view built before this change reads a child table of the change log until a run builds it
   anew. `LOCK TABLE` and the DDL on a mirror still reach its children, as Postgres requires.
+
+Resolved on branch `schema-changes`, from sc-12 (46f1551). Review fixes: c2ff1ff, 6f07dde, 20c29e5, 2c35301, da9cdcb, fc5fcff, 82e3db3, 9a5dd42, 5bc2619, a22b8e7.
