@@ -1,6 +1,6 @@
 # Schema changes: the mirror follows the source, the change log keeps what was
 
-Status: ready-for-agent
+Status: resolved
 
 The design and its reasons are in `strategy.md`, every single case in `cases.md`, the Postgres behaviour it builds on in `facts.sql`, and a prototype of the mechanics in `experiments/09_schema_changes.sql`. Where they and this spec differ, this spec holds.
 
