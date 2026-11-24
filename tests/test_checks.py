@@ -326,7 +326,11 @@ def withheld(rv):
 @pytest.mark.parametrize("statement, sqlstate", [
     ("raise exception 'bad row %', NEW", "P0001"),
     ("raise exception using message = 'bad row ' || NEW::text, errcode = 'check_violation'", "23514"),
-    ("assert NEW.name <> 'Anna2', 'bad row ' || NEW::text", "P0004")])
+    ("assert NEW.name <> 'Anna2', 'bad row ' || NEW::text", "P0004"),
+    # not raised by the code but by Postgres inside it, with the row's value: whatever the language, a message under
+    # a consumer's function is withheld
+    ("execute format('select from %I', NEW.name)", "42P01"),  # relation "Anna2" does not exist
+    ("perform 1 / (length(NEW.name) - 5)", "22012")])
 def test_a_message_a_consumers_trigger_raises_on_the_target_is_withheld_and_the_reason_names_the_function(
         erp, statement, sqlstate):
     ok(erp)
@@ -339,9 +343,11 @@ def test_a_message_a_consumers_trigger_raises_on_the_target_is_withheld_and_the_
                              "hold a row's values, so it is left out here: the target's server log has it")
 
 
-def test_a_message_a_function_in_a_source_view_raises_is_withheld(erp):
+@pytest.mark.parametrize("statement", ["raise exception 'bad name Secret %', n",
+                                       "execute format('select from %I', 'Secret' || n)"])
+def test_a_message_a_function_in_a_source_view_raises_is_withheld(erp, statement):
     erp.source("create function check_name(n text) returns text language plpgsql as $$ begin "
-               "if n = 'Anna' then raise exception 'bad name Secret %', n; end if; return n; end $$")
+               f"if n = 'Anna' then {statement}; end if; return n; end $$")
     erp.source("create view checked as select customer_no, check_name(name) as name from customers")
     apply(erp, definition(erp, '"public.checked" = { key = ["customer_no"] }\n'))
     # the driver gives a source's error while rows arrive as text only: no SQLSTATE. x is the harness's password

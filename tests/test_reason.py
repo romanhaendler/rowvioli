@@ -65,3 +65,26 @@ def test_a_plain_exception_of_a_connector_of_ones_own_gives_its_first_line_as_a_
 
 def test_a_source_table_named_columns_that_may_not_be_read_is_not_said_to_be_the_columns_table():
     assert reason("ERROR:  permission denied for table columns") == "permission denied for table columns"
+
+
+WITHHELD = " raised an error in the source; its message may hold a row's values, so it is left out here: the source's " \
+           "server log has it"
+
+
+@pytest.mark.parametrize("message, function", [
+    # the language's frames as Postgres writes them; neither image of the tests has PL/Python or PL/Perl
+    ('plpy.Error: bad row Anna\nCONTEXT:  Traceback (most recent call last):\n  PL/Python function "check", line 3, '
+     "in <module>\n    plpy.error('bad row ' + n)\nPL/Python function \"check\"", '"check"'),
+    ('bad row Anna at line 2.\nCONTEXT:  PL/Perl function "check"', '"check"'),
+    ('invalid input syntax for type integer: "Anna"\nCONTEXT:  SQL function "f" statement 1', '"f"'),
+    ('relation "Anna" does not exist\nCONTEXT:  SQL statement "select from "Anna""\nPL/pgSQL function '
+     'reporting.check_name(character varying) line 1 at EXECUTE', "reporting.check_name(character varying)")])
+def test_a_message_under_a_consumers_function_is_withheld_whatever_its_language(message, function):
+    assert reason("IO: [libpq] Execution error [PGRES_FATAL_ERROR]: ERROR:  " + message) == f"function {function}" \
+        + WITHHELD
+
+
+def test_postgres_own_message_of_a_violated_constraint_under_a_function_keeps_its_names():
+    assert reason('IO: [libpq] Execution error [PGRES_FATAL_ERROR]: ERROR:  duplicate key value violates unique '
+                  'constraint "u"\nDETAIL:  Key (id)=(1) already exists.\nCONTEXT:  SQL function "f" statement 1') \
+        == 'duplicate key value violates unique constraint "u"'

@@ -984,7 +984,7 @@ def reason_line(values, e, step):
     that occurs in the wrapper (`x`, `query`) does not keep the wrapper from being cut. A message that holds a
     traceback gives the text before it, or the exception's own line (the traceback's last) when nothing is before it;
     ADBC cuts long messages, so the end may be missing. A line saying so, with the exception's type, when there is no
-    message. A message a consumer's PL/pgSQL code raised is withheld (RAISED)."""
+    message. A message raised under a consumer's code is withheld (raised_by_a_consumer)."""
     if withheld := raised_by_a_consumer(e, step):
         return scrub(values, CONTROL.sub("?", withheld))
     # first only a value with a line break or another control character, which the cut and the ? would break up
@@ -1008,20 +1008,31 @@ def reason_line(values, e, step):
     return scrub(values, line) or f"the driver gave no message while {step} ({type(e).__name__})"
 
 
-# the innermost line of the context Postgres gives an error that PL/pgSQL code raised by RAISE or ASSERT
-RAISED = re.compile(r"PL/pgSQL function (.*) line \d+ at (?:RAISE|ASSERT)")
+# a frame of a function in the context Postgres gives an error, in every language that names its frames:
+# `PL/pgSQL function guard() line 3 at RAISE`, `SQL function "f" statement 1`, `PL/Python function "guard"`
+FRAME = re.compile(r'(?:PL/\w+|SQL) (?:function|procedure) ("(?:[^"]|"")*"|(?:"[^"]*"|[^\s(])+\(.*?\))')
+# Postgres's own messages of a violated constraint, which show names and no value, also raised under a function
+CONSTRAINT = re.compile(r'duplicate key value violates unique constraint "[^"]*"'
+                        r'|(?:insert or update|update or delete) on table "[^"]*" violates foreign key constraint '
+                        r'"[^"]*"(?: on table "[^"]*")?'
+                        r'|null value in column "[^"]*" of relation "[^"]*" violates not-null constraint'
+                        r'|new row for relation "[^"]*" violates check constraint "[^"]*"'
+                        r'|conflicting key value violates exclusion constraint "[^"]*"')
 
 
 def raised_by_a_consumer(e, step):
-    """Decision 54, a reason never shows a value: the reason for an error that a consumer's code raised, whose message
-    is free text that may hold a row (`raise exception 'bad row %', NEW`), or None for any other. Told by the SQLSTATE
-    only RAISE and ASSERT give and by the context the driver gives, in its fields for a statement and in its text for
-    a source's rows; Postgres's own messages, for a constraint too, keep their names."""
+    """Decision 54, a reason never shows a value: the reason for an error raised under a consumer's code, a trigger on
+    the target, a constraint's or a column's function, a function a source view calls, whose message is free text
+    that may hold a row (`raise exception 'bad row %', NEW`, `relation "Anna" does not exist` of an EXECUTE), or None
+    for any other. Told by a function's frame in the context the driver gives, in its fields for a statement and in its
+    text for a source's rows, whatever the function's language, and by the SQLSTATE only RAISE and ASSERT give;
+    Postgres's own messages of a violated constraint keep their names."""
     details = {k.decode(): v.decode(errors="replace") for k, v in getattr(e, "details", None) or []}
     state = details.get("PG_DIAG_SQLSTATE")
-    context = details.get("PG_DIAG_CONTEXT") or next(iter(re.findall(r"\nCONTEXT:  (.*)", str(e))), "")
-    function = RAISED.fullmatch(context.split("\n")[0])
-    if not function and state not in ("P0001", "P0004"):  # raise_exception, assert_failure
+    text = str(e)
+    function = FRAME.search(details.get("PG_DIAG_CONTEXT") or text.partition("\nCONTEXT:  ")[2])
+    message = details.get("PG_DIAG_MESSAGE_PRIMARY") or WRAPPER.sub("", text).split("\n")[0]
+    if not function and state not in ("P0001", "P0004") or CONSTRAINT.fullmatch(message):  # raise_exception, assert
         return None
     where = "source" if step == "reading the source" else "target"
     return (f"{f'function {function[1]}' if function else 'a function'} raised an error"
