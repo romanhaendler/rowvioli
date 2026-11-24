@@ -240,3 +240,34 @@ def test_a_column_of_an_old_key_retired_in_the_change_log_is_renamed_in_the_comm
     assert erp.target(f'select note from _rowvioli.columns__log {THIS_RUN} and "column" = %s',
                       [f"customer_no__{run}"]) == [(f"the change log's keys: {json.dumps(comment(erp))}",)]
     log_replays(erp)
+
+
+def test_mirror_change_log_and_history_view_renamed_by_hand_after_a_change_of_key_keep_the_history(erp):  # cases E6
+    ok(erp)
+    moments = [(erp.target(LOADED_AT)[0][0], rows(erp.target, MIRROR))]
+    erp.source("update customers set name = 'Anna2' where customer_no = 1")
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    apply(erp, definition(erp, ANOTHER_KEY))
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    for old, new in [("customers", "clients"), ("customers__log", "clients__log"),
+                     ("customers__history", "clients__history")]:
+        erp.target(f"alter {'view' if new.endswith('history') else 'table'} raw_erp.{old} rename to {new}")
+    apply(erp, definition(erp, ANOTHER_KEY.replace(" }", ', target_table = "clients" }')))
+    erp.source("alter table customers add column phone text")  # the history view is made anew from the comment
+    erp.source("update customers set phone = '0228' where customer_no = 2")
+    again(erp)
+    for moment, mirror in moments:
+        assert rows(lambda q: erp.target(q, [moment, moment]), "select customer_no, name, city from "
+                    "raw_erp.clients__history where _valid_from <= %s and (_valid_to > %s or _valid_to is null)") \
+            == mirror, moment
+    log_replays(erp, "raw_erp.clients")
+
+
+def test_C8_a_key_column_of_another_family_stops_the_run_and_changes_nothing(erp):  # story 22
+    ok(erp)
+    before = rows(erp.target, MIRROR), erp.target("select count(*) from raw_erp.customers__log")
+    erp.source("alter table customers alter customer_no type text")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp).startswith("column customer_no ")
+    assert (rows(erp.target, MIRROR), erp.target("select count(*) from raw_erp.customers__log")) == before
+    assert primary_key(erp) == ["customer_no"]
