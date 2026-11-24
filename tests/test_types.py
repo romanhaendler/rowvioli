@@ -168,13 +168,16 @@ def test_a_type_of_any_family_widened_by_hand_in_the_mirror_is_followed_in_the_c
 
 def test_a_run_ended_after_max_seconds_while_it_widened_says_so_and_names_the_column(erp):  # story 16
     erp.source("create table amounts (id int primary key, a integer)")
-    erp.source("insert into amounts select g, g from generate_series(1, 3) g")
+    erp.source("insert into amounts values (1, 1)")
     apply(erp, definition(erp, '"public.amounts" = { key = ["id"], max_seconds = 2 }\n'))
     ok(erp)
-    # a consumer's index that takes a second per row, so that rewriting the mirror's three rows takes three
+    # a consumer's index whose function waits as long as public.pause says: not while it is built, longer than
+    # max_seconds once the widening rebuilds it
+    erp.target("create table public.pause (seconds float); insert into public.pause values (0)")
     erp.target("create function public.slow(v numeric) returns numeric immutable language plpgsql "
-               "as $$ begin perform pg_sleep(1); return v; end $$")
+               "as $$ begin perform pg_sleep(seconds) from public.pause; return v; end $$")
     erp.target("create index on raw_erp.amounts (public.slow(a))")
+    erp.target("update public.pause set seconds = 3")
     erp.source("alter table amounts alter a type bigint")
     erp.source("update amounts set a = 3000000000 where id = 1")
     erp.target("update _rowvioli.tables set requested_at = now()")
