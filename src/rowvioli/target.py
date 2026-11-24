@@ -34,7 +34,7 @@ def check_address(url):
         raise SystemExit("ROWVIOLI_TARGET_URL has more than one @ after the scheme: a password with @, / or : "
                          "must be percent-encoded")
     rest = url.split("://", 1)[1]
-    authority = re.split(r"[/?]", rest, 1)[0]  # not at #: the driver takes a # in a password as it is
+    authority = re.split(r"[/?]", rest, maxsplit=1)[0]  # not at #: the driver takes a # in a password as it is
     host = authority.rsplit("]", 1)[-1]  # after an IPv6 host's bracket, so its colons are no user info
     port = host.rsplit(":", 1)[-1]
     # a password holding / or ? ends the authority early: what is left looks like host:word with an @ further on.
