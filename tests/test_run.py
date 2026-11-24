@@ -103,6 +103,34 @@ def test_runs_record_the_version_of_the_program_and_none_for_a_driver_that_says_
     assert erp.target("select program_version, driver_version from _rowvioli.runs") == [(version, None)]
 
 
+def test_a_column_name_longer_than_63_bytes_arrives_cut_and_a_key_naming_it_fails(erp):  # cases A20, as it is today
+    long = "c" * 70
+    erp.source(f'create table wide (k int primary key, "{long}" int)')
+    erp.source("insert into wide values (1, 2)")
+    apply(erp, definition(erp, '"public.wide" = { key = ["k"] }\n'))
+    ok(erp, "erp", "public.wide")
+    assert erp.target("select column_name from information_schema.columns where table_name = 'wide' order by 1") == [
+        ("c" * 63,), ("k",)]
+    apply(erp, definition(erp, f'"public.wide" = {{ key = ["{long}"] }}\n'))
+    code, answer = run(erp, "erp", "public.wide")
+    assert code == 1 and f"has no column {long}" in answer["tables"]["raw_erp.wide"]["reason"]
+
+
+def test_an_enum_and_a_domain_arrive_as_text_and_as_their_base_type(erp):  # cases B14, as it is today
+    erp.source("create type mood as enum ('a', 'b')")
+    erp.source("create domain pos as int check (value > 0)")
+    erp.source("create table moods (k int primary key, m mood, p pos)")
+    erp.source("insert into moods values (1, 'a', 3)")
+    apply(erp, definition(erp, '"public.moods" = { key = ["k"] }\n'))
+    ok(erp, "erp", "public.moods")
+    assert erp.target("select column_name, data_type from information_schema.columns where table_name = 'moods' "
+                      "order by 1") == [("k", "integer"), ("m", "text"), ("p", "integer")]
+    erp.source("alter type mood add value 'c'")
+    erp.source("update moods set m = 'c'")
+    ok(erp, "erp", "public.moods")
+    assert erp.target("select m from raw_erp.moods") == [("c",)]
+
+
 NOTES = '"public.notes" = {}\n'
 
 

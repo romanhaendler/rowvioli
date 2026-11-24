@@ -1,6 +1,6 @@
 """The `file` connector: CSV, Excel, Parquet and JSON files and patterns from a directory (spec test 15)."""
 import json
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 import duckdb
@@ -353,3 +353,27 @@ def test_a_nul_byte_in_a_text_value_is_removed_and_a_second_run_changes_nothing(
     assert files.target("select * from raw_files.nul order by 1") == [(1, "ab"), (2, "c")]
     code, answer = load(files, '"nul.parquet" = { key = ["id"] }\n')
     assert answer["raw_files.nul"] == {"status": "ok", "inserted": 0, "updated": 0, "deleted": 0}
+
+
+def test_a_csv_header_with_one_name_twice_arrives_with_the_second_numbered(files):  # cases A22, as it is today
+    (files.dir / "files" / "twice.csv").write_text("a;a;b\n1;2;3\n")
+    code, answer = load(files, '"twice.csv" = {}\n')
+    assert code == 0, answer
+    assert types(files, "twice") == [("a", "text"), ("a_1", "text"), ("b", "text")]
+    assert files.target("select * from raw_files.twice") == [("1", "2", "3")]
+
+
+def test_a_csv_without_a_header_gets_column0_and_up_and_keeps_its_first_line(files):  # cases F8, as it is today
+    (files.dir / "files" / "nohead.csv").write_text("1;Anna\n2;Ben\n")
+    code, answer = load(files, '"nohead.csv" = {}\n')
+    assert code == 0, answer
+    assert types(files, "nohead") == [("column0", "text"), ("column1", "text")]
+    assert files.target("select * from raw_files.nohead order by 1") == [("1", "Anna"), ("2", "Ben")]
+
+
+def test_a_timestamp_finer_than_microseconds_arrives_cut_to_microseconds(files):  # cases B16, as it is today
+    pq.write_table(pa.table({"k": [1], "t": pa.array([1767225600123456789], pa.timestamp("ns"))}),
+                   files.dir / "files" / "ns.parquet")
+    code, answer = load(files, '"ns.parquet" = {}\n')
+    assert code == 0, answer
+    assert files.target("select t from raw_files.ns") == [(datetime(2026, 1, 1, 0, 0, 0, 123456),)]
