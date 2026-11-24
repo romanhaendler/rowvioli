@@ -132,3 +132,26 @@ def test_A27_renamed_into_another_family_is_a_drop_and_an_add(erp):
     erp.source("alter table people rename column score to points; alter table people alter points type text")
     again(erp)
     gone_and_come(erp, "score", "points")
+
+
+def test_A28_a_column_renamed_while_a_new_one_takes_its_old_name_is_not_seen_and_every_row_is_a_U(erp):
+    people(erp)  # a known limit: the rows are right, only the history of two columns is joined wrongly
+    erp.source("alter table people rename column city to town; alter table people add column city text; "
+               "update people set city = upper(town)")
+    again(erp)
+    assert columns(erp, PEOPLE) == ["id", "name", "city", "member", "town"]
+    assert rows(erp.target, f"select * from {PEOPLE}") == rows(erp.source, "select id, name, city, member, town "
+                                                                           "from people")
+    assert erp.target(f"select _op, count(*) from {PEOPLE}__log {THIS_RUN} group by _op") == [("U", 30)]
+    assert [r[:2] for r in erp.target(RECORD)] == [("I", "town")]
+    log_replays(erp, PEOPLE)
+
+
+def test_A31_a_name_whose_case_alone_changes_is_another_name_and_proven_like_any(erp):
+    people(erp)
+    erp.source('alter table people rename column city to "City"')
+    again(erp)
+    assert columns(erp, PEOPLE) == ["id", "name", "City", "member"]
+    assert erp.target(f"select count(*) from {PEOPLE}__log {THIS_RUN}") == [(0,)]
+    assert [r[:3] for r in erp.target(RECORD)] == [("I", "City", "city"), ("D", "city", None)]
+    log_replays(erp, PEOPLE)
