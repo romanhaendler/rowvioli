@@ -73,10 +73,55 @@ said under Comments.
 
 ## Acceptance criteria
 
-- [ ] 1 to 11: a test each, seen red first, at the existing seam (`tests/odbc/run.sh` for ODBC); a sentence under
+- [x] 1 to 11: a test each, seen red first, at the existing seam (`tests/odbc/run.sh` for ODBC); a sentence under
       Comments for any that cannot be tested there.
-- [ ] `docs/connectors.md` and `CHANGELOG.md` say what changed; no new entry in `docs/open-points.md` (an
+- [x] `docs/connectors.md` and `CHANGELOG.md` say what changed; no new entry in `docs/open-points.md` (an
       inherent limit of a driver goes to `docs/connectors.md` and decision 55).
-- [ ] The whole suite and `tests/odbc/run.sh` pass.
+- [x] The whole suite and `tests/odbc/run.sh` pass.
 
 ## Comments
+
+Built on `sc-16` (Opus), each item test-first, the red seen:
+
+1. `odbc.py` reads every float as a double (`map_schema`): psqlODBC describes `float8` as `Float { precision: 17 }`,
+   arrow-odbc takes ≤ 24 for a single, and nothing in the schema tells it from a `real` (both arrive `float32`). A
+   `real` now arrives as `double precision`; an existing mirror widens by itself (same family). The driver's own
+   losses are in docs/connectors.md and decision 55, measured through psqlODBC: bool as text (`BoolsAsChar=0`, tested),
+   `timestamptz` in the session's zone (`ConnSettings=SET TIME ZONE 'UTC'`, tried by hand, not in a test), a date's
+   ±infinity as the day of the run, a timestamp's infinity as 9999-12-31 23:59:59, -infinity as the year -9999, a BC
+   date as AD, a BC timestamp a year early, a year beyond 9999 as another date. No setting avoids these.
+2. `load.py`, `stage()` only (outside ticket 15's functions), 9 lines in its `except`: a class-22 error whose context
+   is `COPY _stage, line N, column X` (binary COPY, no value) raises `<source table>: column X has a value its type in
+   the target, <type>, cannot hold (SQLSTATE …); cast it in a view of the source or change it there`. It also changed
+   the reasons of a NUL in a list (`tests/test_file.py`, 22021) and of item 10 (22P05). For the merge with sc-15:
+   the `except Exception:` of `c.adbc_ingest("_stage", …)` became `except Exception as e:` with the block after
+   `t["step"] = "staging the rows"`.
+3. `postgres.py` fails a timestamp's `infinity` (also in an array) naming the column: the driver reads it as Postgres's
+   largest number moved to Arrow's epoch and wrapped, and checks the subtraction on the way back; no Arrow unit lets it
+   write `infinity`. `-infinity` and a date's `infinity` load (tested).
+4. An Excel cell under `columns` with `date…`/`timestamp…` that holds a number of days (0 to 2958466) is turned into
+   its date and time, to the millisecond, before the cast. Not built: the 1904 date system (documented, 1462 days
+   early); unnamed date cells stay their number (a change would rewrite every existing Excel mirror). The 19-digit
+   integer of x2.py was already rounded in the file (openpyxl wrote `1.234567890123457e+18`); DuckDB reads the cell's
+   text exactly, documented.
+5. A Parquet struct, map (also in a list) or list of lists arrives as `jsonb` (`to_json` in DuckDB), one rule with the
+   JSON reader.
+6. `init` takes `pg_advisory_lock(hashtext('_rowvioli'))` before it reads the version. Tested on a version-3 target
+   (both inits blocked behind a held lock on `runs`); the empty-target race (`pg_namespace_nspname_index`) is the
+   same lock but not tested: nothing can hold `CREATE SCHEMA` back to make it happen on demand.
+7. The step runs under `SET LOCAL ROLE <owner of _rowvioli.runs>`.
+8. A role that is not a member of that owner is refused before the step with the owner's name; Ctrl+C (57014) on
+   `init` says `init was interrupted; nothing was changed` (cli.py, `init` only, not `apply --init`).
+9. docs/operation.md: several lines a second, a claimed run publishes, no way back but a dump. Documentation only:
+   no test.
+10. The target's `SESSION` sets `client_encoding` to UTF8, and so does the `postgres` connector's session (a LATIN1
+    source failed the run with 22021; found on the way, tested).
+11. `contract.connector` adds `pip install "rowvioli[<type>]" installs it` to a `ModuleNotFoundError` of a shipped
+    connector with an extra. Tested for `file` in `run` and `list` (a package that shadows DuckDB); `odbc` and
+    `rest` take the same line, untested; `work` runs the same run process as `run`.
+
+Found on the way, not built (outside the items; for the owner): a Parquet `uint64` above 2^63 arrives wrapped as a
+negative `bigint` (the driver's cast, `18446744073709551615` → `-1`, run `ok`), and a Parquet `decimal` of more than 38
+digits is read by DuckDB as `DOUBLE`, rounded, with the run `ok`.
+
+Suites at c17e345: the whole suite 787 passed, 21 skipped (8 min 44 s); `tests/odbc/run.sh` 17 passed, 1 skipped.
