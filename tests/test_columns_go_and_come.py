@@ -232,6 +232,24 @@ def test_A12_a_column_back_in_a_wider_type_of_its_family_keeps_the_logs_type_whi
     log_replays(erp, "raw_erp.prices")
 
 
+@pytest.mark.parametrize("type, value", [("timestamp", "2024-01-01 12:30"), ("numeric", "1.5")])
+def test_A12_a_column_back_in_its_family_with_a_value_the_logs_type_would_change_stops_and_changes_nothing(
+        erp, type, value):
+    erp.source("create table events (id int primary key, day date, n integer)")
+    erp.source("insert into events values (1, '2024-01-01', 1)")
+    apply(erp, definition(erp, '"public.events" = { key = ["id"] }\n'))
+    ok(erp)
+    column = "day" if type == "timestamp" else "n"
+    erp.source(f"alter table events drop column {column}")
+    again(erp)
+    erp.source(f"alter table events add column {column} {type}")
+    erp.source(f"update events set {column} = '{value}'")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    # never is a value cut to the change log's type (decision 5 will widen it instead)
+    assert failed(erp).startswith(f"column {column} holds a value that its type ")
+    assert columns(erp, "raw_erp.events") == ["id", "n" if column == "day" else "day"]
+
+
 def test_A19_a_new_source_column_named_like_a_retired_one_stops_until_a_person_renames_the_log_column(erp):
     ok(erp)
     erp.source("alter table customers drop column city")

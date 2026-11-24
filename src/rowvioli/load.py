@@ -130,9 +130,10 @@ def check(conn, t, staged, mirror, log_columns):
         if family(logged[name]) == family(type):
             continue
         new = f"{name}__{t['run']}"
-        if new in logged or len(new.encode()) > 63:
+        taken = new in logged or new in types  # by the source too, in this very run
+        if taken or len(new.encode()) > 63:
             raise Exception(f"column {name} of the change log is to keep its old values under {new}, a name that is "
-                            + ("taken" if new in logged else "longer than 63 bytes") + ": " + way.format(quote(name)))
+                            + ("taken" if taken else "longer than 63 bytes") + ": " + way.format(quote(name)))
         plan["retired"][name] = new
     key = t["key"] or []
     drop = (f"drop it with its history view (DROP TABLE {t['log_table']} CASCADE), or rename both"
