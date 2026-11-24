@@ -205,7 +205,7 @@ def check(conn, t, staged, mirror, log_columns):
         new = f"{name}__{t['run']}"
         if new in logged or new in types:  # by the source too, in this very run
             raise Exception(f"column {name} of the change log is to keep its old values under {new}, a name that is "
-                            "taken: the next run keeps them under its own number, nothing is to be done")
+                            "taken: a later run keeps them under its own number, nothing is to be done")
         if len(new.encode()) > 63:
             raise Exception(f"column {name} of the change log is to keep its old values under {new}, a name that is "
                             "longer than 63 bytes: " + way.format(quote(name)))

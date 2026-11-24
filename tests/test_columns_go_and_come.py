@@ -336,13 +336,31 @@ def test_a_retired_name_the_source_takes_stops_once_and_the_next_run_retires_und
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp).replace("***", "x")  # the source's password is x, and the reason hides it
     assert erp.target("select max(run) from _rowvioli.runs") == [(run,)]
-    assert reason ==(f"column city of the change log is to keep its old values under city__{run}, a name that is "
-                      "taken: the next run keeps them under its own number, nothing is to be done"), reason
+    assert reason == TAKEN.format(run), reason
     assert erp.target("select count(*) from raw_erp.customers__log where city = 'Bonn'") == [(1,)]
     again(erp)
     assert erp.target(f"select count(*) from raw_erp.customers__log where city__{run + 1} = 'Bonn'") == [(1,)]
     assert erp.target(f"select count(*) from raw_erp.customers where city__{run} = 'new'") == [(3,)]
     assert erp.target(f"select was from _rowvioli.columns where \"column\" = 'city__{run + 1}'") == [("city",)]
+    log_replays(erp)
+
+
+TAKEN = ("column city of the change log is to keep its old values under city__{}, a name that is taken: a later run "
+         "keeps them under its own number, nothing is to be done")
+
+
+def test_a_retired_name_taken_for_the_next_run_too_stops_until_a_run_whose_name_is_free(erp):
+    ok(erp)  # H2: the source has amt__2 and amt__3
+    erp.source("alter table customers drop column city")
+    again(erp)
+    [(run,)] = erp.target("select max(run) + 1 from _rowvioli.runs")
+    erp.source(f"alter table customers add column city__{run} text, add column city__{run + 1} text, "
+               "add column city integer")
+    for number in (run, run + 1):
+        erp.target("update _rowvioli.tables set requested_at = now()")
+        assert failed(erp).replace("***", "x") == TAKEN.format(number)  # the source's password x is hidden
+    again(erp)
+    assert erp.target(f"select count(*) from raw_erp.customers__log where city__{run + 2} = 'Bonn'") == [(1,)]
     log_replays(erp)
 
 
