@@ -297,7 +297,12 @@ def test_a_table_without_a_key_is_emptied_the_same_way(erp):
     ('my "secret": value', "n::int", "22P02"), ("3000000000", "n::int", "22003"),
     # Postgres's own messages that show the value unquoted or as a name: date field value out of range: 2000-13-01,
     # relation "3000000000" does not exist
-    ("3000000000", "make_date(2000, length(n) + 3, 1)", "22008"), ("3000000000", "n::regclass", "42P01")])
+    ("3000000000", "make_date(2000, length(n) + 3, 1)", "22008"), ("3000000000", "n::regclass", "42P01"),
+    # a syntax error of a row's value, which Postgres quotes in class 42 too: syntax error in tsquery: "my secret 4711",
+    # syntax error at or near "4711", improper relation name (too many dotted names): a.b.c.secret.e, invalid name
+    # syntax; of class 42 only a missing right is shown
+    ("my secret 4711", "to_tsquery(n)", "42601"), ("secret 3000000000", "n::regtype::text", "42601"),
+    ("a.b.c.secret.e", "n::regclass", "42601"), ('"secret 3000000000', "n::regclass", "42602")])
 def test_a_value_in_the_sources_message_is_withheld_by_its_sqlstate(erp, value, column, state):  # decision 54, item 8
     erp.source("create table texts (k int, n text)")
     erp.source("insert into texts values (1, %s)", [value])

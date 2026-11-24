@@ -100,9 +100,11 @@ ODBC = "ODBC emitted an error calling 'SQLFetch': State: {}, Native error: 1, Me
     ("HY000", "[MySQL][ODBC 9.1(w) Driver][mysqld-9.1.0]Incorrect integer value: 'Secret' for column 'n' at row 1", None),
     ("\0\0\0\0\0", "Secret is no number", None),
     ("P0001", "ERROR: bad row Secret;\nError while executing the query", None),
-    # names alone: a refused login, a table that is not there in SQL Server, the driver manager's own
+    # a table that is not there: of class 42 only a missing right is shown, and the reason names the table
+    ("42S02", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Invalid object name 'dbo.orders'.", None),
+    # names alone: a refused login, a missing right, the driver manager's own
     ("28000", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Login failed for user 'reader'.", True),
-    ("42S02", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Invalid object name 'dbo.orders'.", True),
+    ("42501", "ERROR: permission denied for table orders", True),
     ("IM002", "[unixODBC][Driver Manager]Data source name not found and no default driver specified", True)])
 def test_an_odbc_drivers_message_is_shown_by_its_sqlstate_alone(state, message, shown):  # decision 54, item 8
     said = reason_line([], RuntimeError(ODBC.format(state) + message), "reading the source", "dbo.orders")

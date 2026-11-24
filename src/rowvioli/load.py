@@ -1131,18 +1131,18 @@ CONSTRAINT = re.compile(r'duplicate key value violates unique constraint "[^"]*"
 
 
 # the classes of SQLSTATE whose messages hold names and no value of a row, and which an operator needs: a lost
-# connection, a feature, a transaction's state, a refused login, a dependent object, a deadlock, a missing right, a
-# syntax, resources such as a full disk, a limit, an object in use, a cancel, a system error, and ODBC's driver manager
-# (a data source not found). A constraint's message (class 23) is known by its words (CONSTRAINT)
-NAMES = {"08", "0A", "25", "28", "2B", "40", "42", "53", "54", "55", "57", "58", "IM"}
-# but an object that does not exist, whose name a cast of a row's value makes (`relation "Anna" does not exist` of
-# ::regclass in a view or a check constraint, a column, a type or role, a function)
-UNDEFINED = {"42P01", "42703", "42704", "42883"}
+# connection, a feature, a transaction's state, a refused login, a dependent object, a deadlock, resources such as a
+# full disk, a limit, an object in use, a cancel, a system error, and ODBC's driver manager (a data source not found).
+# A constraint's message (class 23) is known by its words (CONSTRAINT)
+NAMES = {"08", "0A", "25", "28", "2B", "40", "53", "54", "55", "57", "58", "IM"}
+# of class 42 only the codes whose message cannot hold a row's value: a cast of one makes a name (`relation "Anna" does
+# not exist` of ::regclass) or a syntax error (`syntax error in tsquery: "…"`). A missing right names a real object
+SHOWN = {"42501"}
 
 
 def withheld(e, step, source):
     """Decision 54, item 8, the one rule for a database's message, of the source or the target, through ADBC or ODBC:
-    it reaches a reason only where the SQLSTATE the driver gives says that it holds names alone (NAMES but UNDEFINED),
+    it reaches a reason only where the SQLSTATE the driver gives says that it holds names alone (NAMES, SHOWN),
     or as Postgres's own message of a violated constraint, and never from under a consumer's function. Every other is
     withheld: a value's (class 22), a consumer's RAISE or ASSERT (P0001, P0004) or a function in C (it names no frame),
     a class the program does not know, a driver's HY000 or none. Returns the reason, which names what the program
@@ -1155,7 +1155,7 @@ def withheld(e, step, source):
     state = details.get("PG_DIAG_SQLSTATE") or ((odbc := ODBC_STATE.search(text)) and odbc[1])
     function = FRAME.search(details.get("PG_DIAG_CONTEXT") or text.partition("\nCONTEXT:  ")[2])
     message = details.get("PG_DIAG_MESSAGE_PRIMARY") or WRAPPER.sub("", text).split("\n")[0]
-    if CONSTRAINT.fullmatch(message) or not (function or state and (state[:2] not in NAMES or state in UNDEFINED)):
+    if CONSTRAINT.fullmatch(message) or not (function or state and state[:2] not in NAMES and state not in SHOWN):
         return None
     who = f"function {function[1]}" if function else "a function" if state in ("P0001", "P0004") else "a statement"
     where = "source" if step == "reading the source" else "target"
