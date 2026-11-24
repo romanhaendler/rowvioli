@@ -209,7 +209,7 @@ def test_a_run_that_changes_columns_notifies_on_commit_and_one_that_fails_does_n
                "for each row execute function no_koeln()")
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert erp.run("run").returncode == 1
-    assert "no Köln" in erp.target("select reason from _rowvioli.tables")[0][0]
+    assert "function no_koeln() raised an error" in erp.target("select reason from _rowvioli.tables")[0][0]
     assert heard(listener) == []
     assert erp.target("select count(*) from _rowvioli.columns where \"column\" = 'fax'") == [(0,)]
     listener.close()
