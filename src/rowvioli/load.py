@@ -92,8 +92,8 @@ def load(conn, t):
     plan = check(conn, t, staged, mirror, log_columns)
     t["step"] = "comparing with the mirror"
     counts = diff(conn, t, staged, mirror, plan) if t["key"] else None
-    if mirror:
-        check_delete_share(conn, t, rows_read, counts)
+    if mirror:  # under another key the mirror is replaced as a whole, and only its shrinkage counts
+        check_delete_share(conn, t, rows_read, None if plan["key"] else counts)
     t["step"] = "publishing"
     return publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, plan)
 
@@ -101,11 +101,13 @@ def load(conn, t):
 def check(conn, t, staged, mirror, log_columns):
     """Step 4 (docs/loading.md "Checks before publishing") and the plan (decision 12): what the run does to the columns
     besides adding the new ones, which publish adds (decision 2). Every stop a rule makes is here, before anything is
-    written. The plan: `gone`, the mirror's columns that leave it and stay in the change log (decision 3), and
+    written. The plan: `gone`, the mirror's columns that leave it and stay in the change log (decision 3),
     `retired`, the change log's columns that keep their values under another name as one of another family comes
-    (decision 2), old name to new."""
+    (decision 2), old name to new, and `key` when the mirror's primary key is not the definition's (decision 7): the
+    primary key it `was`, whether the change is `by` the definition or the primary key was changed by hand and is put
+    back, and whether a change `log` exists."""
     types, logged = dict(staged), dict(log_columns)
-    plan = {"gone": [], "retired": {}}
+    plan = {"gone": [], "retired": {}, "key": {}}
     for name, type in mirror:
         if name not in types:
             if not (t["key"] and t["log"] and log_columns):
@@ -140,21 +142,29 @@ def check(conn, t, staged, mirror, log_columns):
             + (" with the mirror" if mirror else ""))
     if mirror:
         primary_key = [k for (k,) in sql(conn, PRIMARY_KEY, [t["mirror"]])]
-        if primary_key and not key:
+        if primary_key and not key and log_columns:  # the program does not end a change log
             raise Exception(f"the definition has no key any more, the mirror's primary key is {primary_key}: "
                             "put the key back, or give the table another target_table; to load it without a key, "
-                            + (f"drop the change log {t['name']}__log with its history view "
-                               f"(DROP TABLE {t['log_table']} CASCADE) and the mirror" if log_columns
-                               else "drop the mirror"))
-        if primary_key != key:
-            raise Exception(f"the key {key} differs from the mirror's primary key {primary_key}"
-                            + (f"; the change log {t['name']}__log exists: {drop}" if log_columns else ""))
+                            f"drop the change log {t['name']}__log with its history view "
+                            f"(DROP TABLE {t['log_table']} CASCADE) and the mirror")
+        if set(primary_key) != set(key):  # the same columns in another order are the same key (story 20)
+            # decision 7: the key the last run recorded is the definition's, so a person changed the primary key
+            recorded = sql(conn, 'SELECT "column", "key" FROM _rowvioli.columns WHERE id = $1', [t["id"]])
+            hand = bool(recorded) and {c for c, k in recorded if k is not None} == set(key)
+            plan["key"] = {"was": primary_key, "by": "hand" if hand else "definition", "log": bool(log_columns)}
     # a change log that exists is complete: a run that would leave it behind its mirror, or lay a new mirror's
     # history over it, fails
     why = ("this run would not write to it (log = false or no key)" if not (key and t["log"])
            else "its mirror is missing" if not mirror else None)
     if log_columns and why:
         raise Exception(f"the change log {t['name']}__log exists and {why}: {drop}")
+    # decision 9: one branch over a change log written under two keys gives wrong rows, so the record says them
+    if log_columns and stretches(conn, t) is None and (noted := sql(
+            conn, """SELECT substr(note, strpos(note, $2) + length($2)) FROM _rowvioli.columns__log WHERE id = $1
+                      AND strpos(note, $2) > 0 ORDER BY _loaded_at DESC LIMIT 1""", [t["id"], KEYS_NOTE])):
+        raise Exception(f"the comment on column _op of the change log {t['name']}__log, which says the keys it was "
+                        "written under, is missing or unreadable, and the key has changed: put it back, "
+                        f"COMMENT ON COLUMN {t['log_table']}._op IS '{noted[0][0].replace(chr(39), chr(39) * 2)}'")
     if key:
         # the diff, the change log and the history view carry them beside the table's columns
         for name in ["_op", "_run", "_loaded_at", "_valid_from", "_valid_to"] if t["log"] else ["_op"]:
@@ -319,8 +329,10 @@ def diff(conn, t, staged, mirror, plan):
     m = ", ".join(f"m.{quote(c)}" if c in had else f"NULL::{type}" for c, type in columns)
     key = [quote(k) for k in t["key"]]
     on = " AND ".join(f"s.{k} = m.{k}" for k in key)
-    if not mirror:
-        sql(conn, f"CREATE TEMP TABLE _diff AS SELECT 'I'::text AS _op, {s} FROM _stage s")
+    if not mirror or plan["key"].get("by") == "definition":  # under another key: every old row goes, every new comes
+        old = f"SELECT 'D'::text, {m} FROM {t['mirror']} m UNION ALL " if mirror else ""
+        sql(conn, f"CREATE TEMP TABLE _diff (_op, {', '.join(quote(c) for c, _ in columns)}) AS "
+                  f"{old}SELECT 'I'::text, {s} FROM _stage s")
     else:
         sql(conn, f"""CREATE TEMP TABLE _diff (_op, {', '.join(quote(c) for c, _ in columns)}) AS
             SELECT 'D'::text AS _op, {m} FROM {t['mirror']} m WHERE NOT EXISTS (SELECT FROM _stage s WHERE {on})
@@ -357,7 +369,7 @@ def publish(conn, t, staged, delivered, mirror, log, rows_read, counts, plan):
         sql(conn, f"CREATE TABLE {t['mirror']} (LIKE _stage{key})")
     else:
         widen(conn, t["mirror"], staged, mirror)
-    if t["key"]:
+    if t["key"] and plan["key"].get("by") != "definition":
         on = " AND ".join(f"d.{quote(k)} = m.{quote(k)}" for k in t["key"])
         kept = only = ""
         if plan["gone"]:  # a row that differs only in a column that went keeps its place in the mirror (story 5)
@@ -366,12 +378,14 @@ def publish(conn, t, staged, delivered, mirror, log, rows_read, counts, plan):
             only = f" AND NOT EXISTS (SELECT FROM {t['mirror']} m WHERE {on})"
         sql(conn, f"DELETE FROM {t['mirror']} m USING _diff d WHERE d._op IN ('D', 'U') AND {on}{kept}")
         sql(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _diff d WHERE _op IN ('I', 'U'){only}")
-        if t["log"]:  # the change log's columns under the names the plan gave them
-            write_log(conn, t, staged, [(plan["retired"].get(n, n), type) for n, type in log], logged)
-    else:  # without a key: replaced as a whole, no change log
+    else:  # without a key, or under another key (decision 7): replaced as a whole
         deleted = rowcount(conn, f"DELETE FROM {t['mirror']}")
         counts = {"inserted": rowcount(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _stage"),
                   "updated": 0, "deleted": deleted}
+    if t["key"] and plan["key"]:  # once the old rows are gone, which may hold the new key twice
+        sql(conn, f"ALTER TABLE {t['mirror']} ADD PRIMARY KEY ({', '.join(quote(k) for k in t['key'])})")
+    if t["key"] and t["log"]:  # the change log's columns under the names the plan gave them
+        write_log(conn, t, staged, [(plan["retired"].get(n, n), type) for n, type in log], logged)
     record_columns(conn, t, delivered, mirror, log, changes)
     # the table lock guards the table, not its name, which an apply may have given to another table meanwhile
     # (decision 53). Last, so the row lock that holds off an apply until COMMIT is taken after every wait on a mirror
@@ -430,12 +444,62 @@ def carry_out(conn, t, plan):
     for old, new in plan["retired"].items():
         sql(conn, f"ALTER TABLE {t['log_table']} RENAME COLUMN {quote(old)} TO {quote(new)}")
         changes[new] = {"was": old}
+    # decision 9: the comment on _op names the key columns of every stretch, the retired ones under their new names
+    if plan["retired"] and (keys := stretches(conn, t)):
+        if (named := [{**k, "key": [plan["retired"].get(c, c) for c in k["key"]]} for k in keys]) != keys:
+            note = KEYS_NOTE + keys_of_log(conn, t, named)
+            for old in {c for k in keys for c in k["key"]} & plan["retired"].keys():
+                changes[plan["retired"][old]]["note"] = note
+    if plan["key"]:  # decision 7: publish adds the new primary key once the rows are in
+        was, key, by = plan["key"]["was"], t["key"] or [], plan["key"]["by"]
+        note = (f"the primary key ({', '.join(was)}) was put back to the definition's ({', '.join(key)})"
+                if by == "hand" else None)
+        if was:
+            [(name,)] = sql(conn, "SELECT conname FROM pg_constraint WHERE conrelid = $1::regclass AND contype = 'p'",
+                            [t["mirror"]])
+            alter(conn, f"the key of {t['name']} would change from ({', '.join(was)}) to ({', '.join(key)})",
+                  f"ALTER TABLE {t['mirror']} DROP CONSTRAINT {quote(name)}")
+        if loose := [c for c in was if c not in key]:  # Postgres leaves NOT NULL behind, also where LIKE copied it
+            for table in [t["mirror"], t["log_table"]] if plan["key"]["log"] else [t["mirror"]]:
+                sql(conn, f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(c)} DROP NOT NULL" for c in loose))
+        if by == "definition" and plan["key"]["log"]:  # a stretch of the change log begins under the new key
+            [(now,)] = sql(conn, "SELECT to_json(now()) #>> '{}'")  # ISO 8601, whatever the DateStyle
+            keys = (stretches(conn, t) or [{"key": was}]) + [{"from": now, "key": key}]
+            note = KEYS_NOTE + keys_of_log(conn, t, keys)
+        changes.update({c: {"by": by, "note": note} for c in {*was, *key}})
     for name in plan["gone"]:
         [(note,)] = sql(conn, DROPS_WITH, [t["mirror"], name])
         changes[name] = {"note": f"{note} went with it" if note else None}
         alter(conn, f"column {name} is gone from the source and would leave the mirror {t['name']}",
               f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
     return changes
+
+
+KEYS_NOTE = "the change log's keys: "  # the note in the columns table of a change of key, before the comment's text
+# (the reader's versions may come first)
+
+
+def stretches(conn, t):
+    """Decision 9: the keys the change log was written under, as the comment on its column _op says them, a list of
+    {"key": [...]} with "from", the moment it began, on every one but the first. None without a readable comment: such
+    a change log has had one key."""
+    [(text,)] = sql(conn, "SELECT col_description(to_regclass($1), (SELECT attnum FROM pg_attribute WHERE attrelid "
+                          "= to_regclass($1) AND attname = '_op'))", [t["log_table"]])
+    try:
+        keys = json.loads(text)
+        if keys and all(k["key"] and all(isinstance(c, str) for c in k["key"]) and isinstance(k.get("from", ""), str)
+                        and ("from" in k) == (i > 0) for i, k in enumerate(keys)):
+            return keys
+    except Exception:  # anything but the list it should be: unreadable
+        pass
+    return None
+
+
+def keys_of_log(conn, t, keys):
+    """Writes `keys` as the comment on the change log's column _op; returns the text."""
+    text = json.dumps(keys)
+    sql(conn, f"COMMENT ON COLUMN {t['log_table']}._op IS '{text.replace(chr(39), chr(39) * 2)}'")
+    return text
 
 
 def alter(conn, why, statement):
@@ -453,14 +517,17 @@ def alter(conn, why, statement):
 
 def write_log(conn, t, staged, log, names):
     """After the mirror is published, in the same transaction: a log that exists gets the diff, a new one begins
-    with the whole mirror, so that replaying a log from its first row always gives the mirror. The history view is
-    created when missing and replaced when the log got a column; otherwise it is not touched, so takes no lock."""
+    with the whole mirror, so that replaying a log from the last change of key always gives the mirror. The history
+    view is created when missing and replaced when the log got a column; otherwise it is not touched, so takes no
+    lock."""
     if log:
         widened = widen(conn, t["log_table"], staged, log)
         widened = follow(conn, t, log) or widened
         rows = f"SELECT _op, {names} FROM _diff"
     else:
         sql(conn, f"CREATE TABLE {t['log_table']} (_run bigint, _op text, _loaded_at timestamptz, LIKE {t['mirror']})")
+        # its one key said, so that a change of key the columns table noted for an earlier change log does not stop it
+        keys_of_log(conn, t, [{"key": t["key"]}])
         rows = f"SELECT 'I', {names} FROM {t['mirror']}"
     # now() is the transaction's moment, the one that goes into tables.loaded_at
     sql(conn, f"INSERT INTO {t['log_table']} (_run, _loaded_at, _op, {names}) SELECT $1, now(), * FROM ({rows}) r",
@@ -469,15 +536,24 @@ def write_log(conn, t, staged, log, names):
         return
     columns = ", ".join(quote(c) for c, _ in sql(conn, COLUMNS, [t["log_table"]])
                         if c not in ("_run", "_op", "_loaded_at"))
-    key = ", ".join(quote(k) for k in t["key"])
-    # _valid_to is the next version's moment, computed before the D rows are left out; the table's columns come
-    # last so that a new one can be appended by replacing the view
-    sql(conn, f"""CREATE OR REPLACE VIEW {t['history']} AS
+    # decision 8: a branch per key, over its stretch of the change log: from its I rows at the moment it began, up to
+    # the D rows at the moment the next began
+    keys = stretches(conn, t) or [{"key": t["key"]}]
+    moments = [f"'{k['from'].replace(chr(39), chr(39) * 2)}'::timestamptz" for k in keys[1:]]
+    branches = []
+    for i, k in enumerate(keys):
+        cut = ([f"(_loaded_at > {moments[i - 1]} OR _loaded_at = {moments[i - 1]} AND _op = 'I')"] if i else []) + \
+              ([f"(_loaded_at < {moments[i]} OR _loaded_at = {moments[i]} AND _op = 'D')"] if i < len(moments) else [])
+        # _valid_to is the next version's moment, computed before the D rows are left out; the table's columns come
+        # last so that a new one can be appended by replacing the view
+        branches.append(f"""
         SELECT _valid_from, _valid_to, {columns} FROM (
             SELECT _op, _loaded_at AS _valid_from,
-                   lead(_loaded_at) OVER (PARTITION BY {key} ORDER BY _loaded_at) AS _valid_to, {columns}
-              FROM {t['log_table']}) h
+                   lead(_loaded_at) OVER (PARTITION BY {', '.join(quote(c) for c in k['key'])} ORDER BY _loaded_at)
+                   AS _valid_to, {columns}
+              FROM {t['log_table']}{' WHERE ' + ' AND '.join(cut) if cut else ''}) h
          WHERE _op <> 'D'""")
+    sql(conn, f"CREATE OR REPLACE VIEW {t['history']} AS" + "\n        UNION ALL".join(branches))
 
 
 def follow(conn, t, log):
@@ -508,7 +584,8 @@ def record_columns(conn, t, delivered, mirror, log, changes):
                 **{n: (type, True) for n, type in mirror}}
     found = state(mirror, log)
     now = state(sql(conn, COLUMNS, [t["mirror"]]), sql(conn, COLUMNS, [t["log_table"]]))
-    key = {k: i + 1 for i, k in enumerate(t["key"] or [])}
+    # the primary key's order, not the definition's: the same columns in another order are the same key (story 20)
+    key = {k: i + 1 for i, (k,) in enumerate(sql(conn, PRIMARY_KEY, [t["mirror"]]))}
     delivered = dict(delivered)
     with conn.cursor() as c:
         c.execute("""SELECT target_schema, target_table, "column", type, source_type, "key", mirror, was, "by", note,
@@ -527,7 +604,8 @@ def record_columns(conn, t, delivered, mirror, log, changes):
             row.update(op="I", by="found" if not old else "source" if name not in found else "hand")
         else:
             # a mirror's column the change log lost by hand: the run adds it again, the state alone shows nothing
-            hand = found.get(name) != (before["type"], before["mirror"]) or bool(log) and name not in dict(log)
+            hand = found.get(name) != (before["type"], before["mirror"]) or bool(log) and name not in dict(log) \
+                or changes.get(name, {}).get("by") == "hand"  # a primary key put back: the record knew the key
             if not hand and all(before[f] == row[f] for f in ("type", "source_type", "key", "mirror")):
                 continue
             row.update(op="U", by="hand" if hand else "source", was=before["was"])

@@ -19,6 +19,8 @@ CREATE TABLE _rowvioli.columns (
     PRIMARY KEY (target_schema, target_table, "column"));
 
 CREATE TABLE _rowvioli.columns__log (_run bigint, _op text, _loaded_at timestamptz, LIKE _rowvioli.columns);
+-- a run whose change log lost its comment on _op looks here for the last change of key (load.check)
+CREATE INDEX ON _rowvioli.columns__log (id);
 
 CREATE VIEW _rowvioli.columns__history AS
 SELECT _valid_from, _valid_to, target_schema, target_table, "column", type, source_type, "key", mirror, was, "by", note, id
