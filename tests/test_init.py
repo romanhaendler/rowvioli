@@ -4,6 +4,7 @@ import re
 import psycopg
 import pytest
 
+from conftest import until
 from test_checks import failed
 from test_columns_go_and_come import log_replays
 from test_history import LOADED_AT, LOG_FALSE, MIRROR, again, at
@@ -326,3 +327,20 @@ def test_a_change_log_from_before_the_upgrade_that_fits_neither_key_stops_with_t
     assert reason.startswith("the primary key of raw_erp.customers is (customer_no, name), the definition's key is "
                              "(customer_no), and nothing in the target tells"), reason
     assert """'[{"key": ["customer_no"]}]'""" in reason and """'[{"key": ["customer_no", "name"]}]'""" in reason
+
+
+WAITING = "select count(*) from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'"
+
+
+def test_two_inits_at_once_both_end_as_on_a_ready_target(rv):
+    """Init containers on several replicas: the one that comes second waits for the first and finds version 4."""
+    rv.run("init")
+    version_3(rv)
+    with psycopg.connect(rv.target_url) as held:  # the first step waits here, so that both have started
+        held.execute("lock table _rowvioli.runs in access exclusive mode")
+        inits = [rv.start("init") for _ in range(2)]
+        until(lambda: rv.target(WAITING)[0][0] == 2)
+    out = [p.communicate(timeout=30) + (p.returncode,) for p in inits]
+    assert [code for _, _, code in out] == [0, 0], out
+    assert rv.target("select schema_version from _rowvioli.meta") == [(4,)]
+

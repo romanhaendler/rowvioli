@@ -84,6 +84,8 @@ def connect(init=False, versioned=True, pooler=True):
         if not sql(conn, "SELECT to_regclass('_rowvioli.status') IS NOT NULL")[0][0]:
             raise SystemExit(NO_SCHEMA)
         return conn
+    if init:  # a second init waits for the first and reads the version it left (init containers on replicas)
+        sql(conn, "SELECT pg_advisory_lock(hashtext('_rowvioli'))")
     version = None
     if sql(conn, "SELECT to_regclass('_rowvioli.meta') IS NOT NULL")[0][0]:
         version = sql(conn, "SELECT schema_version FROM _rowvioli.meta")[0][0]
@@ -96,6 +98,8 @@ def connect(init=False, versioned=True, pooler=True):
                   "these rights on its new objects, which the program does not grant (worker stands for that role):\n"
                   + "\n".join(grants for _, grants in MIGRATIONS[version - 3:]))
         version = SCHEMA_VERSION
+    if init:
+        sql(conn, "SELECT pg_advisory_unlock(hashtext('_rowvioli'))")
     if version is None:
         raise SystemExit(NO_SCHEMA)
     if version != SCHEMA_VERSION:
