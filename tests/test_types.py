@@ -155,6 +155,17 @@ def test_a_table_stuck_on_a_changed_type_resolves_with_the_first_run(erp):  # st
     log_replays(erp, "raw_erp.amounts")
 
 
+@pytest.mark.parametrize("before, wide", [("integer", "bigint"), ("date", "timestamp without time zone"),
+                                          ("real", "double precision")])
+def test_a_type_of_any_family_widened_by_hand_in_the_mirror_is_followed_in_the_change_log(erp, before, wide):
+    amounts(erp, before, "(1, '1')" if before != "date" else "(1, '2024-01-01')")
+    erp.target(f"alter table raw_erp.amounts alter a type {wide}")  # decision 20
+    again(erp)
+    assert types(erp, "a") == [wide, wide]
+    assert erp.target(RECORD, ["a"]) == [(wide, before, "hand")]
+    log_replays(erp, "raw_erp.amounts")
+
+
 def parquet(rv, values, type):
     pq.write_table(pa.table({"id": pa.array([1, 2], pa.int32()), "n": pa.array(values, type)}),
                    rv.dir / "files" / "counts.parquet")

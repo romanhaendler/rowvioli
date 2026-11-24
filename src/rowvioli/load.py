@@ -487,7 +487,7 @@ def write_log(conn, t, staged, log, names):
     created when missing and replaced when the log got a column; otherwise it is not touched, so takes no lock."""
     if log:
         widened = widen(conn, t["log_table"], staged, log)
-        widened = follow(conn, t, log) or widened
+        widened = follow(conn, t) or widened
         rows = f"SELECT _op, {names} FROM _diff"
     else:
         sql(conn, f"CREATE TABLE {t['log_table']} (_run bigint, _op text, _loaded_at timestamptz, LIKE {t['mirror']})")
@@ -510,21 +510,19 @@ def write_log(conn, t, staged, log, names):
          WHERE _op <> 'D'""")
 
 
-def follow(conn, t, log):
-    """Decision 20: a numeric type that a person widened in the mirror is followed in the change log, so that what the
-    mirror holds fits it. The history view reads the column, so it goes first and the caller creates it again. Says
-    whether it altered one."""
-    def digits(type):  # before and after the point; unconstrained numeric holds all
-        m = re.fullmatch(r"numeric\((\d+),(\d+)\)", type)
-        return (int(m[1]) - int(m[2]), int(m[2])) if m else (float("inf"),) * 2 if type == "numeric" else None
+def follow(conn, t):
+    """Decision 20: a type that a person widened in the mirror is followed in the change log, so that what the mirror
+    holds fits it. The history view reads the column, so it goes first and the caller creates it again. Says whether
+    it altered one."""
     mirror = dict(sql(conn, COLUMNS, [t["mirror"]]))
-    wider = [(name, into) for name, type in log if (into := mirror.get(name)) and into != type
-             and digits(type) and digits(into) and all(a >= b for a, b in zip(digits(into), digits(type)))]
-    if wider:
+    widened = [(name, into) for name, type in sql(conn, COLUMNS, [t["log_table"]])
+               if (into := mirror.get(name)) and into != type and family(into) == family(type)
+               and wider(type, into) == into]
+    if widened:
         sql(conn, "SET LOCAL lock_timeout = '10s'")
         sql(conn, f"DROP VIEW IF EXISTS {t['history']}")
-        sql(conn, f"ALTER TABLE {t['log_table']} " + ", ".join(f"ALTER {quote(n)} TYPE {into}" for n, into in wider))
-    return bool(wider)
+        sql(conn, f"ALTER TABLE {t['log_table']} " + ", ".join(f"ALTER {quote(n)} TYPE {into}" for n, into in widened))
+    return bool(widened)
 
 
 def record_columns(conn, t, delivered, mirror, log, changes):
