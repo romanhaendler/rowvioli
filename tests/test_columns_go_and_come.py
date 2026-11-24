@@ -86,8 +86,11 @@ def test_a_column_a_person_added_to_the_mirror_is_never_dropped_and_stops_the_ru
     erp.target("alter table raw_erp.customers add column memo text")
     erp.target("update raw_erp.customers set memo = 'mine'")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    assert failed(erp).startswith("column memo of the mirror is not in the change log, so it is not known to be "
-                                  "from the source; drop it from the mirror")
+    # the way out keeps the values: a column added to the change log too would leave the mirror and its values with it
+    assert failed(erp) == ("column memo of the mirror is not in the change log, so it is not known to be from the "
+                           "source; drop it from the mirror, after copying its values into a table of your own if "
+                           "they are to be kept: CREATE TABLE <a table of yours> AS SELECT \"customer_no\", \"memo\" "
+                           'FROM "raw_erp"."customers"; ALTER TABLE "raw_erp"."customers" DROP COLUMN "memo"')
     assert erp.target("select distinct memo from raw_erp.customers") == [("mine",)]
 
 

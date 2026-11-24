@@ -142,15 +142,15 @@ def check(conn, t, staged, mirror, log_columns):
         if name in renamed.values():
             continue
         # a run adds a column to mirror and change log together, so one only the mirror has is a person's (story 8)
+        # a column added to the change log too would leave the mirror with its values, so the copy is the way out
         if t["key"] and t["log"] and log_columns and name not in logged:
             raise Exception(f"column {name} of the mirror is not in the change log, so it is not known to be from the "
-                            "source; " + (f"the source brings a column {name}, which a run would write into: drop it "
-                                          "from the mirror, after copying its values into a table of your own if they "
-                                          "are to be kept: CREATE TABLE <a table of yours> AS SELECT "
-                                          f"{', '.join(quote(c) for c in [*t['key'], name])} FROM {t['mirror']}; "
-                                          f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}" if name in types else
-                                          "drop it from the mirror, or add it to the change log too and the next run "
-                                          "takes it out of the mirror"))
+                            "source; " + (f"the source brings a column {name}, which a run would write into: "
+                                          if name in types else "")
+                            + "drop it from the mirror, after copying its values into a table of your own if they are "
+                              "to be kept: CREATE TABLE <a table of yours> AS SELECT "
+                              f"{', '.join(quote(c) for c in [*t['key'], name])} FROM {t['mirror']}; "
+                              f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
         if name not in types:
             if not (t["key"] and t["log"] and log_columns):
                 raise Exception(f"column {name} is missing in the source; without a change log its values are nowhere "
