@@ -4,7 +4,7 @@ lacks is empty in its rows.
 Every file must lie inside `path`, also through a symbolic link. Reads CSV, Excel, Parquet and JSON through DuckDB by
 extension (`.json`, `.jsonl` and `.ndjson` hold one object per row). Parquet keeps its own types; CSV and Excel
 arrive as text and JSON as jsonb, a column per key, except the columns the option `columns` names with a DuckDB type
-(a JSON value is cast from its text, so `"Anna"` loses its quotes). Every other option is a named parameter of
+(a JSON value is cast from its text, so `"Anna"` loses its quotes); one it names that no file has is empty. Every other option is a named parameter of
 DuckDB's reader, such as `sep`, `skip` or `sheet`; a name that belongs to rowvioli, such as `parallel`, reaches no
 connector. A CSV skips no line before its header unless `skip` says so, and one that splits into a single column
 fails unless `sep` is given: that is how DuckDB reads lines with different numbers of fields. An empty file fails."""
@@ -92,6 +92,8 @@ def read(connection, table, options):
     if reader == "read_csv" and len(first) == 1 and not {"sep", "delim", "delimiter"} & options.keys():
         raise Exception(f"{table}: no separator splits every line into the same number of fields; fix the lines, "
                         "or set sep (also for a file of one column) and skip (for lines before the header)")
+    for column in [c for c in columns if c not in first]:  # named and in no file: empty, as in REST (decision 54)
+        first[column] = "JSON" if json else "VARCHAR"
 
     def order(present):
         return ", ".join(quote(c) if c in present else f"NULL::{t} AS {quote(c)}" for c, t in first.items())

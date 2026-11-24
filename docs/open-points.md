@@ -18,7 +18,7 @@ Closed by ticket 12 of schema changes: a column gone for good from the files of 
 
 Closed by decision 55: a consumer's table that inherits from a mirror keeps its rows ([What a person does by hand](loading.md#what-a-person-does-by-hand)).
 
-Closed by ticket 13 of schema changes: a retired column is known by the change log's comment on it, not by its name, so a source column `x__2024` goes and comes back like any other ([Columns that go, come and change](target.md#history)). A connector of one's own may say that it has no catalog, as the shipped `file` and `rest` do, and then gets their rules ([`catalog`](connector-guide.md#otherwise-a-package-of-your-own)).
+Closed by ticket 13 of schema changes: a retired column is known by the change log's comment on it, not by its name, so a source column `x__2024` goes and comes back like any other ([Columns that go, come and change](target.md#history)). A connector of one's own may say that it has no catalog, as the shipped `file` and `rest` do, and then gets their rules ([`catalog`](connector-guide.md#otherwise-a-package-of-your-own)). A field named under `columns` that a file lacks is empty, as in REST ([the catalog](definition.md)).
 ## Left open
 
 
@@ -75,7 +75,6 @@ Unchanged from the first round:
 - **`columns` casts follow DuckDB**, for CSV and JSON: `1.7` cast to `integer` becomes `2`.
 - **A JSON file holds objects.** A file of other values (`[1, 2]`, or `[]`) fails with DuckDB's words (`json_read expected records, but got non-record JSON instead.`); a file of no bytes says that it is empty. A file that is one object is one row.
 - **`*` does not match a name that starts with a dot**, and `**` is one directory level, like `*`.
-- **A field named under `columns` that a file lacks fails the read with DuckDB's words** (`Binder Error: Column "zz" in REPLACE list not found in FROM clause`).
 - **Each file of a pattern is checked before it is read**, about 3 ms per file: 10,000 files take half a minute before the first row. A pattern reads 50 files at a time; open files under Linux were not measured.
 - **A JSON file is read twice**, once for its columns and once for its rows; so is every file of a pattern of JSON files.
 - **A REST field whose own name contains a dot cannot be named in `rows`**, and `apply` does not check `rows`: a value that is not text fails at the run.

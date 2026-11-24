@@ -262,6 +262,29 @@ def test_F1_F6_files_with_more_or_fewer_columns_load_and_a_column_missing_from_a
     log_replays(files, "raw_files.orders")
 
 
+@pytest.mark.parametrize("kind", ["csv", "xlsx", "parquet", "jsonl"])
+@pytest.mark.parametrize("table", ["orders_1.{}", "orders_*.{}"])
+def test_a_field_named_under_columns_that_the_files_lack_is_empty_in_every_reader(files, kind, table):  # as REST
+    for n in (1, 2):
+        rows = pa.table({"order_no": [n], "amount": [n * 10]})
+        path = files.dir / "files" / f"orders_{n}.{kind}"
+        if kind == "parquet":
+            pq.write_table(rows, path)
+        elif kind == "xlsx":
+            db = duckdb.connect()
+            db.execute("INSTALL excel; LOAD excel")
+            db.register("rows", rows)
+            db.execute(f"COPY rows TO '{path}' (FORMAT xlsx, HEADER true)")
+        else:
+            path.write_text(f"order_no,amount\n{n},{n * 10}\n" if kind == "csv" else json.dumps(rows.to_pylist()[0]))
+    named = 'columns = { order_no = "integer", note = "integer", amount = "integer" }'
+    code, answer = load(files, f'"{table.format(kind)}" = {{ key = ["order_no"], target_table = "orders", {named} }}\n')
+    assert code == 0, answer
+    assert types(files, "orders")[-1] == ("note", "integer")
+    assert files.target("select order_no, amount, note from raw_files.orders order by 1") == [
+        (1, 10, None), (2, 20, None)][:1 if "_1" in table else 2]
+
+
 def test_a_column_gone_from_the_files_for_good_leaves_the_mirror_by_hand_and_keeps_its_history(files):  # H2
     orders(files, 1, 2)
     d = files.dir / "files"

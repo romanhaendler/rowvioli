@@ -12,7 +12,8 @@ Added:
   - A run stops where a consumer's view, foreign key or other object depends on what would change; Postgres refuses, nothing is published and the reason names the object.
 - `renamed = { new = "old" }`, a setting of a table for a rename the data cannot prove (docs/definition.md).
 - `_rowvioli.columns`, `columns__log` and `columns__history`: which columns and types every mirror and change log had at a moment, what caused each change (`source`, `definition`, `reader`, `hand`, `found`) and a note. `NOTIFY` on `rowvioli_schema` when a run commits a change of columns, key or name, not for a first fill that changes nothing. Queries in docs/target.md.
-- Version 4 of `_rowvioli`: `rowvioli init` brings a target of version 3 to 4, changes nothing else and prints the `GRANT` statements a worker's role needs. `_rowvioli.runs` records the version of the program and of the driver. A connector may report its driver's version (`driver_version`); the shipped ones report the package they read with.
+- Version 4 of `_rowvioli`: `rowvioli init` brings a target of version 3 to 4, changes nothing else and prints the `GRANT` statements a worker's role needs. `_rowvioli.runs` records the version of the program and of the driver. A connector may report its driver's version (`driver_version`); the shipped ones report the package they read with. A connector may say that it has no catalog (`catalog = "data"` as `file` says, `"definition"` as `rest` says) and gets their rules for a missing column (docs/connector-guide.md).
+- A field named under `columns` that a file lacks is empty, in every reader and in a pattern, as in REST. Before, DuckDB's `Binder Error` failed the run.
 
 Changed (a working set-up can notice these):
 
