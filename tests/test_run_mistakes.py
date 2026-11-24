@@ -80,7 +80,8 @@ def test_an_exception_without_a_message_names_its_type(erp):
 def test_a_key_column_the_source_does_not_have_fails_naming_it_and_the_columns_there_are(erp):
     apply(erp, definition(erp, '"public.customers" = { key = ["idd"] }\n'))
     reason = failed(erp)
-    assert "table public.customers has no column idd; it has: customer_no, name, city" in reason
+    assert ("table public.customers has no column idd, which the key names: give the table a key of the columns it "
+            "has: customer_no, name, city") in reason
     assert "_stage" not in reason
 
 

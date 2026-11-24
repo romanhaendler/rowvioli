@@ -144,8 +144,8 @@ def check(conn, t, staged, mirror, log_columns, renamed):
                     "; _op cannot be freed: read the source through a view of it that names that column otherwise"
                 raise Exception(f"column {name} is a name of the change log or the history view, so a table with a "
                                 f"key cannot have it{freed}")
-    way =("rename that column of the change log and drop its history view, which the next run creates again: "
-           f"ALTER TABLE {t['log_table']} RENAME COLUMN {{}} TO <another name>; DROP VIEW {t['history']}")
+    way = ("rename that column of the change log and drop its history view, which the next run creates again: "
+            f"ALTER TABLE {t['log_table']} RENAME COLUMN {{}} TO <another name>; DROP VIEW {t['history']}")
     for new, old in renamed.items():  # the renames the definition states that act in this run (load)
         stated = f"column {old} is renamed {new} in the table's definition"
         if family(had[old]) != family(types[new]):
@@ -157,6 +157,17 @@ def check(conn, t, staged, mirror, log_columns, renamed):
     renamed_to = {old: new for new, old in renamed.items()}
     primary_key = [renamed_to.get(k, k) for (k,) in sql(conn, PRIMARY_KEY, [t["mirror"]])] if mirror else []
     plan = {"renamed": renamed, "proven": {}, "gone": [], "retired": {}, "key": {}, "unpinned": []}
+    # a change log that exists is complete, and the program never ends one: a run that would leave it behind its mirror,
+    # or lay a new mirror's history over it, fails, before a column or the key is looked at
+    if log_columns and not (key and t["log"] and mirror):
+        why = ("this run would not write to it (log = false or no key)" if not (key and t["log"])
+               else "its mirror is missing")
+        raise Exception(f"the definition has no key any more, the mirror's primary key is {primary_key}: put the key "
+                        "back, or give the table another target_table; to load it without a key, drop the change log "
+                        f"{t['name']}__log with its history view (DROP TABLE {t['log_table']} CASCADE) and the mirror"
+                        if primary_key and not key else
+                        f"the change log {t['name']}__log exists and {why}: drop it with its history view "
+                        f"(DROP TABLE {t['log_table']} CASCADE), or rename both" + (" with the mirror" if mirror else ""))
     # nothing is proven without a catalog, a key or a change log, nor joined by a key of another family, which stops below
     if t["key"] and t["log"] and log_columns and not t["catalog"] \
             and set(primary_key) == set(t["key"]) \
@@ -230,17 +241,6 @@ def check(conn, t, staged, mirror, log_columns, renamed):
                             f"ALTER {kind} {table} RENAME COLUMN {quote(n)} TO <a shorter name>" for n in long
                             for kind, table in ([("TABLE", t["mirror"])] if n in had else [])
                             + [("TABLE", t["log_table"]), ("VIEW", t["history"])]))
-    # a change log that exists is complete, and the program never ends one: a run that would leave it behind its mirror,
-    # or lay a new mirror's history over it, fails, before the key is looked at
-    if log_columns and not (key and t["log"] and mirror):
-        why = ("this run would not write to it (log = false or no key)" if not (key and t["log"])
-               else "its mirror is missing")
-        raise Exception(f"the definition has no key any more, the mirror's primary key is {primary_key}: put the key "
-                        "back, or give the table another target_table; to load it without a key, drop the change log "
-                        f"{t['name']}__log with its history view (DROP TABLE {t['log_table']} CASCADE) and the mirror"
-                        if primary_key and not key else
-                        f"the change log {t['name']}__log exists and {why}: drop it with its history view "
-                        f"(DROP TABLE {t['log_table']} CASCADE), or rename both" + (" with the mirror" if mirror else ""))
     if mirror:
         if set(primary_key) != set(key):  # the same columns in another order are the same key (story 20)
             # decision 54: the key the last run recorded is the definition's, so a person changed the primary key
@@ -268,11 +268,13 @@ def check(conn, t, staged, mirror, log_columns, renamed):
                             f"keeps the old values of {retirement(text)}, is missing or unreadable: put it back, "
                             f"COMMENT ON COLUMN {t['log_table']}.{quote(name)} IS {literal(text)}")
     if key:
-        names =", ".join(quote(k) for k in key)
+        names = ", ".join(quote(k) for k in key)
         if sql(conn, f"SELECT 1 FROM _stage WHERE {' OR '.join(quote(k) + ' IS NULL' for k in key)} LIMIT 1"):
-            raise Exception(f"a key column of ({names}) is null")
+            raise Exception(f"a key column of ({names}) is null in a row of the source: give it a value there, or give "
+                            "the table a key whose columns always have one")
         if sql(conn, f"SELECT 1 FROM _stage GROUP BY {names} HAVING count(*) > 1 LIMIT 1"):
-            raise Exception(f"a key combination of ({names}) occurs twice")
+            raise Exception(f"a key combination of ({names}) occurs twice in the source: make it unique there, or give "
+                            "the table a key that identifies a row")
     plan["moved"] = plan["retired"] | {old: new for new, old in renamed.items()}  # the names carry_out gives
     return plan
 
@@ -460,8 +462,8 @@ def stage(conn, t):
                         "give it a shorter name in the source")
     t["own_types"] = {f.name for f in batches.schema if contract.OWN_TYPE.items() <= (f.metadata or {}).items()}
     if (gone := [k for k in t["key"] or [] if k not in batches.schema.names]):
-        raise Exception(f"table {t['source_table']} has no column {', '.join(gone)}; it has: "
-                        + ", ".join(batches.schema.names))
+        raise Exception(f"table {t['source_table']} has no column {', '.join(gone)}, which the key names: give the "
+                        "table a key of the columns it has: " + ", ".join(batches.schema.names))
     with conn.cursor() as c:
         # the driver creates every decimal as numeric; Arrow's decimal128 keeps its precision and scale (decision 49).
         # A scale below 0 or above the precision needs Postgres 15 in the target: such a column stays numeric.

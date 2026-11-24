@@ -51,6 +51,8 @@ Fixed:
 - The counts of a run that drops a column are rows of the mirror: `~3` for three rows whose other columns changed. Before, they counted the change log's `U` rows, one for every row that had a value in the column (`~60`).
 - `rowvioli run` whose own connection the target drops, as a restart does, ends with the line `connection to the target lost`. Before, its last line was Postgres's bare `FATAL:  terminating connection due to administrator command`.
 - A run that adds a column never waits for the change log while it holds the mirror: it locks mirror, change log and history view first, without waiting, as for every change of columns, and a long reader makes it fail with `... stayed in use for 10 s, so its columns could not change` instead of `lock timeout`. Before, a consumer joining the history view with its mirror meanwhile had its query ended by Postgres as a deadlock (in 0.4.1 too).
+- A key column that is null, a key combination that occurs twice and a key column the source does not have say the way out: give it a value or make it unique in the source, or give the table a key that identifies a row, of the columns the source has (in 0.4.1 too).
+- A change log that `log = false` or a key taken away would leave behind is told before a column gone from the source. Before, the run said `without a change log its values are nowhere else` and to drop the column, and doing so led into the stop for the change log.
 - A consumer's table that inherits from a mirror keeps its rows. Before, a run read them as the mirror's, deleted them as `D` rows and counted them towards `max_delete_share` (in 0.4.1 too). The history view reads only the change log's own rows.
 
 ## 0.4.1 (2026-11-23)

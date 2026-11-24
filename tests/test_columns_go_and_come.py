@@ -255,7 +255,8 @@ def test_A10_a_gone_key_column_stops_the_run_as_before(erp):
     ok(erp)
     erp.source("alter table customers drop column customer_no")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    assert failed(erp) == "table public.customers has no column customer_no; it has: name, city"
+    assert failed(erp) == ("table public.customers has no column customer_no, which the key names: give the table a key of "
+                           "the columns it has: name, city")
     assert columns(erp) == ["customer_no", "name", "city"]
 
 

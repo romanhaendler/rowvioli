@@ -25,9 +25,11 @@ MIRROR = "select * from raw_erp.customers"
 
 @pytest.mark.parametrize("change, expected", [
     ("insert into customers values (4, 'Dora', null); alter table customers drop constraint customers_pkey;"
-     " insert into customers values (1, 'Anna2', null)", "occurs twice"),
+     " insert into customers values (1, 'Anna2', null)", 'a key combination of ("customer_no") occurs twice in the '
+     "source: make it unique there, or give the table a key that identifies a row"),
     ("alter table customers drop constraint customers_pkey; alter table customers alter customer_no drop not null;"
-     " insert into customers values (null, 'Nobody', null)", "is null"),
+     " insert into customers values (null, 'Nobody', null)", 'a key column of ("customer_no") is null in a row of the '
+     "source: give it a value there, or give the table a key whose columns always have one"),
     ("delete from customers", "zero rows"),
     ("delete from customers where customer_no <> 1", "67 % of the rows would be deleted"),
     ("alter table customers alter customer_no type text", "column customer_no has changed its type from integer to "
@@ -52,7 +54,8 @@ def test_another_key_that_does_not_identify_a_row_fails_the_run_and_leaves_the_m
     erp.source("insert into customers values (4, 'Anna', 'Ulm')")
     apply(erp, definition(erp, '"public.customers" = { key = ["name"] }\n'))
     erp.target("update _rowvioli.tables set requested_at = now()")
-    assert failed(erp) == 'a key combination of ("name") occurs twice'
+    assert failed(erp) == ('a key combination of ("name") occurs twice in the source: make it unique there, or give the '
+                           "table a key that identifies a row")
     assert rows(erp.target, MIRROR) == before
 
 
@@ -64,6 +67,16 @@ def test_a_table_that_lost_its_key_in_the_definition_says_so_and_names_both_ways
     assert "no key any more" in reason and "['customer_no']" in reason, reason
     assert "put the key back" in reason and "target_table" in reason, reason
     assert "[] differs" not in reason, reason
+
+
+@pytest.mark.parametrize("table, says", [('{ key = ["customer_no"], log = false }', "and this run would not "
+                                          "write to it"), ("{}", "no key any more")])
+def test_a_change_log_this_run_would_not_write_is_told_before_a_column_gone_from_the_source(erp, table, says):
+    ok(erp)  # ticket 15, P3: the stop for the column said to drop it, and doing so led into this stop
+    apply(erp, definition(erp, f'"public.customers" = {table}\n'))
+    erp.source("alter table customers drop column city")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert says in failed(erp)
 
 
 def test_a_new_source_column_appears_in_the_mirror_and_the_change_log_with_values(erp):
