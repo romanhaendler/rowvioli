@@ -2,7 +2,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** claimed
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -23,3 +23,5 @@ Stage 0 of the spec.
 - [ ] The existing tests pass. No documents in this ticket (ticket 07).
 
 ## Comments
+
+Resolved on branch `schema-changes`, from sc-01 (19497df). Review fixes: ec0ff7e, 71ed62b, 19497df.
