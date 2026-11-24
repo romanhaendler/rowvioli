@@ -181,6 +181,18 @@ def test_G4_a_type_changed_by_hand_to_another_family_stops_and_says_the_way_out_
     log_replays(erp, "raw_erp.amounts")
 
 
+def test_G1_a_column_a_person_added_whose_name_the_source_brings_in_another_family_is_not_one_to_drop(erp):
+    amounts(erp, "integer", "(1, 10)")  # story 8: its values are nowhere else, so no next run brings them again
+    erp.target("alter table raw_erp.amounts add column memo text")
+    erp.target("update raw_erp.amounts set memo = 'mine'")
+    erp.source("alter table amounts add column memo integer")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == (
+        "column memo of the mirror is not in the change log, so it is not known to be from the source; drop it from "
+        "the mirror, or add it to the change log too and the ne***t run takes it out of the mirror")
+    assert erp.target("select memo from raw_erp.amounts") == [("mine",)]
+
+
 def test_a_run_ended_after_max_seconds_while_it_widened_says_so_and_names_the_column(erp):  # story 16
     erp.source("create table amounts (id int primary key, a integer)")
     erp.source("insert into amounts values (1, 1)")

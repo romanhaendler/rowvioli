@@ -137,6 +137,8 @@ def check(conn, t, staged, mirror, log_columns):
         proofs = proven(conn, t, mirror, staged, log_columns, renamed)
         renamed.update({new: old for new, (old, _) in proofs.items()})
         plan["proven"] = {new: note for new, (_, note) in proofs.items()}
+    unknown = ("column {} of the mirror is not in the change log, so it is not known to be from the source; drop it "
+               "from the mirror, or add it to the change log too and the next run takes it out of the mirror")
     for name, type in mirror:
         if name in renamed.values():
             continue
@@ -145,9 +147,7 @@ def check(conn, t, staged, mirror, log_columns):
                 raise Exception(f"column {name} is missing in the source; without a change log its values are nowhere "
                                 f"else, so a person drops it: ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
             if name not in logged:
-                raise Exception(f"column {name} of the mirror is not in the change log, so it is not known to be from "
-                                "the source; drop it from the mirror, or add it to the change log too and the next run "
-                                "takes it out of the mirror")
+                raise Exception(unknown.format(name))
             plan["gone"].append(name)
         elif family(types[name]) != family(type):  # another family goes and comes (decision 6); fit() did the same
             changed = f"column {name} has changed its type from {type} to {types[name]}"
@@ -162,7 +162,9 @@ def check(conn, t, staged, mirror, log_columns):
                                 "from one after: give the table another target_table, which begins a new mirror")
             if not (t["key"] and t["log"] and log_columns):
                 raise Exception(f"{changed}; without a change log its values are nowhere else, {drop}")
-            if family(logged.get(name, types[name])) != family(type):  # the mirror's type changed by hand (cases G4)
+            if name not in logged:  # a person's column under a name the source brings now: no run brings its values
+                raise Exception(unknown.format(name))
+            if family(logged[name]) != family(type):  # the mirror's type changed by hand (cases G4)
                 raise Exception(f"column {name} of the mirror has the type {type}, of another family than the "
                                 f"{types[name]} the source delivers, and a run does not change it back; drop it from "
                                 f"the mirror and the next run brings it again: "
