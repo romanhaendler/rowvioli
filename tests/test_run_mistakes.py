@@ -30,6 +30,19 @@ def test_a_numeric_the_target_cannot_hold_fails_with_the_cause_and_no_path(erp, 
         and shown not in why.lower() and "Traceback" not in why and ".py" not in why, why
 
 
+def test_a_numeric_whose_values_fit_loads_whatever_its_digits_before_the_point(erp):
+    # a precision equal to the scale has no digit before the point but the 0 Postgres writes; beyond 76 digits no
+    # decimal has the precision, so the column is read as an unconstrained one
+    columns = {"a": ("numeric(2,2)", "-0.99"), "b": ("numeric(3,5)", "0.00123"), "c": ("numeric(1000,0)", "-5"),
+               "d": ("numeric", "-0012345678901234567890123456789012345678.5"), "e": ("numeric(38,0)", "9" * 38)}
+    erp.source(f"create table nn (id int primary key, {', '.join(f'{c} {t}' for c, (t, _) in columns.items())})")
+    erp.source(f"insert into nn values (1, {', '.join(v for _, v in columns.values())})")
+    apply(erp, definition(erp, '"public.nn" = { key = ["id"] }\n'))
+    ok(erp)
+    text = f"select {', '.join(f'{c}::text' for c in columns)} from {{}}"
+    assert erp.target(text.format("raw_erp.nn")) == erp.source(text.format("nn"))
+
+
 @pytest.mark.parametrize("value, type, says", [
     ("Secret3", "int", 'invalid input synta*** for type integer: "***"'),  # x is the harness's password
     ("3000000000", "int", 'value "***" is out of range for type integer'),
