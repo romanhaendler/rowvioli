@@ -15,6 +15,7 @@ import signal
 import sys
 import threading
 import time
+from datetime import datetime
 from urllib.parse import unquote
 
 import pyarrow as pa
@@ -615,6 +616,7 @@ def carry_out(conn, t, plan):
     alter(conn, f"the columns of {t['name']} change", f"DROP VIEW IF EXISTS {t['history']}")
     changes = {}
     logged = dict(sql(conn, COLUMNS, [t["log_table"]]))
+    keys = stretches(conn, t) if logged else None  # while the columns it names have those names
     for new, old in plan["renamed"].items():  # decision 54: before the widening, which names the new column
         for table in (t["mirror"], t["log_table"]) if old in logged else (t["mirror"],):
             sql(conn, f"ALTER TABLE {table} RENAME COLUMN {quote(old)} TO {quote(new)}")
@@ -625,7 +627,7 @@ def carry_out(conn, t, plan):
         changes[new] = {"was": old}
     # decision 54: the comment on _op names the key columns of every stretch, renamed and retired ones by their new names
     moved = plan["retired"] | {o: n for n, o in plan["renamed"].items()}
-    if moved and (keys := stretches(conn, t)):
+    if moved and keys:
         if (named := [{**k, "key": [moved.get(c, c) for c in k["key"]]} for k in keys]) != keys:
             note = KEYS_NOTE + keys_of_log(conn, t, named)
             for old in {c for k in keys for c in k["key"]} & moved.keys():
@@ -673,14 +675,17 @@ KEYS_NOTE = "the change log's keys: "  # the note in the columns table of a chan
 
 def stretches(conn, t):
     """Decision 54: the keys the change log was written under, as the comment on its column _op says them, a list of
-    {"key": [...]} with "from", the moment it began, on every one but the first. None without a readable comment: such
-    a change log has had one key."""
-    [(text,)] = sql(conn, "SELECT col_description(to_regclass($1), (SELECT attnum FROM pg_attribute WHERE attrelid "
-                          "= to_regclass($1) AND attname = '_op'))", [t["log_table"]])
+    {"key": [...]} with "from", the moment it began, on every one but the first. None without a readable comment, also
+    for one that names a column the change log lacks: such a change log has had one key."""
+    [(text, names)] = sql(conn, "SELECT col_description(to_regclass($1), (SELECT attnum FROM pg_attribute WHERE attrelid "
+                                "= to_regclass($1) AND attname = '_op')), (SELECT json_agg(attname) FROM pg_attribute "
+                                "WHERE attrelid = to_regclass($1) AND attnum > 0 AND NOT attisdropped)::text",
+                          [t["log_table"]])
     try:
-        keys = json.loads(text)
-        if keys and all(k["key"] and all(isinstance(c, str) for c in k["key"]) and isinstance(k.get("from", ""), str)
-                        and ("from" in k) == (i > 0) for i, k in enumerate(keys)):
+        keys, names = json.loads(text), json.loads(names)
+        if keys and all(isinstance(k["key"], list) and k["key"] and all(c in names for c in k["key"])
+                        and ("from" in k) == (i > 0) and (not i or datetime.fromisoformat(k["from"]))
+                        for i, k in enumerate(keys)):
             return keys
     except Exception:  # anything but the list it should be: unreadable
         pass

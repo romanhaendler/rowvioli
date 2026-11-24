@@ -206,13 +206,17 @@ def test_C13_a_key_value_that_changes_is_a_D_and_an_I(erp):
 ANOTHER_KEY = '"public.customers" = { key = ["customer_no", "name"] }\n'
 
 
-@pytest.mark.parametrize("removal", ["is null", "is 'our customers'"])
+@pytest.mark.parametrize("removal", ["is null", "is 'our customers'", "a key no list", "a from no moment",
+                                     "a column that does not exist"])
 def test_the_comment_on_op_removed_after_a_change_of_key_stops_the_run_with_the_text_to_put_back(erp, removal):
     ok(erp)
     apply(erp, definition(erp, ANOTHER_KEY))
     again(erp)
     keys = comment(erp)
-    erp.target(f"comment on column raw_erp.customers__log._op {removal}")
+    edited = {"a key no list": [{"key": "customer_no"}, keys[1]], "a from no moment": [keys[0], {**keys[1], "from": "x"}],
+              "a column that does not exist": [{"key": ["i"]}, keys[1]]}  # as P18 edited it by hand
+    erp.target("comment on column raw_erp.customers__log._op "
+               + (f"is '{json.dumps(edited[removal])}'" if removal in edited else removal))
     erp.source("update customers set city = 'Köln' where customer_no = 1")
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp).replace("***", "x")  # the source's password is x, and the reason hides it
