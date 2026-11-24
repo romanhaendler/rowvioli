@@ -2,7 +2,7 @@
 
 **Blocked by:** 06
 
-**Status:** claimed
+**Status:** resolved
 
 **Model:** Opus. Item 4 changes the flow of a run
 
@@ -28,3 +28,4 @@ Spec: `.scratch/schema-changes/spec.md`. Decided by the owner on 2026-11-24, aft
 
 - Not tested here: the ODBC connector's `driver_version` (`arrow-odbc <version>`); its assertion is in `tests/test_odbc.py`, which needs an ODBC driver manager and runs only in `tests/odbc/run.sh`.
 - Item 5: both ways out worked in the test (the type put back with a cast, and the drop). The reason names the drop, as the other stops do, because it works whatever values a person wrote into the column; putting the type back fails when one does not cast.
+- Resolved on branch `schema-changes`, from sc-08 (f228e08). Review fixes: c7cb428, 0cf69d3, f228e08.
