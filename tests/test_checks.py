@@ -332,6 +332,17 @@ def test_a_value_in_the_sources_message_is_withheld_by_its_sqlstate(erp, value, 
     assert "secret" not in reason and "3000000000" not in reason and "2000-13" not in reason
 
 
+@pytest.mark.parametrize("where", ["target", "source"])
+def test_a_statement_timeout_that_ends_a_run_is_named_with_the_way_out(erp, where):  # ticket 15, I2
+    erp.source("create view many as select g as id from generate_series(1, 2000000) g")
+    apply(erp, definition(erp, '"public.many" = { key = ["id"] }\n'))
+    db = getattr(erp, f"{where}_url").rsplit("/", 1)[1]
+    getattr(erp, where)(f"alter role postgres in database {db} set statement_timeout = '300ms'")
+    assert failed(erp).replace("***", "x") == (
+        "canceling statement due to statement timeout: the statement_timeout of the role in the " + where + " ended it; "
+        "to let a run take longer, ALTER ROLE <its role> IN DATABASE <its database> SET statement_timeout = 0")
+
+
 def test_a_name_postgres_quotes_in_its_message_stays_in_the_reason(erp):
     ok(erp)
     erp.target("alter table raw_erp.customers add constraint c check (name <> 'Anna2')")

@@ -1155,7 +1155,7 @@ def target_secrets():
 # the statement (its SQL may hold quotes and lines); a source's error while its rows are read
 WRAPPER = re.compile(r"^(?:[A-Z_]+: )?(?:\[libpq\] )?(?:Execution error \[PGRES_[A-Z_]+\]: )?"
                      r"(?:nanoarrow call failed: )?(?:[A-Za-z]+\(.*?\) = \(\d+\) [^.]*\. [A-Za-z ]+: )?"
-                     r"(?:Failed to (?:prepare query|execute query(?: '.*?')?|execute prepared statement): )?"
+                     r"(?:Failed to (?:prepare query|execute query(?: '.*?')?|execute prepared statement|execute COPY statement): )?"
                      r"(?:PGRES_[A-Z_]+ )?(?:ERROR:\s+)?", re.S)
 
 
@@ -1196,6 +1196,10 @@ def reason_line(values, e, step, source=None):
     first, *rest = (WRAPPER.sub("", before).strip() or traceback.strip().split("\n")[-1]).split("\n")
     line = f"{first} {rest[0].strip()}" if first.endswith(":") and rest else first
     line = VALUE.sub('"***"', line).strip()
+    where = "source" if step == "reading the source" else "target"
+    line = re.sub(r"canceling statement due to statement timeout$", rf"\g<0>: the statement_timeout of the role in the "
+                  rf"{where} ended it; to let a run take longer, ALTER ROLE <its role> IN DATABASE <its database> SET "
+                  "statement_timeout = 0", line)
     if step != "reading the source":  # a source may have a table of that name
         line = re.sub(r"must be owner of table \S+$", r"\g<0>: the worker's role must own it, or be a member of the "
                       r"role that owns it, to change its columns with the mirror's (ALTER TABLE <it> OWNER TO <the "
