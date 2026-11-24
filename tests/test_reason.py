@@ -1,4 +1,6 @@
 """The reason line from real driver messages, without a database."""
+import pytest
+
 from rowvioli.load import reason_line
 
 TRACEBACK = ('. Detail: Python exception: Traceback (most recent call last):\n'
@@ -42,6 +44,16 @@ def test_the_wrapper_of_a_failed_statement_goes_whatever_its_sql_holds():
         == "duplicate key value"
     assert reason("IO: [libpq] Failed to execute prepared statement: PGRES_FATAL_ERROR ERROR:  value too long\n") \
         == "value too long"
+
+
+@pytest.mark.parametrize("password", ["x", "query", "Failed", "ERROR"])
+def test_a_password_that_occurs_in_the_wrapper_does_not_keep_the_wrapper_in_the_reason(password):
+    message = "IO: [libpq] Failed to execute query 'SELECT a FROM t': ERROR:  boom at x\nDETAIL: more"
+    assert reason(message, [password]) == "boom at x".replace(password, "***")
+
+
+def test_a_password_with_a_line_break_is_scrubbed_before_the_reason_is_cut_there():
+    assert reason("cannot connect as Ge'he\nim, sorry", ["Ge'he\nim"]) == "cannot connect as ***, sorry"
 
 
 def test_a_plain_exception_of_a_connector_of_ones_own_gives_its_first_line_as_a_drivers_does():

@@ -444,7 +444,13 @@ def stage(conn, t):
                 f"{quote(n)}::{exact[n]} AS {quote(n)}" if n in exact else quote(n) for n in batches.schema.names)
                 + " FROM _driver")
             sql(conn, "DROP TABLE _driver")
-        rows_read = c.adbc_ingest("_stage", without_nul(batches), mode="append", temporary=True)
+        raised = []
+        try:
+            rows_read = c.adbc_ingest("_stage", without_nul(batches, raised), mode="append", temporary=True)
+        except Exception:  # the driver gives what the connector raised in its stream as its own error, cut and wrapped
+            if raised:
+                raise raised[0] from None
+            raise
     # zero rows protect a mirror that has rows; a first load or an empty mirror publishes them
     if rows_read == 0 and t["max_delete_share"] < 1 and sql(conn, "SELECT to_regclass($1)", [t["mirror"]])[0][0] and \
             sql(conn, f"SELECT 1 FROM ONLY {t['mirror']} LIMIT 1"):
@@ -458,16 +464,21 @@ def stage(conn, t):
     return rows_read
 
 
-def without_nul(batches):
-    """Postgres text cannot hold 0x00, so there is no faithful way to keep it: it is removed (decision 51)."""
+def without_nul(batches, raised):
+    """Postgres text cannot hold 0x00, so there is no faithful way to keep it: it is removed (decision 51). What the
+    connector raises while its batches are read goes to `raised` too."""
     # shortcut: only top-level string columns, a NUL inside a list or struct still fails the run, upgrade when a source needs it
     text = [i for i, f in enumerate(batches.schema) if pa.types.is_string(f.type) or pa.types.is_large_string(f.type)]
 
     def clean():
-        for b in batches:
-            for i in text:
-                b = b.set_column(i, batches.schema.field(i), pc.replace_substring(b.column(i), "\x00", ""))
-            yield b
+        try:
+            for b in batches:
+                for i in text:
+                    b = b.set_column(i, batches.schema.field(i), pc.replace_substring(b.column(i), "\x00", ""))
+                yield b
+        except Exception as e:
+            raised.append(e)
+            raise
     return pa.RecordBatchReader.from_batches(batches.schema, clean())
 
 
@@ -929,9 +940,9 @@ def target_secrets():
 
 
 # what ADBC and nanoarrow put before the server's message: the call that failed with its errno and Arrow's status,
-# the statement (its SQL may hold quotes and lines)
-WRAPPER = re.compile(r"^(?:[A-Z_]+: )?(?:\[libpq\] )?(?:nanoarrow call failed: )?"
-                     r"(?:[A-Za-z]+\(.*?\) = \(\d+\) [^.]*\. [A-Za-z ]+: )?"
+# the statement (its SQL may hold quotes and lines); a source's error while its rows are read
+WRAPPER = re.compile(r"^(?:[A-Z_]+: )?(?:\[libpq\] )?(?:Execution error \[PGRES_[A-Z_]+\]: )?"
+                     r"(?:nanoarrow call failed: )?(?:[A-Za-z]+\(.*?\) = \(\d+\) [^.]*\. [A-Za-z ]+: )?"
                      r"(?:Failed to (?:prepare query|execute query(?: '.*?')?|execute prepared statement): )?"
                      r"(?:PGRES_[A-Z_]+ )?(?:ERROR:\s+)?", re.S)
 
@@ -943,14 +954,16 @@ OWN = os.path.dirname(os.path.abspath(__file__)) + os.sep  # the program's code,
 
 
 def reason_line(values, e, step):
-    """The reason as it is stored, shown and logged: scrubbed, the first line of the driver's message without its
-    wrapper, joined with the next when it ends in a colon, without a value of a row (VALUE). A message that holds a
+    """The reason as it is stored, shown and logged: the first line of the driver's message without its wrapper,
+    joined with the next when it ends in a colon, without a value of a row (VALUE), scrubbed last, so that a password
+    that occurs in the wrapper (`x`, `query`) does not keep the wrapper from being cut. A message that holds a
     traceback gives the text before it, or the exception's own line (the traceback's last) when nothing is before it;
     ADBC cuts long messages, so the end may be missing. A line saying so, with the exception's type, when there is no
     message. A message a consumer's PL/pgSQL code raised is withheld (RAISED)."""
     if withheld := raised_by_a_consumer(e, step):
         return scrub(values, CONTROL.sub("?", withheld))
-    text = scrub(values, str(e)).strip()
+    # first only a value with a line break or another control character, which the cut and the ? would break up
+    text = scrub([v for v in values if v and CONTROL.search(v)], str(e)).strip()
     raised = e.__traceback__
     while raised and raised.tb_next:
         raised = raised.tb_next
@@ -967,7 +980,7 @@ def reason_line(values, e, step):
         line = re.sub(r"permission denied for table (columns(?:__log)?)$", r"\g<0>: the worker's role lacks a right on "
                       r"_rowvioli.\1, which rowvioli init printed with the upgrade to version 4 "
                       '(docs/operation.md "The target")', line)
-    return line or f"the driver gave no message while {step} ({type(e).__name__})"
+    return scrub(values, line) or f"the driver gave no message while {step} ({type(e).__name__})"
 
 
 # the innermost line of the context Postgres gives an error that PL/pgSQL code raised by RAISE or ASSERT

@@ -26,14 +26,14 @@ def test_a_numeric_the_target_cannot_hold_fails_with_the_cause_and_no_path(erp, 
     erp.source(f"insert into nn values (1, '{value}')")
     apply(erp, definition(erp, '"public.nn" = { key = ["id"] }\n'))
     why = failed(erp)
-    assert f"public.nn: column v has {has}; cast it in a view of the source" in why \
+    assert f"public.nn: column v has {has}; cast it in a view of the source" == why \
         and shown not in why.lower() and "Traceback" not in why and ".py" not in why, why
 
 
 @pytest.mark.parametrize("value, type, says", [
-    ("Secret3", "int", "invalid input synta*** for type integer"),  # x is the harness's password
-    ("3000000000", "int", "out of range for type integer"),
-    ("2024-13-45 Secret4", "date", "date/time field value out of range"),
+    ("Secret3", "int", 'invalid input synta*** for type integer: "***"'),  # x is the harness's password
+    ("3000000000", "int", 'value "***" is out of range for type integer'),
+    ("2024-13-45 Secret4", "date", 'date/time field value out of range: "***"'),
     ("1e999", "float8", '"***" is out of range for type double precision')])
 def test_a_value_the_source_cannot_convert_stays_out_of_the_reason(erp, value, type, says):
     erp.source("create table raw (id int primary key, v text)")
@@ -43,7 +43,7 @@ def test_a_value_the_source_cannot_convert_stays_out_of_the_reason(erp, value, t
     r = erp.run("run")
     assert r.returncode == 1
     why = erp.target("select reason from _rowvioli.runs where status = 'failed'")[0][0]
-    assert says in why and value not in why and value not in r.stdout + r.stderr, why
+    assert says == why and value not in why and value not in r.stdout + r.stderr, why
 
 
 def test_a_failed_rest_path_stays_in_the_reason(api):

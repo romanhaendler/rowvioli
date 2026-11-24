@@ -396,8 +396,18 @@ def test_a_value_a_type_under_columns_does_not_take_in_a_later_read_of_a_pattern
     code, answer = load(files, '"o_*.csv" = { sep = ";", columns = { n = "integer" }, target_table = "o" }\n')
     assert code == 1
     [(reason,)] = files.target("select reason from _rowvioli.status")
-    assert reason.rstrip(".") == (  # the error crosses Arrow's stream, which ends it with a period
+    assert reason == (  # the error crosses Arrow's stream, and the run gives it as the connector raised it
         "o_*.csv: column n is not integer in every row; change the value in the file, or its type under columns")
+
+
+def test_a_name_with_a_line_break_in_a_reason_that_crosses_arrows_stream_is_not_cut_there(files):
+    # ticket 11 left it untried: the file connector's own reason, raised while the driver reads the stream
+    for i in range(60):
+        (files.dir / "files" / f"o_{i:02}.csv").write_text(f'id;"n\nx"\n{i};{"secret-value" if i == 55 else i}\n')
+    code, answer = load(files, '"o_*.csv" = { sep = ";", columns = { "n\\nx" = "integer" }, target_table = "o" }\n')
+    assert code == 1
+    assert files.target("select reason from _rowvioli.status") == [(
+        "o_*.csv: column n?x is not integer in every row; change the value in the file, or its type under columns",)]
 
 
 def test_a_value_a_reader_option_of_duckdb_does_not_take_is_named_without_the_value(files):

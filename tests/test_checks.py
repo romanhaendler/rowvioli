@@ -299,7 +299,7 @@ def test_a_value_postgres_quotes_in_its_message_stays_out_of_the_reason(erp, val
     erp.source("create view quoting as select k, n::int as n from texts")
     apply(erp, definition(erp, '"public.quoting" = {}\n'))
     reason = failed(erp)  # x is the harness's password, which a reason hides
-    assert reason.endswith(said.replace("x", "***")) and "secret" not in reason and "3000000000" not in reason, reason
+    assert reason == said.replace("x", "***") and "secret" not in reason and "3000000000" not in reason, reason
 
 
 def test_a_name_postgres_quotes_in_its_message_stays_in_the_reason(erp):
