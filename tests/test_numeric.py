@@ -95,6 +95,26 @@ def test_a_view_on_the_mirror_lets_values_that_fit_load_and_stops_the_widening_o
     log_replays(erp, "raw_erp.prices")
 
 
+def test_a_consumers_check_that_a_widening_breaks_is_named_and_one_whose_function_needs_the_search_path_holds(erp):
+    prices(erp, "price numeric(12, 2), cost numeric(12, 2)", "(1, 137.00, 1.00)")
+    ok(erp)
+    # a function that finds its table on the search path, as a consumer writes it; Postgres checks it again on a widening
+    erp.target("create table public.allowed (n int); insert into public.allowed values (1);"
+               "create function public.known(numeric) returns boolean language plpgsql as "
+               "$$ begin return exists (select from allowed); end $$;"
+               "alter table raw_erp.prices add constraint k check (known(price))")
+    erp.source("alter table prices alter price type numeric(12, 4)")
+    erp.source("insert into prices values (2, 1.2345, 1.00)")
+    assert run(erp, "erp")[1]["tables"]["raw_erp.prices"] == {**UNCHANGED, "inserted": 1}
+    erp.target("alter table raw_erp.prices add constraint c check (scale(cost) = 2)")
+    erp.source("alter table prices alter cost type numeric(12, 4)")
+    erp.source("insert into prices values (3, 1.00, 1.2345)")
+    assert failed(erp, "erp") == 'check constraint "c" of relation "prices" is violated by some row'
+    erp.target("alter table raw_erp.prices drop constraint c")  # the way out
+    assert run(erp, "erp")[1]["tables"]["raw_erp.prices"] == {**UNCHANGED, "inserted": 1}
+    log_replays(erp, "raw_erp.prices")
+
+
 def test_a_widening_names_every_view_on_the_column_and_on_those_views_where_postgres_names_one(erp):  # P20
     prices(erp, "price numeric(12, 2)", "(1, 137.00)")
     ok(erp)

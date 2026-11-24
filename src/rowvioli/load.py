@@ -1084,7 +1084,11 @@ CONSTRAINT = re.compile(r'duplicate key value violates unique constraint "[^"]*"
                         r'"[^"]*"(?: on table "[^"]*")?'
                         r'|null value in column "[^"]*" of relation "[^"]*" violates not-null constraint'
                         r'|new row for relation "[^"]*" violates check constraint "[^"]*"'
-                        r'|conflicting key value violates exclusion constraint "[^"]*"')
+                        r'|conflicting key value violates exclusion constraint "[^"]*"'
+                        # and those of a change of a table that re-checks its rows (a widening, a new primary key)
+                        r'|check constraint "[^"]*" of relation "[^"]*" is violated by some row'
+                        r'|column "[^"]*" of relation "[^"]*" contains null values'
+                        r'|could not create (?:unique index|exclusion constraint) "[^"]*"')
 
 
 # the classes of SQLSTATE whose messages Postgres writes with names and no value of a row, and which an operator needs
@@ -1092,6 +1096,9 @@ CONSTRAINT = re.compile(r'duplicate key value violates unique constraint "[^"]*"
 # or object, resources such as a full disk, a limit, an object in use, a cancel, a system error. A constraint's message
 # (class 23) is known by its words (CONSTRAINT)
 NAMES = {"08", "0A", "25", "2B", "40", "42", "53", "54", "55", "57", "58"}
+# but an object that does not exist, whose name a cast of a row's value makes (`relation "Anna" does not exist` of a
+# check constraint's ::regclass, a column, a type or role, a function): the run's own statements name what is there
+UNDEFINED = {"42P01", "42703", "42704", "42883"}
 
 
 def raised_by_a_consumer(e, step):
@@ -1103,14 +1110,14 @@ def raised_by_a_consumer(e, step):
     Postgres's own messages of a violated constraint keep their names. While publishing, an error of the target outside
     the classes of NAMES is withheld too: a function in C or in a language that names no frame (a consumer's trigger,
     constraint or column) gives no other sign, and Postgres's own message of a value (`date field value out of range:
-    2000-13-01`) can hold a row's."""
+    2000-13-01`) can hold a row's, as can one of an object that does not exist (UNDEFINED)."""
     details = {k.decode(): v.decode(errors="replace") for k, v in getattr(e, "details", None) or []}
     state = details.get("PG_DIAG_SQLSTATE")
     text = str(e)
     function = FRAME.search(details.get("PG_DIAG_CONTEXT") or text.partition("\nCONTEXT:  ")[2])
     message = details.get("PG_DIAG_MESSAGE_PRIMARY") or WRAPPER.sub("", text).split("\n")[0]
     raised = state in ("P0001", "P0004")  # raise_exception, assert
-    if not (function or raised or step == "publishing" and state and state[:2] not in NAMES) \
+    if not (function or raised or step == "publishing" and state and (state[:2] not in NAMES or state in UNDEFINED)) \
             or CONSTRAINT.fullmatch(message):
         return None
     where = "source" if step == "reading the source" else "target"
