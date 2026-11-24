@@ -276,7 +276,7 @@ Limitations: one pooler version, one pool size, a synthetic load. A pass is no p
 | 8 | 0 | 0 | 100 | 0 |
 | 16 | 0 | 0 | 100 | 0 |
 
-`rowvioli status` through the pooler said `a connection pooler in transaction mode is in front of the target` 20 times of 20 with 0, 2 and 8 neighbours. Postgres gives every connection a server process of its own for its life, and a pooler in session mode keeps one per client, so neither is ever taken for a pooler: in `tests/test_run_mistakes.py` an idle pooler in transaction mode is refused and one in session mode loads. Limitations: one pooler, one pool size; a pooler that hands its server connections round-robin to the next client was not tried.
+`rowvioli status` through the pooler said `a connection pooler in transaction mode is in front of the target` 20 times of 20 with 0, 2 and 8 neighbours. Postgres gives every connection a server process of its own for its life, and a pooler in session mode keeps one per client, so neither is ever taken for a pooler: in `tests/test_run_mistakes.py` an idle pooler in transaction mode is refused and one in session mode loads. In the review of ticket 12, idle, with `SERVER_ROUND_ROBIN=1` and `MIN_POOL_SIZE=5`, so that five server connections wait and each goes to the next client in turn: 20 of 20 refused. Limitations: one pooler, one pool size.
 
 ## 15. A whole run on a wide table
 
