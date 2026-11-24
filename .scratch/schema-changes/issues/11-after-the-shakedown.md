@@ -2,7 +2,7 @@
 
 **Blocked by:** 10
 
-**Status:** claimed
+**Status:** resolved
 
 **Model:** Opus
 
@@ -103,3 +103,5 @@ Implementation on `sc-11` (2026-11-24), what is not done or not tested, each wit
   from a header, which nothing in the ticket's repro used.
 - 3 ("another family" half): the test of a source column `_run`/`_loaded_at`/`_op` of another family was
   green before the fix; it stays as a guard, the red was the `renamed` half.
+
+Resolved on branch `schema-changes`, from sc-11 (45c9e85). Review fixes: c9c08c4, 1cc1ade, fa86c4d.
