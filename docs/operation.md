@@ -98,9 +98,10 @@ Rights in the target:
 | Who | Needs |
 |---|---|
 | The pipeline that runs `apply` | to write the definition |
-| The workers | to read the definition (`rowvioli list` run there without `sources/` reads `_rowvioli.sources` and `_rowvioli.meta` with the worker's role), to write what they experienced, to create and write the mirrors |
+| The workers | to read the definition (`rowvioli list` run there without `sources/` reads `_rowvioli.sources` and `_rowvioli.meta` with the worker's role), to write what they experienced, to create and write the mirrors, and to write the record of the columns: `SELECT, INSERT, UPDATE, DELETE` on `_rowvioli.columns` and `SELECT, INSERT` on `_rowvioli.columns__log`. Without these every publish fails with `permission denied`. |
 | Whoever may request a load, for example an application of your own | to read the status view, to write `requested_at` and nothing else; to see progress, membership in `pg_read_all_stats` |
 | Consumers | to read the mirrors and, for history, the views `<target table>__history`. A view is a plain view and runs with its owner's rights, so the right to read it is enough; the change log needs none. Default privileges on tables cover views. To tell a quiet source from a worker that is gone, `USAGE` on `_rowvioli` and `SELECT` on `_rowvioli.status`: that gives the view and nothing else in the schema (`tables`, `runs` and the connections stay closed). |
+| Auditors, and consumers who want to know which columns a table had | `USAGE` on `_rowvioli` and `SELECT` on the view `_rowvioli.columns__history`, and nothing else: the view is a plain view and runs with its owner's rights, so `columns` and `columns__log` stay closed. |
 
 The same as SQL, for the roles `pipeline`, `worker`, `requester` and `consumer` and a target database `dwh`. It was tried out with exactly these statements:
 
@@ -116,6 +117,8 @@ GRANT SELECT ON _rowvioli.sources, _rowvioli.tables, _rowvioli.meta, _rowvioli.s
 GRANT UPDATE ON _rowvioli.tables TO worker;
 GRANT SELECT, INSERT, UPDATE ON _rowvioli.runs TO worker;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA _rowvioli TO worker;
+GRANT SELECT, INSERT, UPDATE, DELETE ON _rowvioli.columns TO worker;     -- from version 4, which `rowvioli init` prints
+GRANT SELECT, INSERT ON _rowvioli.columns__log TO worker;
 GRANT CREATE ON DATABASE dwh TO worker;
 
 -- whoever may request a load (add pg_read_all_stats for progress)
@@ -130,9 +133,12 @@ GRANT USAGE ON SCHEMA raw_erp TO consumer;                  -- for a schema that
 GRANT SELECT ON ALL TABLES IN SCHEMA raw_erp TO consumer;   -- and its tables
 GRANT USAGE ON SCHEMA _rowvioli TO consumer;                -- optional: to read the status; without it a stopped mirror looks like a quiet source
 GRANT SELECT ON _rowvioli.status TO consumer;
+GRANT SELECT ON _rowvioli.columns__history TO consumer;     -- optional: which columns a table had at a moment
 ```
 
 A worker needs `CREATE` on the database only to create the schemas of the target tables. With the schemas created beforehand, `GRANT ALL ON SCHEMA raw_erp TO worker` replaces it. Default privileges apply to objects the role named in `FOR ROLE` creates, so name the worker's role there.
+
+**All workers of a target run the same drivers.** The types a table gets follow what the driver delivers, so they would depend on the worker that loads it. A run that changes columns under another version of the program or of the driver than the table's last successful run had records the changes `by = reader`, with both versions ([The columns table](target.md#the-columns-table)); it does not stop.
 
 The program creates no roles. Whoever can write the definition decides what is loaded, so that right belongs to the pipeline alone. A small set-up can use one user for everything.
 
@@ -149,6 +155,17 @@ The program creates no roles. Whoever can write the definition decides what is l
 On Windows the stop signal is Ctrl+Break instead of SIGTERM.
 
 Ctrl+C (SIGINT) is the opposite of SIGTERM, for `work` and for `run`: nothing waits. The run processes have a process group of their own, so at a terminal only the worker gets the signal (on Windows a run gets it too and may record it as its reason). It ends its run processes, writes one line, `stopped by Ctrl+C, 2 runs ended` (`1 run ended` for one), and exits with 130, without a traceback. It notices the signal within two seconds, except while it connects again to an unreachable target: then once that attempt gives up. A Ctrl+C that lands in the instant the worker asks the target cancels that query only: `work` writes `the target is unreachable` with `canceling statement due to user request` and goes on, `run` ends with that message and exit code 1; press it again. Nothing is recorded: the tables of the ended runs close as `worker lost`, as after a hard kill, and are retried after the pause. `run <source>` interrupted while it requests its tables, before its loop starts, still ends with Python's traceback, or with `canceling statement due to user request` and exit code 1. Ctrl+Z stops the worker alone: its runs go on, and it hears of them after `fg`.
+
+**From version 3 of `_rowvioli` (0.4.1 and before) to 4.** Version 4 adds the columns table with its change log and history view, and the version of the program and of the driver to `runs`. Install the new version on the workers, then run `rowvioli init` once, as the role that owns `_rowvioli.runs`, which is the one that ran the first `init`, or as a superuser: the step alters that table, which Postgres allows only its owner, and creates tables in `_rowvioli`. Rights granted to another role are not enough: `init` then fails and changes nothing. It brings the target to version 4, changes nothing else, and prints the two `GRANT` statements above, with `worker` standing for the role of your workers; give them to that role, which the program never does:
+
+```
+the schema _rowvioli is brought from version 3 to 4; a worker's role needs these rights on its new objects, which the program does not grant (worker stands for that role):
+GRANT SELECT, INSERT, UPDATE, DELETE ON _rowvioli.columns TO worker;
+GRANT SELECT, INSERT ON _rowvioli.columns__log TO worker;
+the schema _rowvioli is ready in the target
+```
+
+A worker of 0.4.1 refuses version 4 (`the target has schema version 4, this program works with version 3`) and every command of the new version but `init` and `status` refuses version 3, so stop the old workers before `init` and start the new ones after the grants. A target that `init` builds new is of version 4 and prints nothing more than that it is ready. The first run after the upgrade records every table's columns as `found`; a table that was stuck on a missing column or a changed type resolves by itself if it has a change log.
 
 From 0.1.0, update every worker before applying new tables: a mirror that a new worker creates has `numeric(p,s)` where the source has it, and a worker of 0.1.0 fails on it with `has changed its type from numeric(10,2) to numeric`. Going back to 0.1.0 needs `ALTER TABLE ... ALTER <column> TYPE numeric` on such columns, in the mirror and its change log.
 

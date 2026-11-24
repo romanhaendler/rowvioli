@@ -16,6 +16,8 @@ raw_erp.customers__history view over the change log: every version of a row
   ... all columns
 ```
 
+A change log has a comment on its column `_op`: the keys it was written under, as JSON, for example `[{"key": ["id"]}]`. The history view is built from it ([History](#history)).
+
 Staging table and diff are TEMP tables on the control connection. They have no fixed name in the target and disappear with the connection.
 
 The schema may be one that other things read already. Beside every mirror with a key stand `<name>__log` and `<name>__history` in the same schema, and `log = false` leaves them out. A table that is there under the name of a mirror is taken over when its columns, their types and its primary key are those of the source: the first run deletes the rows the source does not have, and the change log begins with the rows that are left. Otherwise the run fails and names the difference.
@@ -29,7 +31,14 @@ GRANT SELECT ON _rowvioli.status TO consumer;
 
 `SELECT target_table, status, age, reason FROM _rowvioli.status` then shows `failed` with the reason (for example `customers.csv: no such file in data`), or `ok` with the age of the last load.
 
-**A view of the consumer's own over a mirror keeps its columns.** `CREATE VIEW mine AS SELECT * FROM raw_erp.customers` is expanded when it is created, since Postgres fixes the columns of a view then. When the source gains a column, the mirror gets it with the next run and `mine` does not: replace the view (`CREATE OR REPLACE VIEW`, which may add columns at the end) or drop it and create it again.
+**A view of the consumer's own over a mirror keeps its columns.** `CREATE VIEW mine AS SELECT * FROM raw_erp.customers` is expanded when it is created, since Postgres fixes the columns of a view then. When the source gains a column, the mirror gets it with the next run and `mine` does not: replace the view (`CREATE OR REPLACE VIEW`, which may add columns at the end) or drop it and create it again. A prepared `SELECT *` on a mirror fails once after a new column (`cached plan must not change result type`) and works again on its next preparation.
+
+**A consumer's view or foreign key stops a change and is named.** A run changes the columns of a mirror by itself ([Columns](loading.md#columns)): a column the source drops leaves it, a type is widened, a key changes. Where an object of a consumer depends on what would change, Postgres refuses, the run fails with a reason that says which column would have changed and names the object, and nothing is published. The consumer changes or drops the object, and the next run goes on. So whoever wants to be asked before a column changes builds a view on it. Two things follow:
+
+- A view on a mirror stops what happens to a column it reads: a widening and the column's going. It does not stop a type that is kept while every value fits, nor a change of key, unless it depends on the primary key (one that groups by the key and reads other columns); a foreign key to the mirror stops a change of key.
+- A view on a **history view** stops changes to any column of that history view, because a run drops the history view and creates it again whenever it carries out more than the adding of columns: a column that goes, a type widened, a column renamed or retired, a change of key. A new column replaces it in place and does not stop.
+
+A column that is renamed in the source and proven so by the data ([Columns](loading.md#columns)) is renamed in mirror and change log, and a view on it keeps working under its own column name.
 
 Bookkeeping in the schema `_rowvioli`:
 
@@ -38,10 +47,14 @@ sources   id, name, type, parallel, options, connection (ciphertext), key_id, en
 tables    id, source, source_table, target_schema, target_table, key, max_age, at, timezone, log, max_delete_share, max_seconds,
           options, enabled, loaded_at, attempted_at, attempts, requested_at, reason
 runs      run, table, worker, started_at, finished_at, status,
-          rows_read, inserted, updated, deleted, reason, definition
+          rows_read, inserted, updated, deleted, reason, definition, program_version, driver_version
 status    view over tables: age, due_at and status, computed on every query
 meta      schema_version, max_running, definition (hash of the definition last applied)
+columns   the columns of every mirror and change log: see "The columns table"
+columns__log, columns__history   its change log and history view
 ```
+
+`schema_version` is 4. `rowvioli init` brings a target of version 3 to 4 and changes nothing else; a worker of 0.4.1 or older refuses version 4, and every command of this program but `init` and `status` refuses version 3 until `init` has run.
 
 - `sources` and the first line of `tables` are the definition. Only `apply` writes them. A table row carries the settings a table may override, with the source's filled in.
 - The second line of `tables` is what the workers experienced, plus `requested_at`.
@@ -53,7 +66,7 @@ meta      schema_version, max_running, definition (hash of the definition last a
 
 Today's state is read from the mirror. What changed when is in the change log, and every row of it says when: `_loaded_at` is the moment its run published, the same `now()` that goes into `loaded_at`. A run that finds nothing writes no log row, so the newest `_loaded_at` of a log is the last change, not the last load; the last load is the `age` in `rowvioli status`. Next to the log stands the view `<target table>__history`, which reads nothing but the log and gives every version of a row with the time it was valid.
 
-**A change log that exists is complete.** Replaying it from its first row gives the mirror, always. A log that is created begins with every row of the mirror as `I` (for a table on its first run that is the diff; for a mirror that was there before, for example after `log = false` was taken away, it replaces the diff, while the run still reports its diff counts). A run that would leave the log behind its mirror fails instead ([Checks before publishing](loading.md#checks-before-publishing)). So the history is either complete from its first moment or there is none.
+**A change log that exists is complete.** Replaying it from its last change of key (its first row, where the key never changed) gives the mirror, always, also after columns went or came. A log that is created begins with every row of the mirror as `I` (for a table on its first run that is the diff; for a mirror that was there before, for example after `log = false` was taken away, it replaces the diff, while the run still reports its diff counts). A run that would leave the log behind its mirror fails instead ([Checks before publishing](loading.md#checks-before-publishing)). So the history is either complete from its first moment or there is none.
 
 Example: customer 7 moves and customer 9 is deleted between two runs. The time is the time of the run, which is the time consumers first saw the change. It is never a time of the source. Two changes of a row between two runs are one version, the last. A row that is deleted and inserted again between two runs is one `U`, or no change when it comes back as it was.
 
@@ -88,6 +101,20 @@ SELECT * FROM raw_erp.customers__history
 
 This returns customers 7 (Bonn) and 9 (Essen). A moment before the first load returns nothing: there was no mirror yet. The view exists whenever the change log does, and a column the source adds later appears in it, empty for the versions before. Both exist only for a table with a key and without `log = false`.
 
+**Columns that go, come and change.** A column the source drops leaves the mirror and stays in the change log and the history view. The change log gets a `U` for every row that had a value in it, so the version that had the value ends at the moment the column went and the next one has it empty. A column that comes back continues its old column in the change log, empty for the versions in between. Where a column comes back with a type of another family, the change log's old column is renamed `<name>__<run>` (a retired column, here `city__812` for run 812), keeps its values, and a new column takes the name; the history view shows both. A type of the same family that is widened is widened in the change log too. The columns table says when each of this happened ([below](#the-columns-table)).
+
+**A changed key.** The mirror is replaced as a whole under the new key, and the change log gets a `D` for every old row and an `I` for every new one, with the moment of the run. The history view then has one branch per key, joined with `UNION ALL`, each over its own stretch of the change log and partitioned by its own key: the stretch of the old key reaches up to the moment of the change and its `D` rows, the next begins with its `I` rows. The keys and the moments they changed are the comment on the change log's column `_op`, and the view is built from that comment and from nothing in `_rowvioli`:
+
+```sql
+SELECT col_description('raw_erp.customers__log'::regclass, (SELECT attnum FROM pg_attribute
+        WHERE attrelid = 'raw_erp.customers__log'::regclass AND attname = '_op'));
+-- [{"key": ["customer_no"]}, {"from": "2026-11-24T09:15:02.113845+00:00", "key": ["customer_no", "name"]}]
+```
+
+Every change log the program begins has the comment with its one key; one without it is from before this version (one key) or lost it. A person who drops or renames the comment makes the next run fail after a change of key, and the reason holds the text to put back (`COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '...'`): it is the latest note `the change log's keys: ...` in `columns__log`. A run that renames or retires a column of a key rewrites the comment in the same transaction.
+
+A changed key costs two log rows per row, and the history before the change is read by the old key. Nothing before it is lost.
+
 What changed in a period is a condition on the change log. An update shows the new values, a delete the last ones:
 
 ```sql
@@ -104,6 +131,54 @@ SELECT customer_no, city
   FROM (SELECT DISTINCT ON (customer_no) * FROM raw_erp.customers__log
          WHERE _loaded_at <= '2026-11-13 07:59:00+00' ORDER BY customer_no, _loaded_at DESC) l
  WHERE _op <> 'D';
+```
+
+## The columns table
+
+Which columns and types a mirror had at a moment, and what caused each change, is kept the way rows are: `_rowvioli.columns` is to the columns of the mirrors what a mirror is to its rows, `_rowvioli.columns__log` its change log and `_rowvioli.columns__history` its history view, with `_op`, `_run`, `_loaded_at`, `_valid_from` and `_valid_to` as for any change log. `_loaded_at` is that of the rows published in the same transaction, so a column's change and the rows loaded with it carry the same moment. The three are written by the publishing transaction only, for every table, with or without a key.
+
+```
+columns   target_schema, target_table, column     the key
+          type          the type in the target
+          source_type   the type as the connector delivered it
+          key           the place in the key (1, 2, ...), empty if not a key column
+          mirror        whether the mirror has the column; false for one only the change log has
+          was           the name before a rename or a retirement
+          by            source, definition, reader, hand or found
+          note          see below
+          id            the table's id in _rowvioli.tables, not part of the key
+```
+
+There is one row per column of a mirror and one per column only its change log has: a column that left the mirror (`mirror` false) and a retired column `<name>__<run>`.
+
+- **`by` says what caused the change.** `source`: the source changed. `definition`: the definition did, with a type under `columns`, a `renamed`, a changed `key`, or a column taken out of a REST table's `columns` (every change a run makes to the columns of a REST table is `definition`, and so is every change of a column a table names under `columns`, one that comes included, and a pin taken out of a CSV, Excel or JSON column). `reader`: the change came with another version of the program or of the driver than the table's last successful run had, or that run had none, so it is not necessarily the source's; the note holds both versions (`program 0.4.1 to 0.5.0, driver duckdb 1.5.0 to duckdb 1.5.1`). `hand`: a person changed the mirror or its change log, and the next run that published found it. `found`: the first fill of a table, or the columns of a mirror renamed by hand under its new name.
+- **`note`** lists, for a column that left the mirror, the indexes, check constraints and column grants that Postgres dropped with it without a word (`index raw_erp.customers_city_idx, constraint city_check on table raw_erp.customers, the grant of SELECT to reader went with it`); for a rename the data proved, `proven by the data: 20 rows unchanged otherwise, 20 of them equal, 5 distinct values`; for a changed key `the change log's keys: ` and the comment on `_op`; for a primary key a person changed and the run put back, `the primary key (a) was put back to the definition's (b)`.
+- **`source_type` is the type as staged**, not as the source named it: a `json` column arrives as `jsonb`, a `varchar(n)` as `text`, and a mirror that is wider than its source says why in the pair of `type` and `source_type`.
+- **A change by hand is dated when it is noticed**, by the run that publishes next, and not at all while its table fails. A column that a person drops from the mirror and the run adds again is recorded as `hand`.
+
+Which columns did the table have on 1 March? A column the mirror has is `mirror`; without that condition the change log's columns come too:
+
+```sql
+SELECT "column", type, "key" FROM _rowvioli.columns__history
+ WHERE target_schema = 'raw_erp' AND target_table = 'customers' AND mirror
+   AND _valid_from <= '2026-03-01 00:00:00+00' AND (_valid_to > '2026-03-01 00:00:00+00' OR _valid_to IS NULL)
+ ORDER BY "column";
+```
+
+What changed in a table since a moment, by whom, and what the note says:
+
+```sql
+SELECT _loaded_at, _op, "column", type, mirror, was, "by", note FROM _rowvioli.columns__log
+ WHERE target_schema = 'raw_erp' AND target_table = 'customers' AND _loaded_at > '2026-03-01 00:00:00+00'
+ ORDER BY _loaded_at, "column";
+```
+
+The reader of `columns__history` needs `SELECT` on that view and nothing else in `_rowvioli`, as for the history of a mirror ([Rights](operation.md#the-target)).
+
+**The notification.** A run that records a change of columns, a key or a name notifies the channel `rowvioli_schema` in the transaction that publishes it, once per run, so a listener hears it at the COMMIT and never for a run that was rolled back. The payload is small and fixed: `{"schema" : "raw_erp", "table" : "customers", "run" : 812}`, as Postgres writes a JSON object. A listener reads what changed from `columns__log`, `WHERE _run = 812`. It is not sent for a first fill, where every column is `found`: a table's first fill is no change of columns. A change `by = hand` or `by = reader` is sent as well.
+
+```sql
+LISTEN rowvioli_schema;
 ```
 
 ## Comparing in the target
@@ -147,6 +222,8 @@ UPDATE _rowvioli.runs SET status = 'ok', finished_at = now(), inserted = ..., up
  WHERE run = :run;
 COMMIT;
 ```
+
+Where the plan holds more than added columns ([Columns](loading.md#columns)), publishing begins differently: it locks mirror, change log and history view in one statement with `LOCK TABLE ... IN ACCESS EXCLUSIVE MODE NOWAIT`, tried again for up to ten seconds, so that a run never waits for a lock while it holds another and cannot deadlock with a consumer who reads them in another order. Then it drops the history view, carries out the plan (renames, retired columns, the key, columns that go, widened types), applies the diff, creates the history view again, writes the columns table, notifies on `rowvioli_schema` and ends with the check of the target name, as above.
 
 ## How Postgres counts
 
@@ -194,6 +271,7 @@ The prototype claimed this way with 6 workers of 4 slots, two sources with `para
 | A table fails again and again | the pause doubles up to `max_age`. The status shows the reason and the number of attempts. | |
 | A connector is not installed on a worker | the run fails with a reason that names the worker | right after |
 | The target fails over to another node | connections drop, running loads end without publishing, the retry catches up | with the connection |
+| An object of a consumer depends on a column, type or key that would change | the run fails and names the object, nothing is published | right after; the next run goes on once the object is changed |
 | Target Postgres is unreachable | workers wait and retry. Nothing is loaded. | |
 
 In no case does anything half-done become visible: a COMMIT needs a command from the worker, and the worker is gone by then.

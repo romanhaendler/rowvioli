@@ -102,7 +102,7 @@ Families: the exact numbers (`smallint`, `integer`, `bigint`, `numeric`); the fl
 | D1 | `log = false`, later switched on | the log begins with every row | the same | code |
 | D2 | Log exists, then `log = false` | fails and names the way | the same: the program does not end a log | code |
 | D3 | Log dropped by hand | the next run begins a new one | the same; the first `_loaded_at` in the log shows it | code |
-| D4 | A log column dropped or retyped by hand | fails if it does not fit | the one rule for the log: a missing column is added (its old values are gone, by hand), a wider one stays | desk |
+| D4 | A log column dropped or retyped by hand | fails if it does not fit | a dropped one stops as G1, since it cannot be told from a person's column; the drop from the mirror is the way out, and the next run records it `by = hand` (its old values are gone, by hand). A wider one stays (ticket 09) | code |
 | D5 | History view dropped or replaced by somebody | recreated by the next run | the same | code |
 | D6 | A consumer's view reads the history view, and a log column is renamed or retyped | | the history view is dropped and created for every such change, so a consumer's view on it stops the run whichever column it reads. Postgres names the view | PG, desk |
 | D7 | Somebody asks for the values of a dropped column | gone, if the recipe of `docs/loading.md` was followed | in the log and in the history view | desk |
