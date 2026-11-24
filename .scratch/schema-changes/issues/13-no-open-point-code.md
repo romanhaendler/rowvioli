@@ -60,3 +60,44 @@ tried; it adds tests and touches the program only where a test goes red. Spec:
 - [ ] `docs/` say what is true after this; ticket 14 or 15 rewrites `docs/open-points.md`, leave that page's structure alone but correct the entries this ticket makes false.
 
 ## Comments
+
+Implementation on `sc-13` (2026-11-24), one commit per item, item 7 in six; what is not done or not tested, each
+with why and what closing it would take:
+
+- 1: the retirement is a comment on the retired log column, `{"retired": "<name>"}`, not an entry in the comment on
+  `_op`: a comment follows its column when a person renames it (the way out of A19) or drops it, where an entry in
+  `_op`'s comment would keep naming a column that is gone or is now the source's. One mechanism all the same: the
+  change log's comments on its columns say what it knows of itself, read by one function (`comments`), and a lost
+  one stops with the text to put back, the keys' from the columns log, a retired column's from its note in the
+  columns table. A change log from this branch's earlier commits has retired columns without the comment; they count
+  as ordinary log columns (nothing is released, nothing migrated). A rename of a retired column's base leaves the
+  comment naming the old base, which is what its values were.
+- 2: the entry is `catalog`, with two values, not a flag: REST and file differ in whether a column the data lack goes
+  (`"definition"`: it was taken out of `columns`) or is empty (`"data"`), and one flag cannot say both without the
+  rule naming the connector again. Tested for a connector of one's own with `"data"` and without the entry;
+  `"definition"` is tested through the shipped `rest` only.
+- 4: Postgres 14, 15, 16 and 17 all refuse `GRANTED BY` any role but the current one (`grantor must be current
+  user`, tried in containers of each). `SET ROLE` to the grantor works on all four where the session's role is a
+  superuser or a member that may set it (16 and 17: `WITH SET TRUE`, the default). Tested as a superuser, a member and
+  a worker's role alone (the fallback, the grant by the worker's role). A grant whose grantor no longer holds the
+  grant option (Postgres keeps such a grant when the grantor's table grant is revoked but a column grant remains)
+  comes back as no grant, with Postgres's warning; not tested.
+- 5: the object in use is named from the catalogue for a drop of a column, of the history view and of a primary key
+  (through its index, for a foreign key); tested for a column. A view that reads no column of the history view
+  (`select count(*)`) depends on the view as a whole and is named too; a drop for which the catalogue finds nothing
+  keeps the old sentence.
+- 8: told by SQLSTATE class, not by words: while publishing, classes 08, 0A, 25, 2B, 40, 42, 53, 54, 55, 57, 58 and a
+  constraint's message are shown, everything else withheld. What stays: a C function that raises in one of the shown
+  classes, and a value where Postgres's message of those classes puts a name (`relation "Anna" does not exist` of a
+  cast to `regclass` in a check constraint); an error before publishing (a policy on the mirror during the diff).
+  Closing it would take telling a name from a value in Postgres's messages, which nothing does.
+- 7, done: one `moved` (the plan's), the renames' own mapping named `renamed_to`; whether a stated rename acts tested
+  once, in `load`; the two stops of "a run never ends a change log" one stop (it now comes before the key is looked
+  at: a table that breaks it and has a changed key that nothing in the target explains is told about the change log
+  first, where it was told about the key; no test has both); `log` a setting and `log_columns` columns throughout;
+  `by` decided in one pass after the rows are built (the reader's versions are now read whenever rows are recorded).
+  Not done: the columns as dicts from the start (four functions call `dict()` on the lists): it would change every
+  loop over columns in `load.py` (`.items()` in about ten places, `staged + [...]` in `diff`), one large diff the
+  night before the release for no change a reader meets; `publish()` keeps its nine parameters, which are the
+  pipeline's facts in its order, and bundling them would hide which step reads which. Closing either is a mechanical
+  change of `load.py` with the suite as the net.
