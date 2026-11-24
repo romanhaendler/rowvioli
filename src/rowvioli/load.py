@@ -119,6 +119,11 @@ def check(conn, t, staged, mirror, log_columns):
             plan["gone"].append(name)
         elif family(types[name]) != family(type):  # another family goes and comes (decision 6); fit() did the same
             changed = f"column {name} has changed its type from {type} to {types[name]}"
+            drop = ("so a person drops it and the next run adds it anew: "
+                    f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
+            if t["type"] in ("file", "rest") and name in dict(t["options"].get("columns") or {}):  # pinned already
+                raise Exception(f"{changed} under columns in the table's definition; a source without a catalog takes "
+                                f"no column into another family by itself, {drop}")
             if t["type"] in ("file", "rest"):
                 raise Exception(f"{changed}; a source without a catalog guesses its types, so pin it under columns "
                                 "in the table's definition")
@@ -126,8 +131,7 @@ def check(conn, t, staged, mirror, log_columns):
                 raise Exception(f"{changed}, a type of another family in the key, so a row before cannot be told "
                                 "from one after: give the table another target_table, which begins a new mirror")
             if not (t["key"] and t["log"] and log_columns):
-                raise Exception(f"{changed}; without a change log its values are nowhere else, so a person drops it "
-                                f"and the next run adds it anew: ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
+                raise Exception(f"{changed}; without a change log its values are nowhere else, {drop}")
             if family(logged.get(name, types[name])) != family(type):  # the mirror's type changed by hand (cases G4)
                 raise Exception(changed)
             plan["gone"].append(name)
