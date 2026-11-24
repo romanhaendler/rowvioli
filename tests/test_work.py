@@ -175,28 +175,25 @@ def test_ctrl_c_ends_the_worker_with_one_line_130_and_no_run_process_left(ready,
 def test_with_the_limits_full_the_targets_connections_stay_at_the_running_tables_plus_one_per_worker(ready):
     tables = "\n".join(f'"public.slow{i}" = {{ key = ["id"] }}' for i in range(4))
     for i in range(4):
-        slow(ready, f"slow{i}", 30, 1)
+        slow(ready, f"slow{i}", 3600, 1)  # loading for longer than the test looks, however busy the machine
     apply(ready, source(ready, "erp", "parallel = 4", tables))
     ready.target("update _rowvioli.meta set max_running = 2")
-    for _ in range(3):
-        ready.start("work", "--slots", "4")
-    until(lambda: ready.target("select count(*) from _rowvioli.status where status = 'loading'") == [(2,)])
+    workers = [ready.start("work", "--slots", "4") for _ in range(3)]
     connections = """select count(*) from pg_stat_activity
                       where datname = current_database() and pid <> pg_backend_pid()"""
-    # the start-up is over when the count has stayed at 2 + 3 for 2 s: run processes started before the first
-    # claims committed find nothing and end, and a slow worker may connect late
+
+    def runs():  # the run processes of all three workers
+        return sum(len(subprocess.run(["pgrep", "-P", str(w.pid)], capture_output=True, text=True).stdout.split())
+                   for w in workers)
     # one connection for all the counting: ready.target opens one per query, and on a busy machine the backend of
     # the query before is still closing when the next one counts, which reads as a sixth connection
     with psycopg.connect(ready.target_url, autocommit=True) as counting:
         def count():
             return counting.execute(connections).fetchone()[0]
-        stable, deadline, values = time.monotonic(), time.monotonic() + 30, []
-        while time.monotonic() - stable < 2:
-            values.append(count())
-            if values[-1] != 2 + 3:
-                stable = time.monotonic()
-            assert time.monotonic() < deadline, f"the connections never settled at 5, seen {sorted(set(values))}"
-            time.sleep(0.05)
+        # the start-up is over when two tables load, their two run processes alone are left (one started before the
+        # first claims committed finds nothing and ends) and every worker has connected
+        until(lambda: ready.target("select count(*) from _rowvioli.status where status = 'loading'") == [(2,)]
+              and runs() == 2 and count() == 2 + 3, timeout=60)
         seen, end = set(), time.monotonic() + 8  # four polling intervals
         while time.monotonic() < end:
             seen.add(count())
