@@ -78,7 +78,7 @@ def load(conn, t):
     t["step"] = "reading the source"
     rows_read = stage(conn, t)
     t["step"] = "checking the data"
-    staged = sql(conn, COLUMNS, ["pg_temp._stage"])
+    delivered = staged = sql(conn, COLUMNS, ["pg_temp._stage"])
     mirror = sql(conn, COLUMNS, [t["mirror"]])  # empty before the first run
     log_columns = sql(conn, COLUMNS, [t["log_table"]])
     staged = fit(conn, t, staged, mirror, log_columns)
@@ -88,7 +88,7 @@ def load(conn, t):
     if mirror:
         check_delete_share(conn, t, rows_read, counts)
     t["step"] = "publishing"
-    return publish(conn, t, staged, mirror, log_columns, rows_read, counts)
+    return publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts)
 
 
 def check(conn, t, staged, mirror, log_columns):
@@ -275,7 +275,7 @@ def diff(conn, t, staged, mirror):
     return {"inserted": counts.get("I", 0), "updated": counts.get("U", 0), "deleted": counts.get("D", 0)}
 
 
-def publish(conn, t, staged, mirror, log, rows_read, counts):
+def publish(conn, t, staged, delivered, mirror, log, rows_read, counts):
     """Step 6, one transaction: new columns, mirror, change log and its view, loaded_at, attempts and the run's
     row. Raises, so nothing is published, when the table's row no longer gives it this target name."""
     names = ", ".join(quote(c) for c, _ in staged)
@@ -303,6 +303,7 @@ def publish(conn, t, staged, mirror, log, rows_read, counts):
         deleted = rowcount(conn, f"DELETE FROM {t['mirror']}")
         counts = {"inserted": rowcount(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _stage"),
                   "updated": 0, "deleted": deleted}
+    record_columns(conn, t, delivered, mirror, log)
     # the table lock guards the table, not its name, which an apply may have given to another table meanwhile
     # (decision 53). Last, so the row lock that holds off an apply until COMMIT is taken after every wait on a mirror
     if not sql(conn, """UPDATE _rowvioli.tables SET loaded_at = now(), attempts = 0
@@ -326,6 +327,7 @@ def write_log(conn, t, staged, log, names):
     created when missing and replaced when the log got a column; otherwise it is not touched, so takes no lock."""
     if log:
         widened = widen(conn, t["log_table"], staged, log)
+        widened = follow(conn, t, log) or widened
         rows = f"SELECT _op, {names} FROM _diff"
     else:
         sql(conn, f"CREATE TABLE {t['log_table']} (_run bigint, _op text, _loaded_at timestamptz, LIKE {t['mirror']})")
@@ -346,6 +348,88 @@ def write_log(conn, t, staged, log, names):
                    lead(_loaded_at) OVER (PARTITION BY {key} ORDER BY _loaded_at) AS _valid_to, {columns}
               FROM {t['log_table']}) h
          WHERE _op <> 'D'""")
+
+
+def follow(conn, t, log):
+    """Decision 20: a numeric type that a person widened in the mirror is followed in the change log, so that what the
+    mirror holds fits it. The history view reads the column, so it goes first and the caller creates it again. Says
+    whether it altered one."""
+    def digits(type):  # before and after the point; unconstrained numeric holds all
+        m = re.fullmatch(r"numeric\((\d+),(\d+)\)", type)
+        return (int(m[1]) - int(m[2]), int(m[2])) if m else (float("inf"),) * 2 if type == "numeric" else None
+    mirror = dict(sql(conn, COLUMNS, [t["mirror"]]))
+    wider = [(name, into) for name, type in log if (into := mirror.get(name)) and into != type
+             and digits(type) and digits(into) and all(a >= b for a, b in zip(digits(into), digits(type)))]
+    if wider:
+        sql(conn, "SET LOCAL lock_timeout = '10s'")
+        sql(conn, f"DROP VIEW IF EXISTS {t['history']}")
+        sql(conn, f"ALTER TABLE {t['log_table']} " + ", ".join(f"ALTER {quote(n)} TYPE {into}" for n, into in wider))
+    return bool(wider)
+
+
+def record_columns(conn, t, delivered, mirror, log):
+    """Decisions 17 to 22, last in publishing, in its transaction: what the columns of mirror and change log are now
+    against what `_rowvioli.columns` says, as rows of `columns__log` with this transaction's moment. `mirror` and `log`
+    are the columns as the run found them, so that what differs from the record without this run is by hand. Notifies
+    on `rowvioli_schema` when anything but a first fill was recorded."""
+    def state(mirror, log):
+        return {**{n: (type, False) for n, type in log if n not in ("_run", "_op", "_loaded_at")},
+                **{n: (type, True) for n, type in mirror}}
+    found = state(mirror, log)
+    now = state(sql(conn, COLUMNS, [t["mirror"]]), sql(conn, COLUMNS, [t["log_table"]]))
+    key = {k: i + 1 for i, k in enumerate(t["key"] or [])}
+    delivered = dict(delivered)
+    with conn.cursor() as c:
+        c.execute("""SELECT target_schema, target_table, "column", type, source_type, "key", mirror, was, "by", note,
+                            to_regclass(format('%I.%I', target_schema, target_table)) IS NULL
+                       FROM _rowvioli.columns WHERE id = $1""", [t["id"]])
+        recorded = c.fetchall()
+    names = ["target_schema", "target_table", "column", "type", "source_type", "key", "mirror", "was", "by", "note"]
+    old = {r[2]: dict(zip(names, r)) for r in recorded if (r[0], r[1]) == (t["schema"], t["table"])}
+    # a mirror renamed by hand: what was recorded under a name that is no table any more is closed
+    rows = [{**dict(zip(names, r)), "op": "D", "by": "hand"} for r in recorded if r[10]]
+    rows += [{**r, "op": "D", "by": "hand"} for name, r in old.items() if name not in now]
+    for name, (type, in_mirror) in now.items():
+        row = dict(target_schema=t["schema"], target_table=t["table"], column=name, type=type,
+                   source_type=delivered.get(name, type), key=key.get(name), mirror=in_mirror, was=None, note=None)
+        if (before := old.get(name)) is None:
+            row.update(op="I", by="found" if not old else "source" if name not in found else "hand")
+        else:
+            hand = found.get(name) != (before["type"], before["mirror"])
+            if not hand and all(before[f] == row[f] for f in ("type", "source_type", "key", "mirror")):
+                continue
+            row.update(op="U", by="hand" if hand else "source", was=before["was"])
+        rows.append(row)
+    if not rows:
+        return
+    if any(r["by"] == "source" for r in rows):  # another reader gave these columns, perhaps, not the source
+        [(differs, note)] = sql(conn, """
+            SELECT (l.program_version, l.driver_version) IS DISTINCT FROM (c.program_version, c.driver_version),
+                   format('program %s to %s, driver %s to %s', coalesce(l.program_version, 'none'),
+                          coalesce(c.program_version, 'none'), coalesce(l.driver_version, 'none'),
+                          coalesce(c.driver_version, 'none'))
+              FROM _rowvioli.runs c LEFT JOIN LATERAL (SELECT program_version, driver_version FROM _rowvioli.runs
+                    WHERE "table" = c."table" AND status = 'ok' AND run < c.run ORDER BY run DESC LIMIT 1) l ON true
+             WHERE c.run = $1""", [t["run"]])
+        for r in rows:
+            if differs and r["by"] == "source":
+                r.update({"by": "reader", "note": note})
+    x = """jsonb_to_recordset($1::jsonb) AS x(op text, target_schema text, target_table text, "column" text,
+                type text, source_type text, "key" int, mirror boolean, was text, "by" text, note text)"""
+    changes = json.dumps(rows)
+    fields = 'target_schema, target_table, "column", type, source_type, "key", mirror, was, "by", note'
+    sql(conn, f"INSERT INTO _rowvioli.columns__log SELECT $2::bigint, op, now(), {fields}, $3::int FROM {x}",
+        [changes, t["run"], t["id"]])
+    sql(conn, f"""DELETE FROM _rowvioli.columns c USING {x} WHERE x.op = 'D'
+                     AND (c.target_schema, c.target_table, c."column") = (x.target_schema, x.target_table, x."column")""",
+        [changes])
+    sql(conn, f"""INSERT INTO _rowvioli.columns SELECT {fields}, $2::int FROM {x} WHERE op <> 'D'
+                  ON CONFLICT (target_schema, target_table, "column") DO UPDATE SET type = excluded.type,
+                  source_type = excluded.source_type, "key" = excluded."key", mirror = excluded.mirror,
+                  was = excluded.was, "by" = excluded."by", note = excluded.note""", [changes, t["id"]])
+    if any(r["by"] != "found" for r in rows):
+        sql(conn, "SELECT pg_notify('rowvioli_schema', json_build_object('schema', $1::text, 'table', $2::text,"
+                  " 'run', $3::bigint)::text)", [t["schema"], t["table"], t["run"]])
 
 
 def widen(conn, table, staged, existing):
