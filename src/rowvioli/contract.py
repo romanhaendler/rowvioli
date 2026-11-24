@@ -11,6 +11,8 @@ from importlib.metadata import entry_points
 # the metadata of an Arrow field whose type the file brings itself (Parquet), not a catalog nor a pin: it can change
 # from one file to the next, so a change of its family stops (decision 54)
 OWN_TYPE = {b"rowvioli:own_type": b"true"}
+# the shipped connectors whose packages come with an extra of their name (pyproject.toml)
+EXTRAS = ("file", "odbc", "rest")
 
 
 def connector(type, where=""):
@@ -23,7 +25,7 @@ def connector(type, where=""):
     try:
         return entry.load()
     except (ImportError, OSError) as e:  # a shipped connector without its extra, or without the library it loads
-        extra = isinstance(e, ModuleNotFoundError) and entry.value == f"rowvioli.connectors.{type}" and type != "postgres"
+        extra = isinstance(e, ModuleNotFoundError) and entry.value in [f"rowvioli.connectors.{x}" for x in EXTRAS]
         raise SystemExit(f'connector "{type}" cannot be loaded{where}: {e}'
                          + (f'; pip install "rowvioli[{type}]" installs it' if extra else ""))
 
