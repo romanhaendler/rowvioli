@@ -2,7 +2,7 @@
 
 **Blocked by:** 12
 
-**Status:** claimed
+**Status:** resolved
 
 **Model:** Opus
 
@@ -114,3 +114,5 @@ messages of a constraint a widening checks again are shown (item 8); an old key 
 changes failed the run (item 1); the merged stop of item 7 is tested; a key column named under `columns` that no file
 has stops as null (item 3). A misspelt name under `columns` is an empty column, as in REST: the old Binder Error caught
 it, but a pin set before a file brings its column must not stop the table, and the empty column shows the mistake.
+
+Resolved on branch `schema-changes`, from sc-13 (a596ac4). Review fixes: a7559ac, b575de4, e7308fd, 806b8ca, 426ff9e, 99f9587, 0fa0c66.
