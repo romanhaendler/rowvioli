@@ -16,6 +16,7 @@ docker exec rowvioli-exp psql -U postgres -q -v n=10000000 -f /exp/03_diff_upfro
 docker exec rowvioli-exp sh /exp/04_hard_kill.sh
 docker exec rowvioli-exp psql -U postgres -q -f /exp/05_claim.sql && docker exec rowvioli-exp sh /exp/05_claim.sh
 docker exec rowvioli-exp psql -U postgres -q -v n=10000000 -f /exp/06_temp_staging.sql
+docker exec rowvioli-exp psql -U postgres -q -f /exp/09_schema_changes.sql
 
 docker rm -f rowvioli-exp
 
@@ -41,6 +42,7 @@ Several scripts create tables and schemas with the same names. Restart the conta
 | `06_temp_staging.sql` | What does a TEMP staging table cost? Does `ROW(...)` compare by position or by name? | no multi-core compare; by position |
 | `07_secrets.py` | Does sealed-box encryption have the properties the encrypted connections rely on? | yes, all six |
 | `08_drivers.py` | Can ADBC alone carry the control connection, or is a second Postgres driver needed? | ADBC alone can |
+| `09_schema_changes.sql` | Does the design of schema changes (`.scratch/schema-changes/strategy.md`) hold in Postgres 16: column goes and comes, widening, key change, rename proof, locks, `pg_notify`, the ledger? | each claim prints `ok` or `FAIL: ...`; all `ok`, with the caveats in the notes it prints |
 
 ## Known quirks
 
@@ -51,3 +53,4 @@ Several scripts create tables and schemas with the same names. Restart the conta
 - `05` shows the claim of the first round: waiting runs and one counting lock per source. The concept now claims due tables with one counting lock for the whole target.
 - `06` ends with an error on purpose: the last query shows that `ROW(b.*)` does not work when the column order differs.
 - `08` connects from the host to port 54408 and takes the number of rows as an optional argument, one million by default.
+- `09` runs in seconds, needs no `--shm-size`, and connects to itself with `dblink` (`host=127.0.0.1`, password `x`) to play a second session in P8 and P9. It prints `ERROR:  division by zero` in P9 on purpose: that is the transaction that fails after `pg_notify`.
