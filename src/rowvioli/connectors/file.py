@@ -107,9 +107,8 @@ def read(connection, table, options):
 
     def uncast(e):
         """DuckDB's message for a value a cast does not take holds the value, which would end up in the status view
-        and the log: the reason names the column instead, found by trying each cast. Any other error as it is."""
-        if isinstance(e, OSError) and not str(e).startswith("Conversion Error"):
-            return e
+        and the log: the reason names the column instead, found by trying each cast whatever the message says. Any
+        other error as it is."""
         for group in groups:
             part = rows(group, cast=False)
             for c, t in columns.items():
@@ -117,6 +116,8 @@ def read(connection, table, options):
                         .fetchall():
                     return Exception(f"{table}: column {c} is not {t} in every row; change the value in the file, or "
                                      "its type under columns")
+        if isinstance(e, OSError) and not str(e).startswith("Conversion Error"):  # not a cast's, such as a lost file
+            return e
         return Exception(f"{table}: a value in the file does not convert to the type its column is read as")
     # a few files per read, one read after the other: DuckDB opened up to 600 files of one list at once, and a
     # union of more than 333 files is too deep for it
