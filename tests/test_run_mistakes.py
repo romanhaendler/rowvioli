@@ -31,6 +31,8 @@ def test_a_numeric_the_target_cannot_hold_fails_with_the_cause_and_no_path(erp, 
 
 
 def test_a_numeric_whose_values_fit_loads_whatever_its_digits_before_the_point(erp):
+    if int(erp.source("show server_version_num")[0][0]) < 150000:
+        pytest.skip("a numeric's scale below 0 or above its precision needs Postgres 15 in the source")
     # a precision equal to the scale has no digit before the point but the 0 Postgres writes; beyond 76 digits no
     # decimal has the precision, so the column is read as an unconstrained one
     columns = {"a": ("numeric(2,2)", "-0.99"), "b": ("numeric(3,5)", "0.00123"), "c": ("numeric(1000,0)", "-5"),
