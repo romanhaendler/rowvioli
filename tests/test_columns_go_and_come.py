@@ -590,8 +590,9 @@ def test_a_run_never_waits_for_a_lock_while_holding_one_and_gives_up_after_10s(e
         erp.target("update _rowvioli.tables set requested_at = now()")
         consumer.execute("select * from raw_erp.customers__history")
         p = erp.start("run")
-        until(lambda: erp.target("select 1 from _rowvioli.runs where status = 'running'"))
-        time.sleep(1)  # the run tries its lock meanwhile
+        # the run tries its lock: between two tries it has just rolled back
+        until(lambda: erp.target("select 1 from pg_stat_activity where datname = current_database() "
+                                 "and (query like 'LOCK TABLE%' or query = 'ROLLBACK')"))
         consumer.execute("set local lock_timeout = '2s'")
         consumer.execute("select * from raw_erp.customers")  # the run holds nothing it would wait on
         consumer.commit()

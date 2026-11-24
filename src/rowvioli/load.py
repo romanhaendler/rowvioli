@@ -106,10 +106,10 @@ def load(conn, t):
     staged, plan["widen"], plan["followed"] = fit(conn, t, staged, mirror, log_columns, plan["renamed"])
     t["step"] = "comparing with the mirror"
     # decision 54: the steps that write a row per row, named to the worker in case they outlast max_seconds
-    key = plan["key"].get("by") == "definition"
+    replaced = plan["key"].get("by") == "definition"
     t["long"] = (f"replacing {t['name']} under the key ({', '.join(t['key'] or [])})"
                  + (", with a D and an I in the change log for every row" if plan["key"]["log"] else "")
-                 + "; raise max_seconds once, until a run has replaced it" if key else
+                 + "; raise max_seconds once, until a run has replaced it" if replaced else
                  f"writing a row of the change log for every row of {t['name']} that had a value in "
                  f"{' and '.join(plan['gone'])}; raise max_seconds once, until a run has written them"
                  if plan["gone"] else None)
@@ -144,8 +144,7 @@ def check(conn, t, staged, mirror, log_columns, renamed):
     mirror's primary key is not the definition's: the primary key it `was`, whether the change is `by` the definition
     or the primary key was changed by hand and is put back, and whether a change `log` exists. `renamed`, new name to
     old, the columns that keep their values and history under another name, the stated ones given and the proven ones
-    added, and `proven`, the note of each one the
-    data proved. `unpinned`, the retired ones whose pin under `columns` was taken out. `moved`, the names the retired
+    added, and `proven`, the note of each one the data proved. `unpinned`, the retired ones whose pin under `columns` was taken out. `moved`, the names the retired
     and renamed columns have after the run, old name to new."""
     types, logged, had = dict(staged), dict(log_columns), dict(mirror)
     key = t["key"] or []
@@ -246,12 +245,12 @@ def check(conn, t, staged, mirror, log_columns, renamed):
         plan["retired"][name] = new
     # named together, so one round of work leads out: a column renamed alike in mirror and change log goes as one gone
     # from the source, and the source's comes anew (a change log's alone left the mirror's, unknown to it, P18)
-    if long := {n: new for n, new in plan["retired"].items() if len(new.encode()) > 63}:
-        raise Exception(f"the change log is to keep the old values of {' and '.join(long)} under "
-                        f"{' and '.join(long.values())}, names longer than 63 bytes, the most Postgres keeps of a "
+    if overlong := {n: new for n, new in plan["retired"].items() if len(new.encode()) > 63}:
+        raise Exception(f"the change log is to keep the old values of {' and '.join(overlong)} under "
+                        f"{' and '.join(overlong.values())}, names longer than 63 bytes, the most Postgres keeps of a "
                         "name: give each the same shorter name in mirror, change log and history view, and the next run lets "
                         "it go as a column gone from the source, in one step: " + "; ".join(
-                            f"ALTER {kind} {table} RENAME COLUMN {quote(n)} TO <a shorter name>" for n in long
+                            f"ALTER {kind} {table} RENAME COLUMN {quote(n)} TO <a shorter name>" for n in overlong
                             for kind, table in ([("TABLE", t["mirror"])] if n in had else [])
                             + [("TABLE", t["log_table"]), ("VIEW", t["history"])]))
     if mirror:
@@ -284,7 +283,7 @@ def check(conn, t, staged, mirror, log_columns, renamed):
     for name, note in sql(conn, 'SELECT "column", note FROM _rowvioli.columns WHERE id = $1 AND NOT mirror '
                                 "AND strpos(note, $2) > 0", [t["id"], RETIRED_NOTE]):  # also under an old target name
         if name in said and name not in retired:
-            text = json.dumps(json.JSONDecoder().raw_decode(note.partition(RETIRED_NOTE)[2])[0])
+            text = retired_comment(note)
             raise Exception(f"the comment on column {name} of the change log {t['name']}__log, which says that it "
                             f"keeps the old values of {retirement(text)}, is missing or unreadable: put it back, "
                             f"COMMENT ON COLUMN {t['log_table']}.{quote(name)} IS {literal(text)}")
@@ -482,11 +481,11 @@ def stage(conn, t):
 
     def cut(name):  # Postgres keeps the first 63 bytes of a name, whole characters, and drops the rest (cases A20)
         return name.encode()[:63].decode(errors="ignore")
-    if long := [n for n in batches.schema.names if cut(n) != n]:
-        twins = [n for n in batches.schema.names if cut(n) == cut(long[0])]
+    if overlong := [n for n in batches.schema.names if cut(n) != n]:
+        twins = [n for n in batches.schema.names if cut(n) == cut(overlong[0])]
         raise Exception(f"columns {' and '.join(twins)} of the source are equal in their first 63 bytes, the most "
                         "Postgres keeps of a name: give them names in the source that differ there" if twins[1:] else
-                        f"column {long[0]} of the source is longer than 63 bytes, the most Postgres keeps of a name: "
+                        f"column {overlong[0]} of the source is longer than 63 bytes, the most Postgres keeps of a name: "
                         "give it a shorter name in the source")
     t["own_types"] = {f.name for f in batches.schema if contract.OWN_TYPE.items() <= (f.metadata or {}).items()}
     if (gone := [k for k in t["key"] or [] if k not in batches.schema.names]):
@@ -623,7 +622,7 @@ def publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, 
         key = f", PRIMARY KEY ({', '.join(quote(k) for k in t['key'])})" if t["key"] else ""
         sql(conn, f"CREATE TABLE {t['mirror']} (LIKE _stage{key})")
     else:
-        widen(conn, t["mirror"], staged, [(moved.get(n, n), type) for n, type in mirror if n not in plan["gone"]])
+        add_columns(conn, t["mirror"], staged, [(moved.get(n, n), type) for n, type in mirror if n not in plan["gone"]])
     if t["key"] and plan["key"].get("by") != "definition":
         on = " AND ".join(f"d.{quote(k)} = m.{quote(k)}" for k in t["key"])
         kept = only = ""
@@ -831,8 +830,8 @@ def carry_out(conn, t, plan):
     return changes
 
 
-KEYS_NOTE = "the change log's keys: "  # the note in the columns table of a change of key, before the comment's text
-# (the reader's versions may come first)
+# the note in the columns table of a change of key, before the comment's text (the reader's versions may come first)
+KEYS_NOTE = "the change log's keys: "
 RETIRED_NOTE = "the change log's comment: "  # the note of a retired column, before its comment's text
 
 
@@ -841,6 +840,11 @@ def comments(conn, t):
     on _op its keys, on a retired column whose old values it keeps. Empty without a change log."""
     return dict(sql(conn, "SELECT attname, col_description(attrelid, attnum) FROM pg_attribute WHERE attrelid = "
                           "to_regclass($1) AND attnum > 0 AND NOT attisdropped", [t["log_table"]]))
+
+
+def retired_comment(note):
+    """The text of a retired column's comment, from its note in the columns table, which may go on after it."""
+    return json.dumps(json.JSONDecoder().raw_decode(note.partition(RETIRED_NOTE)[2])[0])
 
 
 def retirement(text):
@@ -956,7 +960,7 @@ def write_log(conn, t, staged, log_columns, names):
     view is created when missing and replaced when the log got a column; otherwise it is not touched, so takes no
     lock."""
     if log_columns:
-        widened = widen(conn, t["log_table"], staged, log_columns)
+        widened = add_columns(conn, t["log_table"], staged, log_columns)
         rows = f"SELECT _op, {names} FROM _diff"
     else:
         sql(conn, f"CREATE TABLE {t['log_table']} (_run bigint, _op text, _loaded_at timestamptz, LIKE {t['mirror']})")
@@ -1041,7 +1045,7 @@ def record_columns(conn, t, delivered, mirror, log_columns, changes):
     old = {r[2]: dict(zip(names, r)) for r in recorded if (r[0], r[1]) == (t["schema"], t["table"])}
     # the text to put back a retired column's comment (check) goes on with every later row of it, as `was` does, also
     # under a new target name
-    retired = {r[2]: RETIRED_NOTE + json.dumps(json.JSONDecoder().raw_decode(r[9].partition(RETIRED_NOTE)[2])[0])
+    retired = {r[2]: RETIRED_NOTE + retired_comment(r[9])
                for r in recorded if r[9] and RETIRED_NOTE in r[9] and not r[6]}
     # a mirror renamed by hand: what was recorded under a name that is no table any more is closed
     rows = [{**dict(zip(names, r)), "op": "D", "by": "hand"} for r in recorded if r[10]]
@@ -1084,16 +1088,16 @@ def record_columns(conn, t, delivered, mirror, log_columns, changes):
                 r["by"] = "definition"
         if r["by"] == "source" and differs:
             r.update({"by": "reader", "note": "; ".join(filter(None, [note, r["note"]]))})
-    x = """jsonb_to_recordset($1::jsonb) AS x(op text, target_schema text, target_table text, "column" text,
+    recordset = """jsonb_to_recordset($1::jsonb) AS x(op text, target_schema text, target_table text, "column" text,
                 type text, source_type text, "key" int, mirror boolean, was text, "by" text, note text)"""
     payload = json.dumps(rows)
     fields = 'target_schema, target_table, "column", type, source_type, "key", mirror, was, "by", note'
-    sql(conn, f"INSERT INTO _rowvioli.columns__log SELECT $2::bigint, op, now(), {fields}, $3::int FROM {x}",
+    sql(conn, f"INSERT INTO _rowvioli.columns__log SELECT $2::bigint, op, now(), {fields}, $3::int FROM {recordset}",
         [payload, t["run"], t["id"]])
-    sql(conn, f"""DELETE FROM _rowvioli.columns c USING {x} WHERE x.op = 'D'
+    sql(conn, f"""DELETE FROM _rowvioli.columns c USING {recordset} WHERE x.op = 'D'
                      AND (c.target_schema, c.target_table, c."column") = (x.target_schema, x.target_table, x."column")""",
         [payload])
-    sql(conn, f"""INSERT INTO _rowvioli.columns SELECT {fields}, $2::int FROM {x} WHERE op <> 'D'
+    sql(conn, f"""INSERT INTO _rowvioli.columns SELECT {fields}, $2::int FROM {recordset} WHERE op <> 'D'
                   ON CONFLICT (target_schema, target_table, "column") DO UPDATE SET type = excluded.type,
                   source_type = excluded.source_type, "key" = excluded."key", mirror = excluded.mirror,
                   was = excluded.was, "by" = excluded."by", note = excluded.note, id = excluded.id""",
@@ -1103,9 +1107,9 @@ def record_columns(conn, t, delivered, mirror, log_columns, changes):
                   " 'run', $3::bigint)::text)", [t["schema"], t["table"], t["run"]])
 
 
-def widen(conn, table, staged, existing):
+def add_columns(conn, table, staged, existing):
     """Decision 17: adds the source's columns the table lacks, under the lock publish took first (story 43). Says
-    whether it added one."""
+    whether it added one. Not plan["widen"], which widens types."""
     have = dict(existing)
     new = [(name, type) for name, type in staged if name not in have]
     for name, type in new:

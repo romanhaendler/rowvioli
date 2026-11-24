@@ -1,6 +1,7 @@
 """Test harness: two throwaway Postgres containers, the program as a real process.
 
-Tests never import the program. They use the `rv` fixture:
+Tests run the program as a process; a test calls a function of it only for a message that no server here can
+give (a driver's of another database, Arrow's of a value). They use the `rv` fixture:
   rv.run(*args, env={...})   runs `rowvioli` in rv.dir with ROWVIOLI_TARGET_URL and
                              ROWVIOLI_KEY_FILE (rv.dir/worker.key, from `key new`) set;
                              open_files=N limits the open files of the process, which its run processes inherit
