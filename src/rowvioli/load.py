@@ -21,7 +21,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from . import contract, seal, target
-from .target import CLAIMABLE, quote, sql
+from .target import CLAIMABLE, literal, quote, sql
 
 TABLE = """SELECT t.id, s.name AS source, s.type, s.connection, s.key_id, t.source_table, t.target_schema AS schema,
                   t.target_table AS "table", t.key, t.log, t.max_seconds, (s.options || t.options)::text AS options,
@@ -162,8 +162,6 @@ def check(conn, t, staged, mirror, log_columns):
             plan["gone"].append(name)
         elif family(types[name]) != family(type):  # another family goes and comes (decision 54); fit() did the same
             changed = f"column {name} has changed its type from {type} to {types[name]}"
-            drop = ("so a person drops it and the next run adds it anew: "
-                    f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
             # where the definition names the columns it is the catalog. CSV, Excel and JSON deliver every other column
             # as text or jsonb, so another family there is a pin taken out; a type the file brings itself can flip
             if t["type"] == "file" and name not in t["pinned"]:
@@ -177,7 +175,8 @@ def check(conn, t, staged, mirror, log_columns):
                 raise Exception(f"{changed}, a type of another family in the key, so a row before cannot be told "
                                 "from one after: give the table another target_table, which begins a new mirror")
             if not (t["key"] and t["log"] and log_columns):
-                raise Exception(f"{changed}; without a change log its values are nowhere else, {drop}")
+                raise Exception(f"{changed}; without a change log its values are nowhere else, so a person drops it "
+                                f"and the next run adds it anew: ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
             if family(logged[name]) != family(type):  # the mirror's type changed by hand (cases G4)
                 raise Exception(f"column {name} of the mirror has the type {type}, of another family than the "
                                 f"{types[name]} the source delivers, and a run does not change it back; drop it from "
@@ -199,8 +198,6 @@ def check(conn, t, staged, mirror, log_columns):
                             + ("taken" if taken else "longer than 63 bytes") + ": " + way.format(quote(name)))
         plan["retired"][name] = new
     key = t["key"] or []
-    drop = (f"drop it with its history view (DROP TABLE {t['log_table']} CASCADE), or rename both"
-            + (" with the mirror" if mirror else ""))
     if mirror:
         if primary_key and not key and log_columns:  # the program does not end a change log
             raise Exception(f"the definition has no key any more, the mirror's primary key is {primary_key}: "
@@ -217,21 +214,22 @@ def check(conn, t, staged, mirror, log_columns):
     why = ("this run would not write to it (log = false or no key)" if not (key and t["log"])
            else "its mirror is missing" if not mirror else None)
     if log_columns and why:
-        raise Exception(f"the change log {t['name']}__log exists and {why}: {drop}")
+        raise Exception(f"the change log {t['name']}__log exists and {why}: drop it with its history view "
+                        f"(DROP TABLE {t['log_table']} CASCADE), or rename both" + (" with the mirror" if mirror else ""))
     # decision 54: one branch over a change log written under two keys gives wrong rows, so the record says them
     if log_columns and stretches(conn, t) is None and (noted := sql(
             conn, """SELECT substr(note, strpos(note, $2) + length($2)) FROM _rowvioli.columns__log WHERE id = $1
                       AND strpos(note, $2) > 0 ORDER BY _loaded_at DESC LIMIT 1""", [t["id"], KEYS_NOTE])):
         raise Exception(f"the comment on column _op of the change log {t['name']}__log, which says the keys it was "
                         "written under, is missing or unreadable, and the key has changed: put it back, "
-                        f"COMMENT ON COLUMN {t['log_table']}._op IS '{noted[0][0].replace(chr(39), chr(39) * 2)}'")
+                        f"COMMENT ON COLUMN {t['log_table']}._op IS {literal(noted[0][0])}")
     if key:
         # the diff, the change log and the history view carry them beside the table's columns
         for name in ["_op", "_run", "_loaded_at", "_valid_from", "_valid_to"] if t["log"] else ["_op"]:
             if name in types:
-                way = "; log = false frees it" if name != "_op" else "; _op cannot be freed"
+                freed = "; log = false frees it" if name != "_op" else "; _op cannot be freed"
                 raise Exception(f"column {name} is a name of the change log or the history view, so a table with a "
-                                f"key cannot have it{way}")
+                                f"key cannot have it{freed}")
         names = ", ".join(quote(k) for k in key)
         if sql(conn, f"SELECT 1 FROM _stage WHERE {' OR '.join(quote(k) + ' IS NULL' for k in key)} LIMIT 1"):
             raise Exception(f"a key column of ({names}) is null")
@@ -636,7 +634,7 @@ def stretches(conn, t):
 def keys_of_log(conn, t, keys):
     """Writes `keys` as the comment on the change log's column _op; returns the text."""
     text = json.dumps(keys)
-    sql(conn, f"COMMENT ON COLUMN {t['log_table']}._op IS '{text.replace(chr(39), chr(39) * 2)}'")
+    sql(conn, f"COMMENT ON COLUMN {t['log_table']}._op IS {literal(text)}")
     return text
 
 
@@ -677,7 +675,7 @@ def write_log(conn, t, staged, log, names):
     # decision 54: a branch per key, over its stretch of the change log: from its I rows at the moment it began, up to
     # the D rows at the moment the next began
     keys = stretches(conn, t) or [{"key": t["key"]}]
-    moments = [f"'{k['from'].replace(chr(39), chr(39) * 2)}'::timestamptz" for k in keys[1:]]
+    moments = [f"{literal(k['from'])}::timestamptz" for k in keys[1:]]
     branches = []
     for i, k in enumerate(keys):
         cut = ([f"(_loaded_at > {moments[i - 1]} OR _loaded_at = {moments[i - 1]} AND _op = 'I')"] if i else []) + \
@@ -758,18 +756,18 @@ def record_columns(conn, t, delivered, mirror, log, changes):
                 r.update({"by": "reader", "note": "; ".join(filter(None, [note, r["note"]]))})
     x = """jsonb_to_recordset($1::jsonb) AS x(op text, target_schema text, target_table text, "column" text,
                 type text, source_type text, "key" int, mirror boolean, was text, "by" text, note text)"""
-    changes = json.dumps(rows)
+    payload = json.dumps(rows)
     fields = 'target_schema, target_table, "column", type, source_type, "key", mirror, was, "by", note'
     sql(conn, f"INSERT INTO _rowvioli.columns__log SELECT $2::bigint, op, now(), {fields}, $3::int FROM {x}",
-        [changes, t["run"], t["id"]])
+        [payload, t["run"], t["id"]])
     sql(conn, f"""DELETE FROM _rowvioli.columns c USING {x} WHERE x.op = 'D'
                      AND (c.target_schema, c.target_table, c."column") = (x.target_schema, x.target_table, x."column")""",
-        [changes])
+        [payload])
     sql(conn, f"""INSERT INTO _rowvioli.columns SELECT {fields}, $2::int FROM {x} WHERE op <> 'D'
                   ON CONFLICT (target_schema, target_table, "column") DO UPDATE SET type = excluded.type,
                   source_type = excluded.source_type, "key" = excluded."key", mirror = excluded.mirror,
                   was = excluded.was, "by" = excluded."by", note = excluded.note, id = excluded.id""",
-        [changes, t["id"]])
+        [payload, t["id"]])
     if any(r["by"] != "found" for r in rows):
         sql(conn, "SELECT pg_notify('rowvioli_schema', json_build_object('schema', $1::text, 'table', $2::text,"
                   " 'run', $3::bigint)::text)", [t["schema"], t["table"], t["run"]])
