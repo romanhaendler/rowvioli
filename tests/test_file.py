@@ -363,6 +363,13 @@ def test_a_csv_header_with_one_name_twice_arrives_with_the_second_numbered(files
     assert files.target("select * from raw_files.twice") == [("1", "2", "3")]
 
 
+def test_two_names_equal_in_their_first_63_bytes_fail_with_the_cut_name_twice(files):  # cases A20, as it is today
+    (files.dir / "files" / "long.csv").write_text(f"{'c' * 63}x;{'c' * 63}y\n1;2\n")
+    code, answer = load(files, '"long.csv" = {}\n')
+    assert code == 1
+    assert f'column "{"c" * 63}" specified more than once' in answer["raw_files.long"]["reason"]
+
+
 def test_a_csv_without_a_header_gets_column0_and_up_and_keeps_its_first_line(files):  # cases F8, as it is today
     (files.dir / "files" / "nohead.csv").write_text("1;Anna\n2;Ben\n")
     code, answer = load(files, '"nohead.csv" = {}\n')
