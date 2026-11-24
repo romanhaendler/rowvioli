@@ -96,6 +96,11 @@ def read(connection, table, options):
     # each file's columns; its relation goes at once, since it holds the file open
     shapes = {path: dict(zip(part.columns, map(str, part.types))) for path, part in zip(paths, map(relation, paths))}
     first = {}  # the columns of all files, in the order they first appear; a file without one has it empty
+    for name, path in zip(names, paths):  # DuckDB reads a decimal of more than 38 digits as a double, rounded
+        if reader == "read_parquet" and (wide := db.sql("SELECT name, precision FROM parquet_schema(?) WHERE "
+                                                        "precision > 38 LIMIT 1", params=[path]).fetchall()):
+            raise Exception(f"{name}: column {wide[0][0]} is a decimal of {wide[0][1]} digits, more than the 38 DuckDB "
+                            "reads exactly; write it into the file as text or as a decimal of at most 38 digits")
     for name, shape in zip(names, shapes.values()):
         for column, type in shape.items():
             if first.setdefault(column, type) != type:

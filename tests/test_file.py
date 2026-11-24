@@ -591,6 +591,17 @@ def test_an_unsigned_integer_of_a_parquet_file_arrives_whole(files):
         (2**64 - 1, 2**32 - 1, 2**16 - 1, 255), (2**63, 0, 0, 0)]
 
 
+def test_a_parquet_decimal_of_more_than_38_digits_fails_naming_the_column(files):
+    """DuckDB reads it as a double: 10**39 + 1 arrived as 1e39 with the run ok."""
+    pq.write_table(pa.table({"id": [1], "ok": pa.array([Decimal(1)], pa.decimal128(38, 2)),
+                             "big": pa.array([Decimal(10**39 + 1)], pa.decimal256(40, 0))}),
+                   files.dir / "files" / "big.parquet")
+    code, answer = load(files, '"big.parquet" = { key = ["id"] }\n')
+    assert answer["raw_files.big"]["reason"] == (
+        "big.parquet: column big is a decimal of 40 digits, more than the 38 DuckDB reads exactly; write it into the "
+        "file as text or as a decimal of at most 38 digits")
+
+
 def test_a_struct_or_a_map_of_a_parquet_file_arrives_as_jsonb_as_a_nested_value_of_a_json_file(files):
     """One rule for the nested values of a file; the target has no type for a struct or a map."""
     pq.write_table(pa.table({
