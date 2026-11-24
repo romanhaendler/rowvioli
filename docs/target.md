@@ -35,7 +35,7 @@ GRANT SELECT ON _rowvioli.status TO consumer;
 
 **A consumer's view or foreign key stops a change and is named.** A run changes the columns of a mirror by itself ([Columns](loading.md#columns)): a column the source drops leaves it, a type is widened, a key changes. Where an object of a consumer depends on what would change, Postgres refuses, the run fails with a reason that says which column would have changed and names the object, and nothing is published. The consumer changes or drops the object, and the next run goes on. So whoever wants to be asked before a column changes builds a view on it. Two things follow:
 
-- A view on a mirror does not stop a type that is kept while every value fits; it stops a widening, a column that goes and a key that changes.
+- A view on a mirror stops what happens to a column it reads: a widening and the column's going. It does not stop a type that is kept while every value fits, nor a change of key, unless it depends on the primary key (one that groups by the key and reads other columns); a foreign key to the mirror stops a change of key.
 - A view on a **history view** stops changes to any column of that history view, because a run drops the history view and creates it again whenever it carries out more than the adding of columns: a column that goes, a type widened, a column renamed or retired, a change of key. A new column replaces it in place and does not stop.
 
 A column that is renamed in the source and proven so by the data ([Columns](loading.md#columns)) is renamed in mirror and change log, and a view on it keeps working under its own column name.
@@ -54,7 +54,7 @@ columns   the columns of every mirror and change log: see "The columns table"
 columns__log, columns__history   its change log and history view
 ```
 
-`schema_version` is 4. `rowvioli init` brings a target of version 3 to 4 and changes nothing else; a worker of 0.4.1 or older refuses version 4, and every command of this program refuses version 3 until `init` has run.
+`schema_version` is 4. `rowvioli init` brings a target of version 3 to 4 and changes nothing else; a worker of 0.4.1 or older refuses version 4, and every command of this program but `init` and `status` refuses version 3 until `init` has run.
 
 - `sources` and the first line of `tables` are the definition. Only `apply` writes them. A table row carries the settings a table may override, with the source's filled in.
 - The second line of `tables` is what the workers experienced, plus `requested_at`.
@@ -108,7 +108,7 @@ This returns customers 7 (Bonn) and 9 (Essen). A moment before the first load re
 ```sql
 SELECT col_description('raw_erp.customers__log'::regclass, (SELECT attnum FROM pg_attribute
         WHERE attrelid = 'raw_erp.customers__log'::regclass AND attname = '_op'));
--- [{"key": ["customer_no"]}, {"key": ["customer_no", "name"], "from": "2026-11-24T09:15:02.113845+00:00"}]
+-- [{"key": ["customer_no"]}, {"from": "2026-11-24T09:15:02.113845+00:00", "key": ["customer_no", "name"]}]
 ```
 
 Every change log the program begins has the comment with its one key; one without it is from before this version (one key) or lost it. A person who drops or renames the comment makes the next run fail after a change of key, and the reason holds the text to put back (`COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '...'`): it is the latest note `the change log's keys: ...` in `columns__log`. A run that renames or retires a column of a key rewrites the comment in the same transaction.
@@ -151,8 +151,8 @@ columns   target_schema, target_table, column     the key
 
 There is one row per column of a mirror and one per column only its change log has: a column that left the mirror (`mirror` false) and a retired column `<name>__<run>`.
 
-- **`by` says what caused the change.** `source`: the source changed. `definition`: the definition did, with a type under `columns`, a `renamed`, a changed `key`, or a column taken out of a REST table's `columns` (every column change of a REST table is `definition`, and so is every column a table names under `columns`, one that comes included). `reader`: the change came with another version of the program or of the driver than the table's last successful run had, or that run had none, so it is not necessarily the source's; the note holds both versions (`program 0.4.1 to 0.5.0, driver duckdb 1.5.0 to duckdb 1.5.1`). `hand`: a person changed the mirror or its change log, and the next run that published found it. `found`: the first fill of a table, or the columns of a mirror renamed by hand under its new name.
-- **`note`** lists, for a column that left the mirror, the indexes, check constraints and column grants that Postgres dropped with it without a word (`index raw_erp.customers_city_idx, the grant of SELECT to reader went with it`); for a rename the data proved, `proven by the data: 20 rows unchanged otherwise, 20 of them equal, 5 distinct values`; for a changed key `the change log's keys: ` and the comment on `_op`; for a primary key a person changed and the run put back, `the primary key (a) was put back to the definition's (b)`.
+- **`by` says what caused the change.** `source`: the source changed. `definition`: the definition did, with a type under `columns`, a `renamed`, a changed `key`, or a column taken out of a REST table's `columns` (every change a run makes to the columns of a REST table is `definition`, and so is every change of a column a table names under `columns`, one that comes included, and a pin taken out of a CSV, Excel or JSON column). `reader`: the change came with another version of the program or of the driver than the table's last successful run had, or that run had none, so it is not necessarily the source's; the note holds both versions (`program 0.4.1 to 0.5.0, driver duckdb 1.5.0 to duckdb 1.5.1`). `hand`: a person changed the mirror or its change log, and the next run that published found it. `found`: the first fill of a table, or the columns of a mirror renamed by hand under its new name.
+- **`note`** lists, for a column that left the mirror, the indexes, check constraints and column grants that Postgres dropped with it without a word (`index raw_erp.customers_city_idx, constraint city_check on table raw_erp.customers, the grant of SELECT to reader went with it`); for a rename the data proved, `proven by the data: 20 rows unchanged otherwise, 20 of them equal, 5 distinct values`; for a changed key `the change log's keys: ` and the comment on `_op`; for a primary key a person changed and the run put back, `the primary key (a) was put back to the definition's (b)`.
 - **`source_type` is the type as staged**, not as the source named it: a `json` column arrives as `jsonb`, a `varchar(n)` as `text`, and a mirror that is wider than its source says why in the pair of `type` and `source_type`.
 - **A change by hand is dated when it is noticed**, by the run that publishes next, and not at all while its table fails. A column that a person drops from the mirror and the run adds again is recorded as `hand`.
 
@@ -175,7 +175,7 @@ SELECT _loaded_at, _op, "column", type, mirror, was, "by", note FROM _rowvioli.c
 
 The reader of `columns__history` needs `SELECT` on that view and nothing else in `_rowvioli`, as for the history of a mirror ([Rights](operation.md#the-target)).
 
-**The notification.** A run that records a change of columns, a key or a name notifies the channel `rowvioli_schema` in the transaction that publishes it, once per run, so a listener hears it at the COMMIT and never for a run that was rolled back. The payload is small and fixed: `{"schema": "raw_erp", "table": "customers", "run": 812}`. A listener reads what changed from `columns__log`, `WHERE _run = 812`. It is not sent for a first fill, where every column is `found`: a table's first fill is no change of columns. A change `by = hand` or `by = reader` is sent as well.
+**The notification.** A run that records a change of columns, a key or a name notifies the channel `rowvioli_schema` in the transaction that publishes it, once per run, so a listener hears it at the COMMIT and never for a run that was rolled back. The payload is small and fixed: `{"schema" : "raw_erp", "table" : "customers", "run" : 812}`, as Postgres writes a JSON object. A listener reads what changed from `columns__log`, `WHERE _run = 812`. It is not sent for a first fill, where every column is `found`: a table's first fill is no change of columns. A change `by = hand` or `by = reader` is sent as well.
 
 ```sql
 LISTEN rowvioli_schema;
