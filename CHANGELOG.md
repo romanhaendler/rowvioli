@@ -54,6 +54,7 @@ Fixed:
 - A consumer's table that inherits from a mirror keeps its rows. Before, a run read them as the mirror's, deleted them as `D` rows and counted them towards `max_delete_share` (in 0.4.1 too). The history view reads only the change log's own rows.
 - A `timestamp` or `timestamptz` of `infinity` from the `postgres` connector, also in an array, fails the run with a reason that names the column and says to cast it in a view of the source; the driver cannot write it into the target. Before, the reason was `Error occurred writing COPY data:` (in 0.4.1 too). `-infinity` and a date's `infinity` load as before.
 - A Parquet column of a struct or a map, also in a list, or of a list of lists loads as `jsonb`, as a nested value of a JSON file does. Before, the run failed with the driver's `Can't map Arrow type 'struct' to Postgres type`, naming no column (in 0.4.1 too).
+- A target or a `postgres` source whose database is not UTF8 keeps the text as it is: the sessions ask for UTF8, and a text the target's encoding has no character for fails the run with `SQLSTATE 22P05`. Before, a `LATIN1` target stored `Müller` as `MÃ¼ller` with the run `ok`, a schema name with `ü` there ended `rowvioli status` in a traceback and every run before its claim, and a `LATIN1` source failed the run (in 0.4.1 too).
 
 ## 0.4.1 (2026-11-23)
 

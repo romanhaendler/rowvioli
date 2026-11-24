@@ -16,7 +16,9 @@ MIGRATIONS = [("sql/migrate_3_4.sql", "GRANT SELECT, INSERT, UPDATE, DELETE ON _
 # and frees its locks (measured: 62 s after the network was cut, without it still held after 240 s)
 KEEPALIVE = "keepalives_idle=30&keepalives_interval=10&keepalives_count=3&tcp_user_timeout=60000"
 SESSION = {"client_connection_check_interval": "2s", "tcp_keepalives_idle": "30", "tcp_keepalives_interval": "10",
-           "tcp_keepalives_count": "3", "tcp_user_timeout": "60000"}
+           "tcp_keepalives_count": "3", "tcp_user_timeout": "60000",
+           # the driver reads and writes text as UTF8: in a LATIN1 database Müller was stored as MÃ¼ller
+           "client_encoding": "UTF8"}
 
 # what a worker may start and a run may claim, asked with the same counts by both (decision 34)
 CLAIMABLE = files(__package__).joinpath("sql/claimable.sql").read_text()

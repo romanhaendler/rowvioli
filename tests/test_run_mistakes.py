@@ -4,7 +4,7 @@ import subprocess
 import psycopg
 import pytest
 
-from conftest import HOST, until
+from conftest import HOST, _query, _url, until
 from test_checks import failed
 from test_rest import api, load, reason  # noqa: F401 (api is a fixture)
 from test_secrets import lab
@@ -308,3 +308,36 @@ def test_a_line_break_in_a_column_name_is_written_as_a_question_mark_and_the_rea
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert failed(erp) == ("column a?b is missing in the source; without a change log its values are nowhere else, "
                            'so a person drops it: ALTER TABLE "raw_erp"."customers" DROP COLUMN "a?b"')
+
+
+
+def latin1(server, db):
+    """The test's database on that server made again in LATIN1."""
+    _query(_url(server), f"drop database {db}")
+    _query(_url(server), f"create database {db} encoding latin1 template template0 lc_collate 'C' lc_ctype 'C'")
+
+def test_a_latin1_target_stores_the_sources_text_and_refuses_one_it_has_no_character_for(rv, servers):
+    """The session asks for UTF8, whatever the target database's encoding (host H1: `Müller` became `MÃ¼ller`)."""
+    db = rv.target_url.rsplit("/", 1)[1]  # the test's database, made again in LATIN1
+    latin1(servers["target"], db)
+    assert rv.run("init").returncode == 0 and rv.run("key", "new").returncode == 0
+    rv.source("create table customers (customer_no int primary key, name text);"
+              "insert into customers values (1, 'Müller')")
+    apply(rv, definition(rv).replace('max_age = "1h"', 'max_age = "1h"\ntarget_schema = "raw_ü"'))
+    ok(rv)
+    assert rv.target('select name from "raw_ü".customers') == [("Müller",)]
+    r = rv.run("status")
+    assert r.returncode == 0 and "raw_ü.customers" in r.stdout, r.stderr
+    rv.source("update customers set name = 'Ω'")
+    rv.target("update _rowvioli.tables set requested_at = now()")
+    assert "(SQLSTATE 22P05) in the target" in failed(rv)
+
+
+def test_a_latin1_source_delivers_its_text(rv, servers):
+    latin1(servers["source"], rv.source_url.rsplit("/", 1)[1])
+    assert rv.run("init").returncode == 0 and rv.run("key", "new").returncode == 0
+    rv.source("create table customers (customer_no int primary key, name text);"
+              "insert into customers values (1, 'Müller')")
+    apply(rv, definition(rv))
+    ok(rv)
+    assert rv.target("select name from raw_erp.customers") == [("Müller",)]
