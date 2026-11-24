@@ -142,7 +142,8 @@ GRANT SELECT, INSERT ON _rowvioli.columns__log TO {0};
 GRANT CREATE ON DATABASE {1} TO {0}"""  # docs/operation.md "The target"
 
 
-@pytest.mark.parametrize("runs_as", ["a superuser", "a member of the grantor", "a worker's role alone"])
+@pytest.mark.parametrize("runs_as", ["a superuser", "a member of the grantor", "a worker's role alone",
+                                     "a member of a grantor without its schema"])
 def test_a_grant_passed_on_with_the_grant_option_comes_back_from_its_grantor_where_the_runs_role_may_act_as_it(
         erp, runs_as):
     db = erp.target("select current_database()")[0][0]
@@ -155,7 +156,7 @@ def test_a_grant_passed_on_with_the_grant_option_comes_back_from_its_grantor_whe
             for statement in WORKER.format(worker, db).split(";\n"):
                 erp.target(statement)
             env = {"ROWVIOLI_TARGET_URL": erp.target_url.replace("postgres:x@", f"{worker}:w@")}
-        if runs_as == "a member of the grantor":
+        if runs_as.startswith("a member of"):
             erp.target(f"grant {lender} to {worker}")
         assert erp.run("run", env=env).returncode == 0
         erp.target(f"grant usage on schema raw_erp to {lender}, {borrower}")
@@ -164,6 +165,8 @@ def test_a_grant_passed_on_with_the_grant_option_comes_back_from_its_grantor_whe
             c.execute(f"set role {lender}")
             c.execute(f"grant select on raw_erp.customers__history to {borrower}")
             c.execute(f"grant select (city) on raw_erp.customers__history to {borrower}")
+        if runs_as == "a member of a grantor without its schema":  # it could not give the grant any more
+            erp.target(f"revoke usage on schema raw_erp from {lender}")
         erp.source("alter table customers drop column name")  # the history view is built anew
         erp.target("update _rowvioli.tables set requested_at = now()")
         assert erp.run("run", env=env).returncode == 0
@@ -173,7 +176,7 @@ def test_a_grant_passed_on_with_the_grant_option_comes_back_from_its_grantor_whe
                         aclexplode(c.acl) a where r.oid = 'raw_erp.customers__history'::regclass
                         and a.grantee = %s::regrole"""
         # where the run's role may not act as the grantor, it gives the grant itself, as decision 54 says
-        by = worker if runs_as == "a worker's role alone" else lender
+        by = lender if runs_as in ("a superuser", "a member of the grantor") else worker
         assert sorted(erp.target(grantors, [borrower]), key=repr) == [(borrower, by, "city"), (borrower, by, None)]
         erp.target(f"revoke select on raw_erp.customers__history from {lender} cascade")  # takes the table's grant
         assert [g for g in erp.target(grantors, [borrower]) if not g[2]] == ([] if by == lender else
