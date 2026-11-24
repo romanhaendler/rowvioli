@@ -63,11 +63,9 @@ def connect(init=False, versioned=True):
     version = None
     if sql(conn, "SELECT to_regclass('_rowvioli.meta') IS NOT NULL")[0][0]:
         version = sql(conn, "SELECT schema_version FROM _rowvioli.meta")[0][0]
-    if init and (version is None or version < SCHEMA_VERSION):
-        script = "" if version else files(__package__).joinpath("sql/schema.sql").read_text()
-        for step in MIGRATIONS[(version or 3) - 3:]:
-            script += files(__package__).joinpath(step).read_text()
-        transaction(conn, script)
+    if init and (version is None or 3 <= version < SCHEMA_VERSION):  # below 3 there is no step: refused below
+        steps = ["sql/schema.sql", *MIGRATIONS] if version is None else MIGRATIONS[version - 3:]
+        transaction(conn, "".join(files(__package__).joinpath(step).read_text() for step in steps))
         version = SCHEMA_VERSION
     if version is None:
         raise SystemExit(NO_SCHEMA)

@@ -47,6 +47,18 @@ def test_init_brings_a_version_3_target_to_4_and_changes_nothing_else(rv):
     assert rv.target("select name from _rowvioli.sources") == [("erp",)]
 
 
+def test_init_refuses_a_target_older_than_version_3_and_leaves_it(rv):  # the steps begin at 3
+    rv.run("init")
+    version_3(rv)
+    rv.target("update _rowvioli.meta set schema_version = 2")
+    shape = rv.target(SHAPE)
+    r = rv.run("init")
+    assert r.returncode != 0
+    assert re.search(r"\b2\b", r.stderr) and re.search(r"\b4\b", r.stderr), r.stderr
+    assert rv.target(SHAPE) == shape
+    assert rv.target("select schema_version from _rowvioli.meta") == [(2,)]
+
+
 @pytest.mark.parametrize("command", [["init"], ["apply", "sources"], ["run"], ["work"]])
 def test_every_command_using_the_target_refuses_another_schema_version_naming_both(rv, command):
     assert rv.run("init").returncode == 0
