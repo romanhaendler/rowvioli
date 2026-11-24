@@ -32,7 +32,7 @@ rowvioli status             # whenever you want to look
 ```
 $ rowvioli status
 source  table             target             max_age  age     due        status   reason
-crm     contacts          raw_crm.contacts   1d       3h      in 50s     failed   62 % of the rows would be deleted
+crm     contacts          raw_crm.contacts   1d       3h      in 50s     failed   62 % of the rows would be deleted, more than max_delete_share = 0.5 allows: the source table may have been replaced or emptied; if so, max_delete_share = 1.0 on the table lets one run through
 erp     public.customers  raw_erp.customers  1h       1h 3m   now        loading  485,000 of about 1,000,000 rows
 erp     public.items      raw_erp.items      1h       40m     in 20m     ok
 erp     public.orders     raw_erp.orders     5m       2m 14s  in 2m 46s  ok

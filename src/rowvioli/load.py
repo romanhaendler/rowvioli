@@ -396,7 +396,9 @@ def check_delete_share(conn, t, rows_read, counts):
     before = sql(conn, f"SELECT count(*) FROM ONLY {t['mirror']}")[0][0]
     gone = counts["deleted"] if counts else before - rows_read
     if before and gone / before > t["max_delete_share"]:
-        raise Exception(f"{round(100 * gone / before)} % of the rows would be deleted")
+        raise Exception(f"{round(100 * gone / before)} % of the rows would be deleted, more than max_delete_share = "
+                        f"{t['max_delete_share']} allows: the source table may have been replaced or emptied; if so, "
+                        "max_delete_share = 1.0 on the table lets one run through")
 
 
 def stage(conn, t):

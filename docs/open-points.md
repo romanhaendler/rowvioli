@@ -107,7 +107,7 @@ Schema changes (decision 54):
 - **`columns__history` has no row for a column that is closed**, one a person dropped from mirror and change log or one of a mirror renamed by hand under its old name: its last version ends and none follows. What changed since a moment, and the listener's `WHERE _run = 812`, read on the view alone, do not list it; `columns__log` has it as `D`.
 - **A grant on a history view that its grantee passed on with the grant option** is given again by the worker's role when a run builds the view anew, so a later `REVOKE ... CASCADE` from that grantee no longer takes it.
 - **The columns table keeps a renamed column's old name for the moments before the rename**, where the history view of the mirror already shows the new one: `was` is the bridge ([History](target.md#history)).
-- **A source table dropped and created anew with other columns** looks like rows that go: the run stops with the share of rows that would be deleted (`76 % of the rows would be deleted`), and `max_delete_share = 1.0` for one run loads it.
+- **A source table dropped and created anew with other columns** looks like rows that go: the run stops with the share of rows that would be deleted, and the reason says that the source table may have been replaced or emptied and that `max_delete_share = 1.0` on the table lets one run through. The program cannot tell a replaced table from a broken source.
 - **A change log is never ended by the program**: `log = false` and a key taken away still stop while one exists.
 
 ## Not built

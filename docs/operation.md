@@ -65,7 +65,7 @@ KillMode=mixed
   2026-11-12 14:03:01 ▶ raw_shop.orders              started           run 17
   2026-11-12 14:03:01 ✔ raw_shop.orders              ok          0.4s  +0 ~3 -10
   2026-11-12 14:03:03 ▶ raw_crm.contacts             started           run 18
-  2026-11-12 14:03:05 ✘ raw_crm.contacts             failed      2.1s  62 % of the rows would be deleted
+  2026-11-12 14:03:05 ✘ raw_crm.contacts             failed      2.1s  62 % of the rows would be deleted, more than max_delete_share = 0.5 allows: the source table may have been replaced or emptied; if so, max_delete_share = 1.0 on the table lets one run through
   2026-11-12 14:05:40 ⚠ the target is unreachable, connecting again every two seconds: …
   2026-11-12 14:05:52 ✔ the target is reachable again after 12s
   2026-11-12 14:09:12   stopping, 1 run finishes

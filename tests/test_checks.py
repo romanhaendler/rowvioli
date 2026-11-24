@@ -364,6 +364,19 @@ def test_postgres_own_constraint_messages_keep_their_names(erp, constraint, chan
     assert failed(erp).endswith(says)
 
 
+def test_a_source_table_created_anew_with_other_columns_says_what_it_may_be_and_the_setting_for_one_run(erp):  # H2
+    ok(erp)
+    erp.source("drop table customers; create table customers (customer_no int primary key, label text);"
+               "insert into customers values (7, 'a'), (8, 'b'), (9, 'c')")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp).replace("***", "x") == (  # the source's password is x, and the reason hides it
+        "100 % of the rows would be deleted, more than max_delete_share = 0.5 allows: the source table may have been "
+        "replaced or emptied; if so, max_delete_share = 1.0 on the table lets one run through")
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], max_delete_share = 1.0 }\n'))
+    ok(erp, "erp")
+    assert rows(erp.target, MIRROR) == [(7, "a"), (8, "b"), (9, "c")]
+
+
 CHILD = "select * from public.branch order by customer_no"
 BRANCH = ("create table public.branch () inherits (raw_erp.customers);"
           "insert into public.branch values (7, 'Gus', 'Ulm'), (8, 'Hal', 'Ulm'), (9, 'Ida', 'Ulm'), (10, 'Jo', 'Ulm')")
