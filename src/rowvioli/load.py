@@ -116,13 +116,25 @@ def check(conn, t, staged, mirror, log_columns):
                                 "the source; drop it from the mirror, or add it to the change log too and the next run "
                                 "takes it out of the mirror")
             plan["gone"].append(name)
-        elif family(types[name]) != family(type):  # one of the same family fit() keeps or widens
-            raise Exception(f"column {name} has changed its type from {type} to {types[name]}")
+        elif family(types[name]) != family(type):  # another family goes and comes (decision 6); fit() did the same
+            changed = f"column {name} has changed its type from {type} to {types[name]}"
+            if t["type"] in ("file", "rest"):
+                raise Exception(f"{changed}; a source without a catalog guesses its types, so pin it under columns "
+                                "in the table's definition")
+            if name in (t["key"] or []):
+                raise Exception(f"{changed}, a type of another family in the key, so a row before cannot be told "
+                                "from one after: give the table another target_table, which begins a new mirror")
+            if not (t["key"] and t["log"] and log_columns):
+                raise Exception(f"{changed}; without a change log its values are nowhere else, so a person drops it "
+                                f"and the next run adds it anew: ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
+            if family(logged.get(name, types[name])) != family(type):  # the mirror's type changed by hand (cases G4)
+                raise Exception(changed)
+            plan["gone"].append(name)
     had = dict(mirror)
     way = ("rename that column of the change log and drop its history view, which the next run creates again: "
            f"ALTER TABLE {t['log_table']} RENAME COLUMN {{}} TO <another name>; DROP VIEW {t['history']}")
     for name, type in staged:
-        if name in had or name not in logged:
+        if name not in logged or name in had and name not in plan["gone"]:
             continue
         if (retired := re.fullmatch(r"(.+)__\d+", name)) and retired[1] in logged:
             raise Exception(f"column {name} of the source has the name under which the change log keeps the old "
@@ -320,11 +332,14 @@ def diff(conn, t, staged, mirror, plan):
     the target"), over the columns of staging table and mirror together, every column list by name. Returns the
     counts."""
     had, staging = dict(mirror), dict(staged)
-    columns = staged + [(c, had[c]) for c in plan["gone"]]
+    # the mirror's column each reads: one that went under the change log's name for it, a retired one under its new
+    # name and never compared with its successor
+    read = {c: c for c in had if c not in plan["gone"]} | {plan["retired"].get(c, c): c for c in plan["gone"]}
+    columns = staged + [(plan["retired"].get(c, c), had[c]) for c in plan["gone"]]
     # a new column is null in the mirror once added, and one that went is null in the source, so a row differs only
     # if the other side has a value there
     s = ", ".join(f"s.{quote(c)}" if c in staging else f"NULL::{type}" for c, type in columns)
-    m = ", ".join(f"m.{quote(c)}" if c in had else f"NULL::{type}" for c, type in columns)
+    m = ", ".join(f"m.{quote(read[c])}" if c in read else f"NULL::{type}" for c, type in columns)
     key = [quote(k) for k in t["key"]]
     on = " AND ".join(f"s.{k} = m.{k}" for k in key)
     if not mirror:
@@ -345,7 +360,7 @@ def publish(conn, t, staged, delivered, mirror, log, rows_read, counts, plan):
     the columns table, loaded_at, attempts and the run's row. Raises, so nothing is published, when the table's row
     no longer gives it this target name."""
     names = ", ".join(quote(c) for c, _ in staged)
-    logged = ", ".join(quote(c) for c in [*dict(staged), *plan["gone"]])
+    logged = ", ".join(quote(c) for c in [*dict(staged), *(plan["retired"].get(c, c) for c in plan["gone"])])
     new = not mirror
     if new:
         # in a transaction of its own under a lock on its name, because two first runs of a source race on
@@ -364,7 +379,7 @@ def publish(conn, t, staged, delivered, mirror, log, rows_read, counts, plan):
         key = f", PRIMARY KEY ({', '.join(quote(k) for k in t['key'])})" if t["key"] else ""
         sql(conn, f"CREATE TABLE {t['mirror']} (LIKE _stage{key})")
     else:
-        widen(conn, t["mirror"], staged, mirror)
+        widen(conn, t["mirror"], staged, [(n, type) for n, type in mirror if n not in plan["gone"]])
     if t["key"]:
         on = " AND ".join(f"d.{quote(k)} = m.{quote(k)}" for k in t["key"])
         kept = only = ""
@@ -441,7 +456,8 @@ def carry_out(conn, t, plan):
     for name in plan["gone"]:
         [(note,)] = sql(conn, DROPS_WITH, [t["mirror"], name])
         changes[name] = {"note": f"{note} went with it" if note else None}
-        alter(conn, f"column {name} is gone from the source and would leave the mirror {t['name']}",
+        alter(conn, f"column {name} " + ("has another type in the source" if name in plan["retired"]
+                                         else "is gone from the source") + f" and would leave the mirror {t['name']}",
               f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
     for table in (t["mirror"], t["log_table"]):  # decision 5, one ALTER per table, so it is rewritten at most once
         if widened := [(name, type) for into, name, type in plan["widen"] if into == table]:
@@ -535,8 +551,10 @@ def record_columns(conn, t, delivered, mirror, log, changes):
     rows = [{**dict(zip(names, r)), "op": "D", "by": "hand"} for r in recorded if r[10]]
     rows += [{**r, "op": "D", "by": "hand"} for name, r in old.items() if name not in now]
     for name, (type, in_mirror) in now.items():
+        # one the source did not deliver keeps the type it last did, a retired one that of the name it had (story 34)
+        last = old.get(changes.get(name, {}).get("was", name), {}).get("source_type", type)
         row = dict(target_schema=t["schema"], target_table=t["table"], column=name, type=type,
-                   source_type=delivered.get(name, type), key=key.get(name), mirror=in_mirror, was=None, note=None)
+                   source_type=delivered.get(name, last), key=key.get(name), mirror=in_mirror, was=None, note=None)
         if (before := old.get(name)) is None:
             row.update(op="I", by="found" if not old else "source" if name not in found else "hand")
         else:

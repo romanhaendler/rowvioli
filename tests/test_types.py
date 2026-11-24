@@ -53,6 +53,64 @@ def test_B4_a_source_that_narrows_a_type_changes_nothing_in_the_target_and_the_r
     log_replays(erp, "raw_erp.amounts")
 
 
+def loaded(rv):
+    return rv.target("select loaded_at from _rowvioli.tables where target_table = 'amounts'")[0][0]
+
+
+def max_run(rv):
+    return rv.target("select max(run) from _rowvioli.runs")[0][0]
+
+
+@pytest.mark.parametrize("before, after, old, new", [
+    ("integer", "text", 7, "seven"), ("text", "integer", "7", 7), ("boolean", "integer", True, 1),  # B8
+    ("integer", "boolean", 1, True),
+    ("timestamp", "timestamptz", "2024-01-01 12:00", "2024-01-01 12:00+00"),  # B6
+    ("integer[]", "bigint[]", "{1}", "{2}"),  # B13
+])
+def test_B6_B8_B13_a_type_of_another_family_goes_and_comes_in_one_run_and_the_log_keeps_the_old_values(
+        erp, before, after, old, new):
+    amounts(erp, before, f"(1, '{old}'), (2, null), (3, '{old}')")
+    first = loaded(erp)
+    erp.source(f"alter table amounts alter a type {after} using null")
+    erp.source(f"update amounts set a = '{new}' where id = 1")
+    again(erp)
+    second = loaded(erp)
+    run = max_run(erp)
+    assert [c for (c,) in erp.target("select attname from pg_attribute where attrelid = 'raw_erp.amounts__log'"
+                                     "::regclass and attnum > 0 and not attisdropped")][-2:] == [f"a__{run}", "a"]
+    named = dict(erp.target("select %s, format_type(%s::regtype, null) union all "
+                            "select %s, format_type(%s::regtype, null)", ["before", before, "after", after]))
+    assert types(erp, "a") == [named["after"]] * 2
+    # one U for each row with a value on either side; the old values end with it
+    assert erp.target(f"select _op, id, a__{run} is null, a is null from raw_erp.amounts__log where _run = {run} "
+                      "order by id") == [("U", 1, True, False), ("U", 3, True, True)]
+    assert erp.target(f"select a__{run} is null, a is null, _valid_from, _valid_to from raw_erp.amounts__history "
+                      "where id = 1 order by _valid_from") == [(False, True, first, second), (True, False, second, None)]
+    assert erp.target('select _op, "column", mirror, was from _rowvioli.columns__log where _run = %s '
+                      'order by "column"', [run]) == [("U", "a", True, None), ("I", f"a__{run}", False, "a")]
+    # story 34: the retired column keeps the type the source delivered it in
+    assert erp.target('select "column", type, source_type from _rowvioli.columns where "column" like %s order by 1',
+                      ["a%"]) == [("a", named["after"], named["after"]),
+                                  (f"a__{run}", named["before"], named["before"])]
+    log_replays(erp, "raw_erp.amounts")
+
+
+def test_a_retired_or_gone_column_keeps_in_the_record_the_type_the_source_last_delivered(erp):  # story 34
+    erp.source("create table amounts (id int primary key, a bigint, b bigint)")
+    erp.source("insert into amounts values (1, 12, 13)")
+    apply(erp, definition(erp, '"public.amounts" = { key = ["id"] }\n'))
+    ok(erp)
+    erp.source("alter table amounts alter a type integer, alter b type integer")  # narrowed: the target keeps bigint
+    again(erp)
+    erp.source("alter table amounts alter a type text, drop column b")
+    again(erp)
+    assert erp.target('select "column", type, source_type, mirror from _rowvioli.columns where "column" <> %s '
+                      "order by 1", ["id"]) == [("a", "text", "text", True),
+                                                (f"a__{max_run(erp)}", "bigint", "integer", False),
+                                                ("b", "bigint", "integer", False)]
+    log_replays(erp, "raw_erp.amounts")
+
+
 FILE = "select relfilenode from pg_class where oid = 'raw_erp.amounts'::regclass"
 
 
