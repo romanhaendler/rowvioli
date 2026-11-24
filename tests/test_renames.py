@@ -331,8 +331,10 @@ def test_renamed_to_a_name_the_change_log_has_stops_and_says_what_to_rename(erp)
                                   "column town already: rename that column of the change log")
 
 
-def test_renamed_applied_while_a_run_loads_acts_from_the_next_run_and_the_loading_one_keeps_its_claims(erp):
-    """The shakedown left it untried (ticket 14 of schema changes): a run loads by the definition of its claim."""
+def test_renamed_applied_while_a_run_loads_stops_it_from_publishing_and_the_next_run_renames(erp):
+    """The shakedown left it untried (ticket 14 of schema changes): the loading run claimed the old definition and
+    would let the column go, after which `renamed` could act no more; as with a new target name (decision 53) it reads
+    the table's row again when it publishes."""
     from conftest import until
     erp.source("create table pause (seconds float); insert into pause values (0);"
                "create function slow(g int) returns int language plpgsql as $$ begin perform pg_sleep(seconds) "
@@ -342,20 +344,24 @@ def test_renamed_applied_while_a_run_loads_acts_from_the_next_run_and_the_loadin
                "create view slow_flags as select slow(id) as id, flag from flags")
     apply(erp, definition(erp, '"public.slow_flags" = { key = ["id"], target_table = "flags" }\n'))
     ok(erp)
+    before = erp.target("select * from raw_erp.flags__log order by id")
     erp.source("alter view slow_flags rename column flag to state; update pause set seconds = 0.1")
     erp.target("update _rowvioli.tables set requested_at = now()")
     loading = erp.start("run")
     until(lambda: erp.target("select status from _rowvioli.status") == [("loading",)])
     apply(erp, definition(erp, '"public.slow_flags" = { key = ["id"], target_table = "flags", '
                                'renamed = { state = "flag" } }\n'))
-    assert loading.wait(timeout=30) == 0, loading.stdout.read()
-    # the run claimed before renamed: flag went with a U per row, state came; its values are in the history
-    assert columns(erp, "raw_erp.flags") == ["id", "state"]
-    assert erp.target("select count(*) from raw_erp.flags__log where _run = (select max(run) from _rowvioli.runs) "
-                      "and _op = 'U'") == [(30,)]
+    assert loading.wait(timeout=30) == 1, loading.stdout.read()
+    assert erp.target("select reason from _rowvioli.status")[0][0].replace("***", "x") == (  # the password is x
+        "the definition renames column flag to state since this run claimed raw_erp.flags; nothing was published, "
+        "the next run renames it")
+    assert columns(erp, "raw_erp.flags") == ["id", "flag"]
+    assert erp.target("select * from raw_erp.flags__log order by id") == before
     erp.source("update pause set seconds = 0")
-    again(erp)  # renamed stays in the definition and does nothing: flag is no longer in the mirror
+    again(erp)
     assert columns(erp, "raw_erp.flags") == ["id", "state"]
     assert erp.target("select count(*) from raw_erp.flags__log where _run = (select max(run) from _rowvioli.runs)"
-                      ) == [(0,)]
+                      ) == [(0,)]  # renamed, no row written
+    assert erp.target("""select "by", was from _rowvioli.columns where "column" = 'state'""") == [
+        ("definition", "flag")]
     log_replays(erp, "raw_erp.flags")

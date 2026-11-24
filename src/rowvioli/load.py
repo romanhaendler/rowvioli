@@ -613,14 +613,19 @@ def publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, 
     record_columns(conn, t, delivered, mirror, log_columns, changes)
     # the table lock guards the table, not its name, which an apply may have given to another table meanwhile
     # (decision 53). Last, so the row lock that holds off an apply until COMMIT is taken after every wait on a mirror
-    if not sql(conn, """UPDATE _rowvioli.tables SET loaded_at = now(), attempts = 0
-                         WHERE id = $1 AND enabled AND target_schema = $2 AND target_table = $3 RETURNING id""",
-               [t["id"], t["schema"], t["table"]]):
+    if not (claimed := sql(conn, """UPDATE _rowvioli.tables SET loaded_at = now(), attempts = 0
+                                     WHERE id = $1 AND enabled AND target_schema = $2 AND target_table = $3
+                                 RETURNING (options -> 'renamed')::text""", [t["id"], t["schema"], t["table"]])):
         [(name, enabled)] = sql(conn, "SELECT target_schema || '.' || target_table, enabled FROM _rowvioli.tables"
                                       " WHERE id = $1", [t["id"]])
         raise Exception(f"the target name changed to {name} while this run loaded {t['name']}; nothing was published, "
                         f"the next run loads {name}" if enabled else
                         f"the table left the definition while this run loaded {t['name']}; nothing was published")
+    # decision 54: a rename stated since the claim of a column this run lets go could act no more after it
+    if lost := [f"{old} to {new}" for new, old in json.loads(claimed[0][0] or "{}").items()
+                if old in plan["gone"] and (t["options"].get("renamed") or {}).get(new) != old]:
+        raise Exception(f"the definition renames column {' and '.join(lost)} since this run claimed {t['name']}; "
+                        "nothing was published, the next run renames it")
     sql(conn, """UPDATE _rowvioli.runs SET status = 'ok', finished_at = clock_timestamp(), rows_read = $2,
                         inserted = $3, updated = $4, deleted = $5 WHERE run = $1""",
         [t["run"], rows_read, counts["inserted"], counts["updated"], counts["deleted"]])
@@ -1192,9 +1197,11 @@ def long(what):
     run meanwhile, and its end; nothing for None."""
     if what:
         say(long=what)
-    yield
-    if what:
-        say(long=None)
+    try:
+        yield
+    finally:
+        if what:
+            say(long=None)
 
 
 CHANNEL = sys.stdout  # the line to the worker; main takes it away from fd 1

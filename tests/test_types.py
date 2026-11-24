@@ -486,28 +486,46 @@ def test_a_run_ended_after_max_seconds_in_a_long_step_of_a_change_says_which_rol
         erp, change, step):  # decision 54, ticket 14 of schema changes
     erp.source("insert into customers select g, 'n' || g, 'c' || (g % 7) from generate_series(4, 30) g")
     table = '"public.customers" = {{ key = [{}], max_seconds = {} }}\n'
-    apply(erp, definition(erp, table.format('"customer_no"', 2)))
+    apply(erp, definition(erp, table.format('"customer_no"', 3)))
     ok(erp)
     before = rows(erp.target, MIRROR), rows(erp.target, "select * from raw_erp.customers__log")
     holder = None
     if change == "key":  # the mirror's rows are written anew
         slow_index(erp, "raw_erp.customers", "customer_no")
-        apply(erp, definition(erp, table.format('"customer_no", "name"', 2)))
+        apply(erp, definition(erp, table.format('"customer_no", "name"', 3)))
     elif "drop" in change:  # the change log gets a row per row
         slow_index(erp, "raw_erp.customers__log", "customer_no")
     else:  # the proof reads every row of the mirror, which a consumer holds meanwhile
         holder = psycopg.connect(erp.target_url)
         holder.execute("lock table raw_erp.customers in access exclusive mode")
     if holder is None:
-        erp.target("update public.pause set seconds = 0.2")
+        erp.target("update public.pause set seconds = 0.3")  # 9 s for the 30 rows
     if change != "key":
         erp.source(change)
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp).replace("***", "x")  # the source's password is x
     if holder:
         holder.close()
-    assert reason == f"ended after max_seconds = 2 while {step}"
+    assert reason == f"ended after max_seconds = 3 while {step}"
     assert (rows(erp.target, MIRROR), rows(erp.target, "select * from raw_erp.customers__log")) == before
     apply(erp, definition(erp, table.format('"customer_no", "name"' if change == "key" else '"customer_no"', 30)))
+    again(erp)
+    log_replays(erp)
+
+
+def test_a_run_ended_after_max_seconds_after_a_long_step_names_no_step(erp):
+    """The long step said its end, so a short step after it that a consumer holds up is not blamed on it."""
+    erp.source("insert into customers select g, 'n' || g, 'c' || (g % 7) from generate_series(4, 30) g")
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], max_seconds = 3 }\n'))
+    ok(erp)
+    erp.source("alter table customers drop column city")  # a row of the change log per row: a long step
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    holder = psycopg.connect(erp.target_url)
+    try:  # the record of the columns, after the rows, waits for it; reading it does not
+        holder.execute("lock table _rowvioli.columns__log in exclusive mode")
+        reason = failed(erp).replace("***", "x")
+    finally:
+        holder.close()
+    assert reason == "ended after max_seconds = 3"
     again(erp)
     log_replays(erp)
