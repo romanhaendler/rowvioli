@@ -576,6 +576,21 @@ def test_a_timestamp_finer_than_microseconds_arrives_cut_to_microseconds(files):
     assert files.target("select t from raw_files.ns") == [(datetime(2026, 1, 1, 0, 0, 0, 123456),)]
 
 
+def test_an_unsigned_integer_of_a_parquet_file_arrives_whole(files):
+    """The driver wrote a uint64 as bigint, 2**64 - 1 as -1 with the run ok; the smaller ones it widens itself."""
+    pq.write_table(pa.table({"id": [1, 2], "u64": pa.array([2**64 - 1, 2**63], pa.uint64()),
+                             "u32": pa.array([2**32 - 1, 0], pa.uint32()), "u16": pa.array([2**16 - 1, 0], pa.uint16()),
+                             "u8": pa.array([255, 0], pa.uint8())}), files.dir / "files" / "u.parquet")
+    for _ in range(2):  # the second run changes nothing
+        code, answer = load(files, '"u.parquet" = { key = ["id"] }\n')
+        assert code == 0, answer
+    assert answer["raw_files.u"] == {"status": "ok", "inserted": 0, "updated": 0, "deleted": 0}
+    assert types(files, "u") == [("id", "bigint"), ("u64", "numeric"), ("u32", "bigint"), ("u16", "integer"),
+                                 ("u8", "smallint")]
+    assert files.target("select u64, u32, u16, u8 from raw_files.u order by id") == [
+        (2**64 - 1, 2**32 - 1, 2**16 - 1, 255), (2**63, 0, 0, 0)]
+
+
 def test_a_struct_or_a_map_of_a_parquet_file_arrives_as_jsonb_as_a_nested_value_of_a_json_file(files):
     """One rule for the nested values of a file; the target has no type for a struct or a map."""
     pq.write_table(pa.table({

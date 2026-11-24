@@ -449,6 +449,7 @@ def stage(conn, t):
     batches = stream(connector.read(connection, t["source_table"], options))
     if batches is None:
         raise Exception("the connector delivered nothing, not even the columns")
+    batches = whole(batches)
 
     def cut(name):  # Postgres keeps the first 63 bytes of a name, whole characters, and drops the rest (cases A20)
         return name.encode()[:63].decode(errors="ignore")
@@ -502,6 +503,17 @@ def stage(conn, t):
     if to_jsonb:
         sql(conn, "ALTER TABLE _stage " + ", ".join(to_jsonb))
     return rows_read
+
+
+def whole(batches):
+    """The values as the driver writes them whole. It writes a uint64 as bigint and wraps one above 2**63 - 1 to a
+    negative number: as decimal128(20, 0) it is staged as numeric(20,0), and a mirror's bigint stays while it fits."""
+    # shortcut: top-level columns only, a uint64 in a list still wraps; upgrade when a source delivers one
+    schema = pa.schema([f.with_type(pa.decimal128(20, 0)) if pa.types.is_uint64(f.type) else f
+                        for f in batches.schema], metadata=batches.schema.metadata)
+    if schema.equals(batches.schema):
+        return batches
+    return pa.RecordBatchReader.from_batches(schema, (b.cast(schema) for b in batches))
 
 
 def without_nul(batches, raised):

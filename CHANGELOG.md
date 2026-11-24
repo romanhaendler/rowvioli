@@ -58,6 +58,7 @@ Fixed:
 - A Parquet column of a struct or a map, also in a list, or of a list of lists loads as `jsonb`, as a nested value of a JSON file does. Before, the run failed with the driver's `Can't map Arrow type 'struct' to Postgres type`, naming no column (in 0.4.1 too).
 - An Excel date or date and time read with `columns = { d = "date" }` or `"timestamp"` arrives as that date and time. Before, the run stopped with `column d is not date in every row`, a way out that did not work: the cell holds a number of days (in 0.4.1 too). Unnamed, such a cell still arrives as its number (docs/connectors.md).
 - A target or a `postgres` source whose database is not UTF8 keeps the text as it is: the sessions ask for UTF8, and a text the target's encoding has no character for fails the run with `SQLSTATE 22P05`. Before, a `LATIN1` target stored `Müller` as `MÃ¼ller` with the run `ok`, a schema name with `ü` there ended `rowvioli status` in a traceback and every run before its claim, and a `LATIN1` source failed the run (in 0.4.1 too).
+- A `uint64`, of a Parquet file or any connector, arrives as `numeric(20,0)` and whole. Before, the driver wrote it as `bigint` and `18446744073709551615` arrived as `-1`, with the run `ok` (in 0.4.1 too).
 - A shipped connector whose extra is not installed says which to install, in `run`, `work` and `list`: `connector "file" cannot be loaded: No module named 'duckdb'; pip install "rowvioli[file]" installs it`.
 
 ## 0.4.1 (2026-11-23)
