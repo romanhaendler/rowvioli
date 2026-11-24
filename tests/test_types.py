@@ -274,6 +274,17 @@ def test_F4_a_pin_taken_out_of_a_parquet_column_stops_and_the_drop_it_names_brin
     log_replays(files, "raw_files.counts")
 
 
+def test_a_pin_taken_out_of_a_csv_column_read_by_a_pattern_without_an_extension_goes_back_to_text(files):
+    (files.dir / "files" / "counts_1.csv").write_text("id;n\n1;42\n2;7\n")
+    table = '"counts_*" = {{ key = ["id"], sep = ";", target_table = "counts"{} }}\n'
+    assert load(files, table.format(', columns = { n = "integer" }'))[0] == 0
+    code, answer = load(files, table.format(""))
+    assert code == 0, answer
+    assert types(files, "n", "raw_files.counts") == ["text", "text"]
+    assert files.target(RECORD, ["n"]) == [("text", "text", "definition")]
+    log_replays(files, "raw_files.counts")
+
+
 def test_F5_a_guessed_type_that_widens_within_its_family_widens_the_target(files):
     parquet(files, [42, 43], pa.int32())
     assert load(files, COUNTS)[0] == 0

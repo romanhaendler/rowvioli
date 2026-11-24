@@ -17,7 +17,7 @@ from pathlib import Path
 import duckdb
 import pyarrow as pa
 
-from ..contract import version
+from ..contract import OWN_TYPE, version
 from ..target import quote
 
 # the reader's version, so that columns another one delivers are recorded as by = reader (decision 54)
@@ -128,7 +128,8 @@ def read(connection, table, options):
         raise uncast(e) from None
     # DuckDB hands JSON over as text; as Arrow's json it becomes jsonb. Not by arrow_lossless_conversion: that
     # turns a hugeint into bytes and a boolean into a number
-    schema = pa.schema([f.with_type(pa.json_()) if str(t) == "JSON" else f
+    schema = pa.schema([f.with_type(pa.json_()) if str(t) == "JSON" else
+                        f.with_metadata(OWN_TYPE) if reader == "read_parquet" and f.name not in columns else f
                         for f, t in zip(batches.schema, result.types)])
 
     def keep_open():  # the reader needs the connection until the last batch

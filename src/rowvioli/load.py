@@ -160,9 +160,9 @@ def check(conn, t, staged, mirror, log_columns):
             drop = ("so a person drops it and the next run adds it anew: "
                     f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
             # where the definition names the columns it is the catalog. CSV, Excel and JSON deliver every other column
-            # as text or jsonb, so another family there is a pin taken out; Parquet's own types can flip
+            # as text or jsonb, so another family there is a pin taken out; a type the file brings itself can flip
             if t["type"] == "file" and name not in dict(t["options"].get("columns") or {}):
-                if not re.search(r"\.(csv|xlsx|json|jsonl|ndjson)$", t["source_table"], re.I):
+                if name in t["own_types"]:
                     raise Exception(f"{changed}; a source without a catalog guesses its types, so pin it under "
                                     "columns in the table's definition; where its pin was taken out, a person drops it "
                                     f"and the next run adds it anew: ALTER TABLE {t['mirror']} DROP COLUMN "
@@ -375,6 +375,7 @@ def stage(conn, t):
                         "Postgres keeps of a name: give them names in the source that differ there" if twins[1:] else
                         f"column {long[0]} of the source is longer than 63 bytes, the most Postgres keeps of a name: "
                         "give it a shorter name in the source")
+    t["own_types"] = {f.name for f in batches.schema if contract.OWN_TYPE.items() <= (f.metadata or {}).items()}
     if (gone := [k for k in t["key"] or [] if k not in batches.schema.names]):
         raise Exception(f"table {t['source_table']} has no column {', '.join(gone)}; it has: "
                         + ", ".join(batches.schema.names))
