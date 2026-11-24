@@ -10,6 +10,8 @@ Decided after the prototype and no longer open: percent-encoding a password in a
 
 Decided in the second round and no longer open: new tables of the source do not arrive by themselves (decision 21), one key pair for all workers (decision 26), no second Postgres driver (decision 28), the address of the target comes from the worker's environment (decision 30), and the smaller points collected in decision 31.
 
+Closed by decision 54: a REST column that is absent from every row of a page, and the files of a pattern that do not all have a column, no longer fail the run. The column is empty there, and with a change log it never goes.
+
 ## Left open
 
 
@@ -29,6 +31,7 @@ Unchanged from the first round:
 - **The connectors themselves**: arrow-odbc for MSSQL and Informix, DuckDB for files. The `postgres`, `file`, `odbc` and `rest` connectors are tested; `odbc` only against PostgreSQL through psqlODBC, SQL Server and Informix not at all.
 - **Wide tables with many rows.** A whole run was measured on 300 columns with 100,000 rows (about 11 s) and 300,000 rows (about 40 s), roughly linear, most of it the read from the source (section 15, ticket 16). Not measured: 900 columns in a whole run, a million rows of this width, the other connectors.
 - **The history view on a log some hundred times larger** than the 48 MB measured, or one that does not fit in memory (section 13).
+- **The time a large change log is locked** while a type is widened or the rows of a column are written. That is a measurement for `bench/`, run when the owner asks.
 - **The COPY from a client over a real network.** Experiment 8 filled the staging table from a client on the same machine.
 
 ## Known limits
@@ -59,14 +62,13 @@ Unchanged from the first round:
 - **A change log left under a name the definition no longer has** keeps a history view that nobody updates.
 - **A history view left behind under a name a new change log takes** is replaced by the next run, or the run fails if its columns do not fit.
 - **An empty page in the middle of REST paging ends the load.** An empty page is how paging ends, so an API that answers one in the middle delivers a table that stops there. The limit on deletions catches a large cut, a small one passes.
-- **A REST column that is absent from every row of one page fails the run.** An API that leaves out null fields can therefore fail on a page where an optional column is null in every row.
 - **`timestamptz 'infinity'` from a Postgres source fails the run** with `Error occurred writing COPY data:` and nothing after it. The driver gives no cause.
 - **A JSON number with a fraction passes through a 64-bit float** in the `file` connector: beyond 15 to 17 significant digits it is rounded. Whole numbers of any size and exponents arrive exactly.
 - **An unterminated quote in a CSV loads with the quote kept**: `1,"Anna` followed by more lines arrives as a row whose value is `"Anna`, without an error. Forcing `quote = '"'` would fail such a file, and also one with a literal `"` in an unquoted field, which loads right today. Whoever sets `quote = '"'` gets the failure.
 - **`columns` casts follow DuckDB**, for CSV and JSON: `1.7` cast to `integer` becomes `2`.
 - **A JSON file holds objects.** A file of other values (`[1, 2]`, or `[]`) fails with DuckDB's words (`json_read expected records, but got non-record JSON instead.`); a file of no bytes says that it is empty. A file that is one object is one row.
-- **The files of a pattern must all have the column**: a JSON key that one file lacks fails the run, while inside one file it is null. `*` does not match a name that starts with a dot, and `**` is one directory level, like `*`.
-- **DuckDB's messages can name a value of the file** (a record with an unknown key, a value that does not cast).
+- **`*` does not match a name that starts with a dot**, and `**` is one directory level, like `*`.
+- **DuckDB's messages can name a value of the file** (a record with an unknown key, a value that does not cast). A cast under `columns` that fails can therefore show the value in the reason (`Conversion Error: Could not convert string 'x' to INT32 when casting from source column a`), which ends up in the status view and the log. A field named under `columns` that a file lacks fails the read with DuckDB's words (`Binder Error: Column "zz" in REPLACE list not found in FROM clause`).
 - **Each file of a pattern is checked before it is read**, about 3 ms per file: 10,000 files take half a minute before the first row. A pattern reads 50 files at a time; open files under Linux were not measured.
 - **A JSON file is read twice**, once for its columns and once for its rows; so is every file of a pattern of JSON files.
 - **A REST field whose own name contains a dot cannot be named in `rows`**, and `apply` does not check `rows`: a value that is not text fails at the run.
@@ -80,13 +82,28 @@ Unchanged from the first round:
 - **A full disk on the target can read as `connection to the target lost`**. When the write-ahead log cannot grow, Postgres stops with a PANIC and restarts: the run has the message but can no longer store it. Elsewhere a full disk fails the run with Postgres's message, `could not extend file ...: No space left on device`.
 - **A claim finds a dead run by walking `runs` back from the newest row** to the table's own newest, under the lock all claims share: 1.3 ms when 24,000 runs came since, 11 ms at 200,000 (the whole table scanned took 8 ms). An index on the table and the run would bound it; it needs a migration of the schema, which is not built.
 - **The ADBC driver cannot run `SHOW`** and other statements that return rows but cannot be wrapped into `COPY`.
-- **The driver decides the types in the target** (decisions 28 and 49). `varchar(n)` arrives as `text`, so a change from `text` to `varchar(n)` passes the schema check and an existing `varchar(n)` target column fails it. A `numeric(p,s)` beyond 38 digits arrives as `numeric` in a new mirror. An unconstrained `numeric` beyond 38 digits, or `NaN`, fails the run. Through ODBC, psqlODBC describes an unconstrained `numeric` as `numeric(28,6)`, and the value arrives cut to six decimals.
+- **The driver decides the types in the target** (decisions 28 and 49). `varchar(n)` arrives as `text`, so a change from `text` to `varchar(n)` passes unseen, and an existing `varchar(n)` target column is of another family than `text`: with a change log it goes and comes back, without one it stops. A `numeric(p,s)` beyond 38 digits arrives as `numeric` in a new mirror. An unconstrained `numeric` beyond 38 digits, or `NaN`, fails the run. Through ODBC, psqlODBC describes an unconstrained `numeric` as `numeric(28,6)`, and the value arrives cut to six decimals.
+
+Schema changes (decision 54):
+
+- **A declared length of the source is not recorded.** Arrow carries none, so `varchar(20)` and `varchar(200)` are both `text`, and a change of a length leaves no trace. The same holds for the source's constraints, defaults and comments: a mirror has none of them.
+- **A change by hand is dated when it is noticed**, by the next run that publishes, and not at all while its table fails.
+- **A person who changes the primary key and the definition by hand and keeps the change log leaves a seam nobody recorded.**
+- **A hand-changed primary key from before the upgrade counts as a change of key on the first run.** Whether a primary key that differs from the definition's was changed by hand or the definition changed is told by the key `_rowvioli.columns` recorded for the table, and a table whose columns are not recorded yet (the first run after the upgrade) has none. A mirror whose primary key a person changed by hand while the definition stayed, which failed every run before the upgrade, is therefore taken for another key. Nothing is lost: the mirror is the source's, and the change log keeps every row and gets a `D` and an `I` per row. Wrong are `by = definition` in the columns table and the history before that run, which is read by the hand's key. The way out is to put the definition's key as the first one in the comment on `_op` and to drop the history view, which the next run creates again.
+- **A column that a person dropped from the change log and then dropped in the source stops with `is not in the change log`.** The change log no longer says that it was the source's.
+- **A retired column is recognised by its name**, `<name>__<digits>` beside a column `<name>` of the change log, and not by the columns table, so that a run does not need the record. A source column with such a name stops the run with the way out.
+- **Two columns that swap names, or a name reused in the run its column was renamed, are not seen by any loader.** Every row of the two is a `U`.
+- **A rename the data prove needs 20 rows and 5 different values**, strict on purpose, since a false proof points a consumer's view at another column. A small table, a flag and two candidates are never proven; `renamed` states them. Nothing is proven for a table without a key or a change log, or for a file or REST source.
+- **A file or REST connector of one's own gets the rules of a database source**: a column it stops delivering is a column that goes. Only the shipped `file` and `rest` connectors treat a missing column as empty.
+- **The columns table has no tamper evidence.** A person with the right to write the change log can change its rows.
+- **A column that goes, or a type of another family, costs one change log row per row**, and a changed key two and a rewrite of the mirror. Widening can rewrite mirror and change log under an exclusive lock and outlast `max_seconds` once. A view on a history view stops changes to any column of it. A prepared `SELECT *` fails once after a new column. An upgrade that delivers a type in another family writes a row per row on every affected table once.
+- **A change log is never ended by the program**: `log = false` and a key taken away still stop while one exists.
 
 ## Not built
 
 - The web UI.
 - The command `request`, reading only rows from a timestamp on, patterns for table names, and workers that serve only some sources.
-- Migrating the schema from one version to the next.
+- Migrating the schema from a version older than 3. `init` has one step, version 3 to 4 (decision 54); a target older than 3 is refused.
 
 The prototype's code is on branch `prototype-impl`.
 
