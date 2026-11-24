@@ -620,7 +620,7 @@ def carry_out(conn, t, plan):
     the columns table says beyond the catalogue (decision 54)."""
     renamed = {old: new for new, old in plan["renamed"].items()}
     t["grants"] = [(p, renamed.get(c, c), *rest) for p, c, *rest in sql(conn, GRANTS, [t["history"]])]
-    alter(conn, f"the columns of {t['name']} change", f"DROP VIEW IF EXISTS {t['history']}")
+    alter(conn, t, f"the columns of {t['name']} change", f"DROP VIEW IF EXISTS {t['history']}")
     changes = {}
     logged = dict(sql(conn, COLUMNS, [t["log_table"]]))
     keys = stretches(conn, t) if logged else None  # while the columns it names have those names
@@ -646,7 +646,7 @@ def carry_out(conn, t, plan):
         if was:
             [(name,)] = sql(conn, "SELECT conname FROM pg_constraint WHERE conrelid = $1::regclass AND contype = 'p'",
                             [t["mirror"]])
-            alter(conn, f"the key of {t['name']} would change from ({', '.join(was)}) to ({', '.join(key)})",
+            alter(conn, t, f"the key of {t['name']} would change from ({', '.join(was)}) to ({', '.join(key)})",
                   f"ALTER TABLE {t['mirror']} DROP CONSTRAINT {quote(name)}")
         if loose := [c for c in was if c not in key]:  # Postgres leaves NOT NULL behind, also where LIKE copied it
             for table in [t["mirror"], t["log_table"]] if plan["key"]["log"] else [t["mirror"]]:
@@ -659,7 +659,7 @@ def carry_out(conn, t, plan):
     for name in plan["gone"]:
         [(note,)] = sql(conn, DROPS_WITH, [t["mirror"], name])
         changes[name] = {"note": f"{note} went with it" if note else None}
-        alter(conn, f"column {name} " + ("has another type in the source" if name in plan["retired"]
+        alter(conn, t, f"column {name} " + ("has another type in the source" if name in plan["retired"]
                                          else "is gone from the source") + f" and would leave the mirror {t['name']}",
               f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
     for name in plan["unpinned"]:  # decision 54: a type the definition gave, and took back
@@ -671,8 +671,11 @@ def carry_out(conn, t, plan):
             hand = set(plan["followed"]) if table == t["log_table"] else set()
             why = " and ".join(w for w, some in [("for values of the source", len(widened) > len(hand)),
                                                  ("to follow the mirror, which a person widened", hand)] if some)
-            alter(conn, f"{table} would be widened {why}, {columns}",
-                  f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(n)} TYPE {type}" for n, type in widened))
+            alter(conn, t, f"{table} would be widened {why}, {columns}",
+                  f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(n)} TYPE {type}" for n, type in widened),
+                  table, [n for n, _ in widened])
+    if t.get("blocked"):
+        raise Exception("; and ".join(t["blocked"]) + ": change or drop that, and the next run goes on")
     return changes
 
 
@@ -706,9 +709,29 @@ def keys_of_log(conn, t, keys):
     return text
 
 
-def alter(conn, why, statement):
+# the views and materialized views on columns $2 (a JSON list) of table $1, and those on them, layer by layer, as
+# Postgres's detail of a DROP says them; not the history view $3, which the plan drops itself
+VIEWS_ON = """
+    WITH RECURSIVE on_it(view, what) AS (
+        SELECT r.ev_class, pg_describe_object('pg_class'::regclass, d.refobjid, d.refobjsubid)
+          FROM pg_depend d JOIN pg_rewrite r ON r.oid = d.objid JOIN pg_attribute a ON a.attrelid = d.refobjid
+                                                                    AND a.attnum = d.refobjsubid
+         WHERE d.classid = 'pg_rewrite'::regclass AND d.refobjid = $1::regclass AND r.ev_class <> d.refobjid
+           AND a.attname IN (SELECT json_array_elements_text($2::json)) AND r.ev_class IS DISTINCT FROM to_regclass($3)
+        UNION
+        SELECT r.ev_class, pg_describe_object('pg_class'::regclass, o.view, 0)
+          FROM on_it o JOIN pg_depend d ON d.refclassid = 'pg_class'::regclass AND d.refobjid = o.view
+          JOIN pg_rewrite r ON r.oid = d.objid WHERE d.classid = 'pg_rewrite'::regclass AND r.ev_class <> o.view)
+    SELECT string_agg(format('%s depends on %s', pg_describe_object('pg_class'::regclass, view, 0), what), '; '
+                      ORDER BY view::regclass::text, what) FROM on_it"""
+
+
+def alter(conn, t, why, statement, table=None, columns=()):
     """A change Postgres refuses while a consumer's object depends on it: the reason says what would have changed,
-    then Postgres's detail, which names the object (decision 54)."""
+    then Postgres's detail, which names the object (decision 54). Kept in `t["blocked"]` while carry_out goes on, so
+    that the stop names every object in the way and one round of work clears it. For a type changed on `columns` of
+    `table` Postgres names one view, and the catalogue gives all."""
+    sql(conn, "SAVEPOINT alter")
     try:
         sql(conn, statement)
     except Exception as e:
@@ -716,8 +739,14 @@ def alter(conn, why, statement):
         # dependent_objects_still_exist, and feature_not_supported for a type a view's column holds
         if details.get("PG_DIAG_SQLSTATE") not in ("2BP01", "0A000") or "PG_DIAG_MESSAGE_DETAIL" not in details:
             raise
-        raise Exception(f"{why}, but {details['PG_DIAG_MESSAGE_DETAIL'].replace(chr(10), '; ')}: change or drop "
-                        "that, and the next run goes on") from None
+        sql(conn, "ROLLBACK TO SAVEPOINT alter")
+        detail = details["PG_DIAG_MESSAGE_DETAIL"].replace("\n", "; ")
+        if details["PG_DIAG_SQLSTATE"] == "0A000" and columns:
+            [(views,)] = sql(conn, VIEWS_ON, [table, json.dumps(columns), t["history"]])
+            if not views and t.get("blocked"):  # only the history view, whose drop is stopped already
+                return
+            detail = views or detail
+        t.setdefault("blocked", []).append(f"{why}, but {detail}")
 
 
 def write_log(conn, t, staged, log, names):

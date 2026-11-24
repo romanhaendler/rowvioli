@@ -149,6 +149,27 @@ def test_D6_a_view_on_the_history_view_stops_a_change_of_any_column_and_is_named
     log_replays(erp)
 
 
+def test_a_stop_names_every_object_in_the_way_through_the_layers_so_one_round_of_work_clears_it(erp):  # P20
+    ok(erp)
+    erp.target("create view public.v1 as select customer_no, name from raw_erp.customers__history;"
+               "create view public.v2 as select * from public.v1; create view public.v3 as select * from public.v2;"
+               "create materialized view public.m as select customer_no, city from raw_erp.customers;"
+               "create view public.w as select city from raw_erp.customers")
+    erp.source("alter table customers drop column city")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    assert reason == ("the columns of raw_erp.customers change, but view v1 depends on view "
+                      "raw_erp.customers__history; view v2 depends on view v1; view v3 depends on view v2; and column "
+                      "city is gone from the source and would leave the mirror raw_erp.customers, but materialized "
+                      "view m depends on column city of table raw_erp.customers; view w depends on column city of "
+                      "table raw_erp.customers: change or drop that, and the ne***t run goes on"), reason
+    assert columns(erp) == ["customer_no", "name", "city"]
+    erp.target("drop view public.v3, public.v2, public.v1, public.w; drop materialized view public.m")  # one round
+    again(erp)
+    assert columns(erp) == ["customer_no", "name"]
+    log_replays(erp)
+
+
 def test_G6_a_column_gone_from_a_mirror_that_is_a_parent_leaves_its_children_too(erp):
     ok(erp)
     erp.target("create table public.branch () inherits (raw_erp.customers)")

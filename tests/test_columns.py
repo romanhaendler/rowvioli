@@ -129,8 +129,8 @@ def test_a_type_widened_by_hand_stops_at_a_consumers_view_on_the_change_log_with
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
     assert reason.startswith('"raw_erp"."prices__log" would be widened to follow the mirror, which a person widened, '
-                             'column amount to numeric(12,2), but rule _RETURN on view amounts depends on column '
-                             '"amount"'), reason
+                             'column amount to numeric(12,2), but view amounts depends on column amount of table '
+                             'raw_erp.prices__log'), reason
 
 
 def test_a_column_a_person_added_to_the_change_log_is_recorded_as_hand_and_not_in_the_mirror(erp):
