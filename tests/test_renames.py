@@ -4,7 +4,9 @@ import pytest
 
 from test_checks import failed
 from test_columns_go_and_come import columns, log_replays
-from test_history import again
+from test_file import files, load as load_file  # noqa: F401 (files is a fixture)
+from test_history import LOADED_AT, again
+from test_keys import comment, primary_key
 from test_run import apply, definition, erp, ok, rows  # noqa: F401 (erp is a fixture)
 
 PEOPLE = "raw_erp.people"
@@ -155,3 +157,113 @@ def test_A31_a_name_whose_case_alone_changes_is_another_name_and_proven_like_any
     assert erp.target(f"select count(*) from {PEOPLE}__log {THIS_RUN}") == [(0,)]
     assert [r[:3] for r in erp.target(RECORD)] == [("I", "City", "city"), ("D", "city", None)]
     log_replays(erp, PEOPLE)
+
+
+def test_renamed_in_the_definition_makes_a_renamed_flag_a_rename(erp):  # story 28
+    people(erp)
+    erp.source("alter table people rename column member to active")
+    apply(erp, definition(erp, '"public.people" = { key = ["id"], renamed = { active = "member" } }\n'))
+    again(erp)
+    assert columns(erp, PEOPLE) == ["id", "name", "city", "active"]
+    assert erp.target(f"select count(*) from {PEOPLE}__log {THIS_RUN}") == [(0,)]
+    assert erp.target(RECORD) == [("I", "active", "member", "definition", None),
+                                  ("D", "member", None, "definition", None)]
+    log_replays(erp, PEOPLE)
+
+
+def test_A25_renamed_in_the_definition_is_a_rename_where_rows_differ_and_they_are_a_U(erp):
+    people(erp)
+    erp.source("alter table people rename column city to town; update people set town = 'Bad' where id = 1")
+    apply(erp, definition(erp, '"public.people" = { key = ["id"], renamed = { town = "city" } }\n'))
+    again(erp)
+    assert columns(erp, PEOPLE) == ["id", "name", "town", "member"]
+    assert erp.target(f"select _op, id, town from {PEOPLE}__log {THIS_RUN}") == [("U", 1, "Bad")]
+    log_replays(erp, PEOPLE)
+
+
+def test_C9_a_key_column_renamed_with_renamed_stays_the_key_and_the_comment_on_op_follows(erp):  # story 28
+    ok(erp)
+    first = erp.target(LOADED_AT)[0][0]
+    erp.source("alter table customers rename column customer_no to id")
+    apply(erp, definition(erp, '"public.customers" = { key = ["id"], renamed = { id = "customer_no" } }\n'))
+    erp.source("update customers set city = 'Köln' where id = 1")
+    second = again(erp)
+    assert primary_key(erp) == ["id"]
+    assert columns(erp) == ["id", "name", "city"]
+    assert erp.target("select _op, id, city from raw_erp.customers__log " + THIS_RUN) == [("U", 1, "Köln")]
+    assert comment(erp) == [{"key": ["id"]}]
+    assert erp.target("select city, _valid_from, _valid_to from raw_erp.customers__history where id = 1 "
+                      "order by _valid_from") == [("Bonn", first, second), ("Köln", second, None)]
+    assert erp.target(f'select _op, "column", "key", was, "by", note from _rowvioli.columns__log {THIS_RUN} '
+                      'order by "column"') == [
+        ("D", "customer_no", 1, None, "definition", None),
+        ("I", "id", 1, "customer_no", "definition", 'the change log\'s keys: [{"key": ["id"]}]')]
+    erp.target("comment on column raw_erp.customers__log._op is null")  # the text to put back is the renamed one
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp).endswith("""._op IS '[{"key": ["id"]}]'""")
+    log_replays(erp, "raw_erp.customers")
+
+
+def test_renamed_in_the_definition_renames_the_mirror_of_a_table_without_a_change_log(erp):
+    people(erp, table='{ key = ["id"], log = false }')
+    erp.source("alter table people rename column city to town")
+    apply(erp, definition(erp, '"public.people" = { key = ["id"], log = false, renamed = { town = "city" } }\n'))
+    again(erp)
+    assert columns(erp, PEOPLE) == ["id", "name", "town", "member"]
+    assert rows(erp.target, f"select * from {PEOPLE}") == rows(erp.source, "select * from people")
+
+
+def test_renamed_left_in_the_definition_does_nothing_while_the_old_column_is_delivered_or_once_renamed(erp):
+    people(erp, table='{ key = ["id"], renamed = { town = "city" } }')  # story 29
+    view = "select 'raw_erp.people__history'::regclass::oid"
+    for change in ["update people set name = 'p' where id = 1", "alter table people rename column city to town",
+                   "update people set name = 'q' where id = 1"]:
+        before = erp.target(view)
+        erp.source(change)
+        again(erp)
+        if "rename" not in change:  # a table whose columns stay takes no lock and keeps its history view
+            assert erp.target(view) == before
+            assert erp.target(f"select count(*) from _rowvioli.columns__log {THIS_RUN}") == [(0,)]
+    assert columns(erp, PEOPLE) == ["id", "name", "town", "member"]
+    log_replays(erp, PEOPLE)
+
+
+def test_renamed_across_two_families_stops_the_run_and_changes_nothing(erp):
+    people(erp)
+    erp.source("alter table people rename column member to active; alter table people alter active type text")
+    apply(erp, definition(erp, '"public.people" = { key = ["id"], renamed = { active = "member" } }\n'))
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp).replace("***", "x") == ("column member is renamed active in the table's definition, but boolean and text are "
+                           "types of two families, so their values are not the same: take active out of renamed")
+    assert columns(erp, PEOPLE) == ["id", "name", "city", "member"]
+
+
+@pytest.mark.parametrize("renamed", ["", ', renamed = { town = "city" }'])
+def test_F2_a_renamed_header_of_a_file_is_a_new_column_unless_renamed_says_it_is_a_rename(files, renamed):
+    csv = files.dir / "files" / "people.csv"
+    csv.write_text("id;name;city\n1;Anna;Bonn\n2;Ben;Essen\n")
+    table = '"people.csv" = {{ key = ["id"], sep = ";"{} }}\n'
+    assert load_file(files, table.format(""))[0] == 0
+    csv.write_text("id;name;town\n1;Anna;Bonn\n2;Ben;Essen\n")
+    assert load_file(files, table.format(renamed))[0] == 0
+    mirror = "select * from raw_files.people order by id"
+    if renamed:
+        assert columns(files, "raw_files.people") == ["id", "name", "town"]
+        assert files.target(mirror) == [("1", "Anna", "Bonn"), ("2", "Ben", "Essen")]
+        assert files.target("select count(*) from raw_files.people__log " + THIS_RUN) == [(0,)]
+    else:  # nothing is proven without a catalog: the old column is empty from now on
+        assert files.target(mirror) == [("1", "Anna", None, "Bonn"), ("2", "Ben", None, "Essen")]
+    log_replays(files, "raw_files.people")
+
+
+def test_renamed_to_a_name_the_change_log_has_stops_and_says_what_to_rename(erp):
+    people(erp)
+    erp.source("alter table people add column town text")
+    again(erp)
+    erp.source("alter table people drop column town")
+    again(erp)
+    erp.source("alter table people rename column city to town")
+    apply(erp, definition(erp, '"public.people" = { key = ["id"], renamed = { town = "city" } }\n'))
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp).startswith("column city is renamed town in the table's definition, but the change log has a "
+                                  "column town already: rename that column of the change log")

@@ -23,6 +23,18 @@ def test_a_plural_of_a_setting_is_a_typo(rv, typo):
     assert r.returncode != 0 and "did you mean" in r.stderr, r.stderr
 
 
+@pytest.mark.parametrize("old, new, said", [
+    ('parallel = 4', 'parallel = 4\nrenamed = { a = "b" }', "renamed belongs to a table, not to the source"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { renamed = "a" }', "renamed must be a table"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { renamed = { a = 1 } }', 'renamed must be a table of new = "old"'),
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { renamed = { a = "c", b = "c" } }', "each old one once"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { renamed = { a = "c\\u0007" } }', "renamed c\\x07 holds a control"),
+])
+def test_renamed_is_a_table_setting_of_new_and_old_column_names(rv, old, new, said):
+    r = check(rv, {"erp.toml": ERP.replace(old, new)})
+    assert r.returncode != 0 and said in r.stderr, r.stderr
+
+
 def test_a_short_option_is_no_typo(rv):
     r = check(rv, {"erp.toml": ERP.replace('"dbo.Notes"     = {}', '"dbo.Notes"     = { sep = ";" }')})
     assert r.returncode == 0, r.stderr

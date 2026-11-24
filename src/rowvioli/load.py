@@ -84,8 +84,12 @@ def load(conn, t):
     mirror = sql(conn, COLUMNS, [t["mirror"]])  # empty before the first run
     log_columns = sql(conn, COLUMNS, [t["log_table"]])
     # decision 3: a source without a catalog has no column that goes; one its data lack this run is empty. One a
-    # change log lacks is not known to be from the source, and check() stops it rather than empty a person's column
+    # change log lacks is not known to be from the source, and check() stops it rather than empty a person's column.
+    # One the definition says is renamed to a column the data have is renamed (decision 10)
+    stated = {old for new, old in (t["options"].get("renamed") or {}).items()
+              if new in dict(staged) and new not in dict(mirror)}
     if t["type"] in ("file", "rest") and (missing := [(n, type) for n, type in mirror if n not in dict(staged)
+                                                      and n not in stated
                                                       and (not log_columns or n in dict(log_columns))]):
         sql(conn, "ALTER TABLE _stage " + ", ".join(f"ADD {quote(n)} {type}" for n, type in missing))
         staged = sql(conn, COLUMNS, ["pg_temp._stage"])
@@ -332,6 +336,7 @@ def stage(conn, t):
     # a directory is no secret, and a reason without it is not readable (decision 47)
     t["values"] = connection_values(connection, ("path",) if t["type"] == "file" else ())
     options = dict(t["options"])
+    options.pop("renamed", None)  # the run's, not the connector's (decision 10)
     if isinstance(c := options.get("columns"), list) and all(isinstance(p, list) and len(p) == 2 for p in c):
         options["columns"] = dict(c)  # a dict is stored as pairs (definition.ordered), any other value as written
     batches = stream(connector.read(connection, t["source_table"], options))
