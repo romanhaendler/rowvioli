@@ -2,7 +2,7 @@
 
 **Blocked by:** 07, 09
 
-**Status:** claimed
+**Status:** resolved
 
 **Model:** Opus
 
@@ -54,3 +54,4 @@ Implementer (branch `sc-10`), what is not done or not tested:
 - Item 11, left: the `moved` dicts (the one in `check()` is taken before the proofs, so it is not the same dict, and a helper for two uses saves nothing); the `renamed` test in `load()` and `check()` (their conditions differ, and merging moves code between them); the two stops of `check()` for one rule (merging changes a reason). Done: a literal quoted in one place, `way` and `drop` bound once, `payload`, and `MIGRATIONS` carrying their grants.
 - Item 7 covered `src/`; `tests/test_types.py` still has a comment `# decision 20` meaning the spec's item.
 - Found on the way, not in this ticket: a run reads and deletes the rows of a consumer's child table of a mirror (`CREATE TABLE ... () INHERITS (mirror)`): the diff and the publish read the mirror without `ONLY`, so the child's rows are `D` in the change log and gone (seen in a probe run). `cases.md` G6 says only that a gone column leaves the children.
+- Resolved on branch `schema-changes`, from sc-10 (6d18255). Review fixes: c795666, 676a5eb, 4145762, 6d18255.
