@@ -40,6 +40,8 @@ GRANT SELECT ON _rowvioli.status TO consumer;
 
 A column that is renamed in the source and proven so by the data ([Columns](loading.md#columns)) is renamed in mirror and change log, and a view on it keeps working under its own column name.
 
+**The mirror's rows are the program's.** A run writes the source's values into the mirror and compares the next source with what the mirror holds. A consumer's trigger on the mirror that changes a value the run writes (`NEW.name := upper(NEW.name)`) makes the mirror differ from the source and from the change log: every run finds the row changed and writes it again, with a row in the change log each time that holds the source's value while the mirror holds the trigger's, and after a change of key the history view shows two open versions of the row. Nothing stops it, since nothing cheap tells such a trigger from a source that changes. A value of one's own belongs in a view over the mirror or in a table of one's own, filled by a trigger on the mirror that writes there and leaves `NEW` as it is.
+
 Bookkeeping in the schema `_rowvioli`:
 
 ```
