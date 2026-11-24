@@ -117,7 +117,7 @@ def read(connection, table, options):
                         .fetchall():
                     return Exception(f"{table}: column {c} is not {t} in every row; change the value in the file, or "
                                      "its type under columns")
-        return Exception(f"{table}: a column under columns is not of its type in every row")
+        return Exception(f"{table}: a value in the file does not convert to the type its column is read as")
     # a few files per read, one read after the other: DuckDB opened up to 600 files of one list at once, and a
     # union of more than 333 files is too deep for it
     groups = [paths[i:i + FILES_PER_READ] for i in range(0, len(paths), FILES_PER_READ)]

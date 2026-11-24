@@ -145,9 +145,10 @@ def check(conn, t, staged, mirror, log_columns):
         if t["key"] and t["log"] and log_columns and name not in logged:
             raise Exception(f"column {name} of the mirror is not in the change log, so it is not known to be from the "
                             "source; " + (f"the source brings a column {name}, which a run would write into: drop it "
-                                          "from the mirror, or rename it to keep its values: ALTER TABLE "
-                                          f"{t['mirror']} DROP COLUMN {quote(name)} or RENAME COLUMN {quote(name)} TO "
-                                          "<another name>" if name in types else
+                                          "from the mirror, after copying its values into a table of your own if they "
+                                          "are to be kept: CREATE TABLE <a table of yours> AS SELECT "
+                                          f"{', '.join(quote(c) for c in [*t['key'], name])} FROM {t['mirror']}; "
+                                          f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}" if name in types else
                                           "drop it from the mirror, or add it to the change log too and the next run "
                                           "takes it out of the mirror"))
         if name not in types:
@@ -164,7 +165,9 @@ def check(conn, t, staged, mirror, log_columns):
             if t["type"] == "file" and name not in dict(t["options"].get("columns") or {}):
                 if not re.search(r"\.(csv|xlsx|json|jsonl|ndjson)$", t["source_table"], re.I):
                     raise Exception(f"{changed}; a source without a catalog guesses its types, so pin it under "
-                                    "columns in the table's definition")
+                                    "columns in the table's definition; where its pin was taken out, a person drops it "
+                                    f"and the next run adds it anew: ALTER TABLE {t['mirror']} DROP COLUMN "
+                                    f"{quote(name)}")
                 plan["unpinned"].append(name)
             if name in (t["key"] or []):
                 raise Exception(f"{changed}, a type of another family in the key, so a row before cannot be told "
@@ -823,15 +826,16 @@ WRAPPER = re.compile(r"^(?:[A-Z_]+: )?(?:\[libpq\] )?(?:nanoarrow call failed: )
 
 
 # a row's value Postgres quotes in a message: last, after a colon (`invalid input syntax for type integer: "abc"`), or
-# `value "…" is out of range`. Names are quoted too, but never in these two places
-VALUE = re.compile(r'(?:(?<=: )|(?<=\bvalue ))"[^\n]*"(?=$| is out of range)')
+# before `is out of range` (`value "…"` for an integer, bare for a float). Names are quoted too, but never there
+VALUE = re.compile(r'(?<=: )"[^\n]*"$|(?:^|(?<=\s))"[^\n]*"(?= is out of range)')
 
 
 def reason_line(values, e, step):
     """The reason as it is stored, shown and logged: scrubbed, the first line of the driver's message without its
-    wrapper, joined with the next when it ends in a colon, without a value of a row (VALUE). A message that holds a traceback gives the text before
-    it, or the exception's own line (the traceback's last) when nothing is before it; ADBC cuts long messages, so
-    the end may be missing. A line saying so, with the exception's type, when there is no message."""
+    wrapper, joined with the next when it ends in a colon, without a value of a row (VALUE). A message that holds a
+    traceback gives the text before it, or the exception's own line (the traceback's last) when nothing is before it;
+    ADBC cuts long messages, so the end may be missing. A line saying so, with the exception's type, when there is no
+    message."""
     text = scrub(values, str(e)).strip()
     before, _, traceback = text.partition("Traceback (most recent call last)")
     before = re.sub(r"\s*Detail: Python exception:\s*$", "", before)

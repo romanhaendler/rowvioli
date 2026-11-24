@@ -380,6 +380,13 @@ def test_a_value_a_type_under_columns_does_not_take_in_a_later_read_of_a_pattern
                            "under columns"
 
 
+def test_a_value_a_reader_option_of_duckdb_does_not_take_is_named_without_the_value(tmp_path):
+    (tmp_path / "o.csv").write_text("id;n\n1;secret-value\n")
+    with pytest.raises(Exception) as e:
+        list(file.read({"path": str(tmp_path)}, "o.csv", {"sep": ";", "types": {"n": "INTEGER"}}))
+    assert str(e.value) == "o.csv: a value in the file does not convert to the type its column is read as"
+
+
 def test_a_json_file_whose_later_rows_differ_from_its_first_arrives_whole(files):
     # beyond the 20480 rows DuckDB looks at first: other types, and a key that was not there before
     rows = [{"id": i, "v": i} for i in range(25000)] + [{"id": 25000, "v": "x", "late": True}]
