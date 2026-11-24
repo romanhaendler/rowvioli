@@ -21,7 +21,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from . import contract, seal, target
-from .definition import RESERVED
+from .definition import CONTROL, RESERVED
 from .target import CLAIMABLE, literal, quote, sql
 
 TABLE = """SELECT t.id, s.name AS source, s.type, s.connection, s.key_id, t.source_table, t.target_schema AS schema,
@@ -902,6 +902,8 @@ def reason_line(values, e, step):
     ADBC cuts long messages, so the end may be missing. A line saying so, with the exception's type, when there is no
     message."""
     text = scrub(values, str(e)).strip()
+    if type(e) is Exception:  # the program's own reason is one line: a name in it may hold a control character
+        text = CONTROL.sub("?", text)
     before, _, traceback = text.partition("Traceback (most recent call last)")
     before = re.sub(r"\s*Detail: Python exception:\s*$", "", before)
     first, *rest = (WRAPPER.sub("", before).strip() or traceback.strip().split("\n")[-1]).split("\n")

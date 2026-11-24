@@ -202,3 +202,13 @@ def test_run_with_a_table_where_the_source_belongs_says_so_and_names_the_source_
     assert "did you mean `rowvioli run erp customers`" in r.stderr, r.stderr
     r = erp.run("run", "nothing")
     assert r.returncode == 1 and "nothing is no source" in r.stderr and "did you mean" not in r.stderr
+
+
+def test_a_line_break_in_a_column_name_is_written_as_a_question_mark_and_the_reason_goes_on(erp):
+    erp.source('alter table customers add column "a\nb" text')
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], log = false }\n'))
+    ok(erp)
+    erp.source('alter table customers drop column "a\nb"')
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == ("column a?b is missing in the source; without a change log its values are nowhere else, "
+                           'so a person drops it: ALTER TABLE "raw_erp"."customers" DROP COLUMN "a?b"')

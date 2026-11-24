@@ -9,7 +9,8 @@ GET_NEXT = ("IO: nanoarrow call failed: ArrowArrayStreamGetNext(&bind.value, &cu
 
 
 def reason(message, values=()):
-    return reason_line(list(values), Exception(message), "reading the source")
+    # a driver's own type, as ADBC's errors are: a plain Exception is the program's own reason
+    return reason_line(list(values), RuntimeError(message), "reading the source")
 
 
 def test_a_cut_message_with_a_traceback_gives_the_cause_before_it():
