@@ -81,11 +81,13 @@ def load(conn, t):
     t["step"] = "checking the data"
     delivered = staged = sql(conn, COLUMNS, ["pg_temp._stage"])
     mirror = sql(conn, COLUMNS, [t["mirror"]])  # empty before the first run
-    # decision 3: a source without a catalog has no column that goes; one its data lack this run is empty
-    if t["type"] in ("file", "rest") and (missing := [(n, type) for n, type in mirror if n not in dict(staged)]):
+    log_columns = sql(conn, COLUMNS, [t["log_table"]])
+    # decision 3: a source without a catalog has no column that goes; one its data lack this run is empty. One a
+    # change log lacks is not known to be from the source, and check() stops it rather than empty a person's column
+    if t["type"] in ("file", "rest") and (missing := [(n, type) for n, type in mirror if n not in dict(staged)
+                                                      and (not log_columns or n in dict(log_columns))]):
         sql(conn, "ALTER TABLE _stage " + ", ".join(f"ADD {quote(n)} {type}" for n, type in missing))
         staged = sql(conn, COLUMNS, ["pg_temp._stage"])
-    log_columns = sql(conn, COLUMNS, [t["log_table"]])
     staged = fit(conn, t, staged, mirror, log_columns)
     plan = check(conn, t, staged, mirror, log_columns)
     t["step"] = "comparing with the mirror"

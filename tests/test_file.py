@@ -259,6 +259,19 @@ def test_F1_F6_files_with_more_or_fewer_columns_load_and_a_column_missing_from_a
     log_replays(files, "raw_files.orders")
 
 
+def test_a_column_a_person_added_to_the_mirror_of_a_file_is_not_emptied_and_stops_the_run(files):  # story 8, G1
+    orders(files, 1, 2)
+    code, answer = load(files, '"orders_*.csv" = { key = ["order_no"], sep = ";", target_table = "orders" }\n')
+    assert code == 0, answer
+    files.target("alter table raw_files.orders add column memo text")
+    files.target("update raw_files.orders set memo = 'mine'")
+    r = files.run("run", "files", "orders_*.csv")
+    assert r.returncode == 1
+    assert json.loads(r.stdout)["tables"]["raw_files.orders"]["reason"].startswith(
+        "column memo of the mirror is not in the change log")
+    assert files.target("select distinct memo from raw_files.orders") == [("mine",)]
+
+
 def test_a_pattern_without_target_table_fails_apply(files):
     files.definition({"files.toml": f"""
 [files]
