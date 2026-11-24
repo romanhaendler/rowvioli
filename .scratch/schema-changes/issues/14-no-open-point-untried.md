@@ -2,7 +2,7 @@
 
 **Blocked by:** 12
 
-**Status:** claimed
+**Status:** resolved
 
 **Model:** Opus
 
@@ -202,3 +202,5 @@ could show it:
   the whole suite on `postgres:16-alpine` with the PgBouncer image present, 775 passed, 18 skipped (7 min 56 s on a
   machine busy with the other suites; 6 min 38 s alone, base 5.5 min, about 30 tests more); `tests/odbc/run.sh` 14
   passed, 1 skipped.
+
+Resolved on branch `schema-changes`, from sc-14 (f5f9274). Review fixes: 264b2f7, ffa06c1, 7acf5e8, 8ade7e6, 167bfec, b42066c, bd62284, 7e94a99, 72a2e5f, 21d89f3, dee4254, 050713c, fa3ad89, f5f9274.
