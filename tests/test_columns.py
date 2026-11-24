@@ -111,7 +111,7 @@ def test_a_type_widened_by_hand_stops_naming_a_consumers_view_on_the_history_vie
     erp.target("alter table raw_erp.prices alter column amount type numeric(12,2)")
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
-    assert reason.startswith("the columns of raw_erp.prices change, but view amounts depends on view "
+    assert reason.startswith("the columns of raw_erp.prices change, but view public.amounts depends on view "
                              "raw_erp.prices__history: change or drop that"), reason
     assert erp.target("select format_type(atttypid, atttypmod) from pg_attribute where attname = 'amount' "
                       "and attrelid = 'raw_erp.prices__log'::regclass") == [("numeric(10,2)",)]
@@ -132,7 +132,8 @@ def test_a_type_widened_by_hand_stops_at_a_consumers_view_on_the_change_log_with
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
     assert reason.startswith('"raw_erp"."prices__log" would be widened to follow the mirror, which a person widened, '
-                             'column amount to numeric(12,2), but view amounts depends on column amount of table '
+                             'column amount to numeric(12,2), but view public.amounts depends on column amount of '
+                             'table '
                              'raw_erp.prices__log'), reason
 
 
@@ -217,8 +218,11 @@ def test_a_run_stopped_by_a_consumers_view_never_waits_for_it_while_holding_the_
         worker.communicate(timeout=20)
         assert consumer.result(timeout=20) == (3,)
     reason = erp.target("select reason from _rowvioli.runs order by run desc limit 1")[0][0]
-    assert reason.startswith("column city is gone from the source and would leave the mirror raw_erp.customers, but "
-                             "an object that depends on it was in use"), reason
+    # the catalogue names what was in use, without a lock on it; the harness's password x is hidden
+    assert reason.replace("***", "x") == (
+        "column city is gone from the source and would leave the mirror raw_erp.customers, but view public.cities "
+        "depends on column city of table raw_erp.customers, in use, so the run did not wait for it: change or drop "
+        "that, and the next run goes on"), reason
 
 
 def test_a_run_that_adds_a_column_never_waits_for_its_change_log_while_holding_the_mirror(erp):  # story 43
