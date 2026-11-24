@@ -84,10 +84,11 @@ def test_a_message_under_a_consumers_function_is_withheld_whatever_its_language(
         + WITHHELD
 
 
-def test_postgres_own_message_of_a_violated_constraint_under_a_function_keeps_its_names():
+def test_a_message_of_a_violated_constraint_under_a_function_is_withheld_since_its_code_may_have_written_it():
     assert reason('IO: [libpq] Execution error [PGRES_FATAL_ERROR]: ERROR:  duplicate key value violates unique '
                   'constraint "u"\nDETAIL:  Key (id)=(1) already exists.\nCONTEXT:  SQL function "f" statement 1') \
-        == 'duplicate key value violates unique constraint "u"'
+        == ('function "f" raised an error in the source; its message may hold a row\'s values, so it is left out here: '
+            "the source's server log has it")
 
 
 ODBC = "ODBC emitted an error calling 'SQLFetch': State: {}, Native error: 1, Message: "

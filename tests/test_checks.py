@@ -360,7 +360,11 @@ def withheld(rv):
     # not raised by the code but by Postgres inside it, with the row's value: whatever the language, a message under
     # a consumer's function is withheld
     ("execute format('select from %I', NEW.name)", "42P01"),  # relation "Anna2" does not exist
-    ("perform 1 / (length(NEW.name) - 5)", "22012")])
+    ("perform 1 / (length(NEW.name) - 5)", "22012"),
+    # in the words of Postgres's own message of a constraint (ticket 15, X2)
+    ("""raise exception 'new row for relation "customers" violates check constraint "%"', NEW.name""", "P0001"),
+    ("""raise exception using message = format('duplicate key value violates unique constraint "%s"', NEW.name), """
+     "errcode = 'unique_violation'", "23505")])
 def test_a_message_a_consumers_trigger_raises_on_the_target_is_withheld_and_the_reason_names_the_function(
         erp, statement, sqlstate):
     ok(erp)

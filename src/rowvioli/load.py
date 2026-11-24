@@ -1136,7 +1136,7 @@ def reason_line(values, e, step, source=None):
 # a frame of a function in the context Postgres gives an error, in every language that names its frames:
 # `PL/pgSQL function guard() line 3 at RAISE`, `SQL function "f" statement 1`, `PL/Python function "guard"`
 FRAME = re.compile(r'(?:PL/\w+|SQL) (?:function|procedure) ("(?:[^"]|"")*"|(?:"[^"]*"|[^\s(])+\(.*?\))')
-# Postgres's own messages of a violated constraint, which show names and no value, also raised under a function
+# Postgres's own messages of a violated constraint, which show names and no value (of class 23, not under a function)
 CONSTRAINT = re.compile(r'duplicate key value violates unique constraint "[^"]*"'
                         r'|(?:insert or update|update or delete) on table "[^"]*" violates foreign key constraint '
                         r'"[^"]*"(?: on table "[^"]*")?'
@@ -1183,7 +1183,9 @@ def withheld(e, step, source):
     state = details.get("PG_DIAG_SQLSTATE") or (odbc and odbc[2])
     function = FRAME.search(details.get("PG_DIAG_CONTEXT") or text.partition("\nCONTEXT:  ")[2])
     message = details.get("PG_DIAG_MESSAGE_PRIMARY") or WRAPPER.sub("", text).split("\n")[0]
-    if CONSTRAINT.fullmatch(message) or not (function or state and state not in SHOWN):
+    # a constraint's words count only as Postgres's own: of class 23 and not under a consumer's code, which may copy them
+    if not function and str(state).startswith("23") and CONSTRAINT.fullmatch(message) \
+            or not (function or state and state not in SHOWN):
         return None
     who = f"function {function[1]}" if function else "a function" if state in ("P0001", "P0004") else "a statement"
     where = "source" if step == "reading the source" else "target"
