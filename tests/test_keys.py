@@ -68,3 +68,51 @@ def test_C4_another_key_keeps_the_history_and_the_table_at_every_moment_before_a
     for moment, mirror in moments:
         assert at(erp, moment) == mirror, moment
     log_replays(erp)
+
+
+def test_C1_a_first_key_replaces_the_mirror_once_more_adds_the_primary_key_and_begins_the_change_log(erp):  # story 17
+    apply(erp, definition(erp, '"public.notes" = {}\n'))
+    ok(erp)
+    assert erp.target("select count(*) from raw_erp.notes where txt = 'a'") == [(2,)]  # the old rows hold it twice
+    erp.source("delete from notes; insert into notes values ('a', 1), ('b', 2)")
+    apply(erp, definition(erp, '"public.notes" = { key = ["txt"] }\n'))
+    again(erp)
+    [(loaded_at,)] = erp.target("select loaded_at from _rowvioli.tables where target_table = 'notes'")
+    assert primary_key(erp, "raw_erp.notes") == ["txt"]
+    assert rows(erp.target, "select * from raw_erp.notes") == [("a", 1), ("b", 2)]
+    assert erp.target("select _op, txt, n, _loaded_at from raw_erp.notes__log order by txt") == [
+        ("I", "a", 1, loaded_at), ("I", "b", 2, loaded_at)]
+    assert comment(erp, "raw_erp.notes") is None  # one key
+    assert erp.target(f'select _op, "column", "key", "by" from _rowvioli.columns__log {THIS_RUN}') == [
+        ("U", "txt", 1, "definition")]
+    log_replays(erp, "raw_erp.notes")
+
+
+NOT_NULL = ("select attname from pg_attribute where attrelid = %s::regclass and attnum > 0 and attnotnull "
+            "order by attnum")
+LOG_FALSE = '"public.customers" = { key = ["customer_no"], log = false }\n'
+
+
+def test_C3_a_key_taken_away_without_a_change_log_drops_the_primary_key_and_its_not_null(erp):
+    apply(erp, definition(erp, LOG_FALSE))
+    ok(erp)
+    apply(erp, definition(erp, '"public.customers" = {}\n'))
+    erp.source("alter table customers drop constraint customers_pkey, alter customer_no drop not null")
+    erp.source("insert into customers values (1, 'Anna', 'Bonn'), (null, 'Nobody', null)")  # no key: twice is fine
+    again(erp)
+    assert primary_key(erp) == []
+    assert erp.target(NOT_NULL, ["raw_erp.customers"]) == []
+    assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
+    assert erp.target(f'select _op, "column", "key", "by" from _rowvioli.columns__log {THIS_RUN}') == [
+        ("U", "customer_no", None, "definition")]
+
+
+def test_C5_another_key_without_a_change_log_replaces_the_primary_key(erp):
+    apply(erp, definition(erp, LOG_FALSE))
+    ok(erp)
+    apply(erp, definition(erp, '"public.customers" = { key = ["name"], log = false }\n'))
+    again(erp)
+    assert primary_key(erp) == ["name"]
+    assert erp.target(NOT_NULL, ["raw_erp.customers"]) == [("name",)]
+    assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
+    assert erp.target("select to_regclass('raw_erp.customers__log')") == [(None,)]
