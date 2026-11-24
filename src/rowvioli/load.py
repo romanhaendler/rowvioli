@@ -220,12 +220,18 @@ def check(conn, t, staged, mirror, log_columns, renamed):
                             f"ALTER {kind} {table} RENAME COLUMN {quote(n)} TO <a shorter name>" for n in long
                             for kind, table in ([("TABLE", t["mirror"])] if n in had else [])
                             + [("TABLE", t["log_table"]), ("VIEW", t["history"])]))
+    # a change log that exists is complete, and the program never ends one: a run that would leave it behind its mirror,
+    # or lay a new mirror's history over it, fails, before the key is looked at
+    if log_columns and not (key and t["log"] and mirror):
+        why = ("this run would not write to it (log = false or no key)" if not (key and t["log"])
+               else "its mirror is missing")
+        raise Exception(f"the definition has no key any more, the mirror's primary key is {primary_key}: put the key "
+                        "back, or give the table another target_table; to load it without a key, drop the change log "
+                        f"{t['name']}__log with its history view (DROP TABLE {t['log_table']} CASCADE) and the mirror"
+                        if primary_key and not key else
+                        f"the change log {t['name']}__log exists and {why}: drop it with its history view "
+                        f"(DROP TABLE {t['log_table']} CASCADE), or rename both" + (" with the mirror" if mirror else ""))
     if mirror:
-        if primary_key and not key and log_columns:  # the program does not end a change log
-            raise Exception(f"the definition has no key any more, the mirror's primary key is {primary_key}: "
-                            "put the key back, or give the table another target_table; to load it without a key, "
-                            f"drop the change log {t['name']}__log with its history view "
-                            f"(DROP TABLE {t['log_table']} CASCADE) and the mirror")
         if set(primary_key) != set(key):  # the same columns in another order are the same key (story 20)
             # decision 54: the key the last run recorded is the definition's, so a person changed the primary key
             recorded = sql(conn, 'SELECT "column", "key" FROM _rowvioli.columns WHERE id = $1', [t["id"]])
@@ -236,13 +242,6 @@ def check(conn, t, staged, mirror, log_columns, renamed):
                 {renamed_to.get(c, c) for c in keys[-1]["key"]} == set(key) if keys else \
                 before_the_record(conn, t, primary_key, key, log_columns, renamed)
             plan["key"] = {"was": primary_key, "by": "hand" if hand else "definition", "log": bool(log_columns)}
-    # a change log that exists is complete: a run that would leave it behind its mirror, or lay a new mirror's
-    # history over it, fails
-    why = ("this run would not write to it (log = false or no key)" if not (key and t["log"])
-           else "its mirror is missing" if not mirror else None)
-    if log_columns and why:
-        raise Exception(f"the change log {t['name']}__log exists and {why}: drop it with its history view "
-                        f"(DROP TABLE {t['log_table']} CASCADE), or rename both" + (" with the mirror" if mirror else ""))
     # decision 54: one branch over a change log written under two keys gives wrong rows, so the record says them
     if log_columns and stretches(conn, t) is None and (noted := sql(
             conn, """SELECT substr(note, strpos(note, $2) + length($2)) FROM _rowvioli.columns__log WHERE id = $1
