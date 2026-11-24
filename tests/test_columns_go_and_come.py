@@ -1,6 +1,7 @@
 """A column goes and comes back: the mirror follows the source, the change log keeps what was (spec tests, stage 2;
 the numbers are those of `.scratch/schema-changes/cases.md`)."""
 import json
+import re
 import time
 
 import psycopg
@@ -383,6 +384,13 @@ def test_A19_a_new_source_column_named_like_a_retired_one_stops_until_a_person_r
     log_replays(erp)
 
 
+def follow(rv, reason):
+    """Runs the statements a reason about retired names longer than 63 bytes gives, each column under its first
+    letter and _old, the same name in mirror and change log."""
+    statements = reason.split(" in one step: ", 1)[1]
+    rv.target(re.sub(r'"(\w)(\w*)" TO <a shorter name>', r'"\1\2" TO "\1_old"', statements))
+
+
 def test_a_retired_name_longer_than_postgres_takes_stops_and_says_what_to_rename(erp):  # story 10
     long = "y" * 62  # not x: the source's password is x, and the reason hides it
     erp.source(f"alter table customers add column {long} text")
@@ -392,11 +400,28 @@ def test_a_retired_name_longer_than_postgres_takes_stops_and_says_what_to_rename
     erp.source(f"alter table customers add column {long} integer")
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
-    assert reason.startswith(f"column {long} of the change log is to keep its old values under {long}__"), reason
-    assert "a name that is longer than 63 bytes: rename that column of the change log" in reason
-    erp.target(f"alter table raw_erp.customers__log rename column {long} to y_text")
-    erp.target("drop view raw_erp.customers__history")
+    assert reason.startswith(f"the change log is to keep the old values of {long} under {long}__"), reason
+    follow(erp, reason)  # the change log alone has it
     again(erp)
+    assert columns(erp, "raw_erp.customers__log")[-2:] == ["y_old", long]
+    log_replays(erp)
+
+
+def test_retired_names_longer_than_postgres_takes_are_named_together_and_one_round_of_the_way_out_leads_out(erp):
+    one, two = "y" * 62, "z" * 62  # P18 followed one column at a time into a second and a third stop
+    erp.source(f"alter table customers add column {one} text, add column {two} text")
+    erp.source(f"update customers set {one} = name, {two} = city")
+    ok(erp)
+    erp.source(f"alter table customers drop column {one}, drop column {two}")
+    erp.source(f"alter table customers add column {one} integer, add column {two} integer")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    assert reason.startswith(f"the change log is to keep the old values of {one} and {two} under {one}__"), reason
+    follow(erp, reason)  # mirror and change log have them
+    again(erp)
+    assert columns(erp) == ["customer_no", "name", "city", one, two]
+    assert erp.target("select y_old, z_old from raw_erp.customers__log where customer_no = 1 order by _loaded_at") == [
+        ("Anna", "Bonn"), (None, None)]  # the I of the first run, the U of the run they went in
     log_replays(erp)
 
 

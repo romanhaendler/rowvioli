@@ -206,10 +206,17 @@ def check(conn, t, staged, mirror, log_columns):
         if new in logged or new in types:  # by the source too, in this very run
             raise Exception(f"column {name} of the change log is to keep its old values under {new}, a name that is "
                             "taken: a later run keeps them under its own number, nothing is to be done")
-        if len(new.encode()) > 63:
-            raise Exception(f"column {name} of the change log is to keep its old values under {new}, a name that is "
-                            "longer than 63 bytes: " + way.format(quote(name)))
         plan["retired"][name] = new
+    # named together, so one round of work leads out: a column renamed alike in mirror and change log goes as one gone
+    # from the source, and the source's comes anew (a change log's alone left the mirror's, unknown to it, P18)
+    if long := {n: new for n, new in plan["retired"].items() if len(new.encode()) > 63}:
+        raise Exception(f"the change log is to keep the old values of {' and '.join(long)} under "
+                        f"{' and '.join(long.values())}, names longer than 63 bytes, the most Postgres keeps of a name: "
+                        "give each the same shorter name in mirror, change log and history view, and the next run lets "
+                        "it go as a column gone from the source, in one step: " + "; ".join(
+                            f"ALTER {kind} {table} RENAME COLUMN {quote(n)} TO <a shorter name>" for n in long
+                            for kind, table in ([("TABLE", t["mirror"])] if n in had else [])
+                            + [("TABLE", t["log_table"]), ("VIEW", t["history"])]))
     if mirror:
         if primary_key and not key and log_columns:  # the program does not end a change log
             raise Exception(f"the definition has no key any more, the mirror's primary key is {primary_key}: "
