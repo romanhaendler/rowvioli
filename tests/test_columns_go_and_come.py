@@ -12,6 +12,7 @@ from test_checks import MIRROR, failed
 from test_columns import LAST, heard, listen
 from test_history import LOADED_AT, again
 from test_run import apply, definition, erp, ok, rows  # noqa: F401 (erp is a fixture)
+from test_secrets import lab
 
 
 def columns(rv, table="raw_erp.customers"):
@@ -449,6 +450,21 @@ def test_a_retired_column_whose_comment_a_person_removed_stops_with_the_text_to_
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert failed(erp).startswith(f"column city__{run} of the source has the name under which the change log keeps "
                                   "the old values of city")
+
+
+@pytest.mark.parametrize("catalog", [None, "data"])
+def test_a_connector_of_ones_own_that_says_it_has_no_catalog_leaves_a_column_it_stops_delivering_empty(erp, catalog):
+    env = {"ROWVIOLI_TEST_CATALOG": catalog} if catalog else {}
+    lab(erp, 'records = [{ n = 1, city = "Bonn" }, { n = 2, city = "Ulm" }]')
+    assert erp.run("run", env=env).returncode == 0
+    lab(erp, "records = [{ n = 1 }, { n = 2 }]")  # one run of the source leaves the column out
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert erp.run("run", env=env).returncode == 0
+    # without a word the connector has a catalog, as a database source: the column went
+    assert ("city" in columns(erp, "raw_lab.numbers")) == bool(catalog)
+    assert erp.target("select n, city from raw_lab.numbers__history where _valid_to is null order by n") == [
+        (1, None), (2, None)]
+    log_replays(erp, "raw_lab.numbers")
 
 
 def follow(rv, reason):

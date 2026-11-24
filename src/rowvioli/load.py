@@ -90,14 +90,14 @@ def load(conn, t):
     delivered = staged = sql(conn, COLUMNS, ["pg_temp._stage"])
     mirror = sql(conn, COLUMNS, [t["mirror"]])  # empty before the first run
     log_columns = sql(conn, COLUMNS, [t["log_table"]])
-    # decision 54: a file has no column that goes; one its data lack this run is empty. One a change log lacks, or
-    # every one without a change log, is not known to be from the source, and check() stops it rather than empty a
-    # person's column. One the definition says is renamed to a column the data have is renamed. REST
-    # delivers every column under `columns`, even one no row has: the definition is its catalog, and a column taken
-    # out of it goes as one a database drops
+    # decision 54: a connector whose catalog is its data (a file) has no column that goes; one its data lack this run
+    # is empty. One a change log lacks, or every one without a change log, is not known to be from the source, and
+    # check() stops it rather than empty a person's column. One the definition says is renamed to a column the data
+    # have is renamed. REST delivers every column under `columns`, even one no row has: the definition is its catalog,
+    # and a column taken out of it goes as one a database drops
     stated = {old for new, old in (t["options"].get("renamed") or {}).items()
               if new in dict(staged) and new not in dict(mirror)}
-    if t["type"] == "file" and (missing := [(n, type) for n, type in mirror if n not in dict(staged)
+    if t["catalog"] == "data" and (missing := [(n, type) for n, type in mirror if n not in dict(staged)
                                             and n not in stated and n in dict(log_columns)]):
         sql(conn, "ALTER TABLE _stage " + ", ".join(f"ADD {quote(n)} {type}" for n, type in missing))
         staged = sql(conn, COLUMNS, ["pg_temp._stage"])
@@ -147,7 +147,7 @@ def check(conn, t, staged, mirror, log_columns):
     primary_key = [moved.get(k, k) for (k,) in sql(conn, PRIMARY_KEY, [t["mirror"]])] if mirror else []
     plan = {"renamed": renamed, "proven": {}, "gone": [], "retired": {}, "key": {}, "unpinned": []}
     # nothing is proven without a catalog, a key or a change log, nor joined by a key of another family, which stops below
-    if t["key"] and t["log"] and log_columns and t["type"] not in ("file", "rest") \
+    if t["key"] and t["log"] and log_columns and not t["catalog"] \
             and set(primary_key) == set(t["key"]) \
             and all(family(had[renamed.get(k, k)]) == family(types[k]) for k in t["key"]):
         proofs = proven(conn, t, mirror, staged, log_columns, renamed)
@@ -175,7 +175,7 @@ def check(conn, t, staged, mirror, log_columns):
             changed = f"column {name} has changed its type from {type} to {types[name]}"
             # where the definition names the columns it is the catalog. CSV, Excel and JSON deliver every other column
             # as text or jsonb, so another family there is a pin taken out; a type the file brings itself can flip
-            if t["type"] == "file" and name not in t["pinned"]:
+            if t["catalog"] == "data" and name not in t["pinned"]:
                 if name in t["own_types"]:
                     raise Exception(f"{changed}; a source without a catalog guesses its types, so pin it under "
                                     "columns in the table's definition; where its pin was taken out, a person drops it "
@@ -417,6 +417,7 @@ def stage(conn, t):
     """Opens the connection, calls the connector and fills the TEMP staging table chunk by chunk. Returns the
     number of rows read."""
     connector = contract.connector(t["type"], f" on worker {t['worker']}")
+    t["catalog"] = getattr(connector, "catalog", None)  # the source's own, unless the connector says otherwise
     sql(conn, "UPDATE _rowvioli.runs SET driver_version = $2 WHERE run = $1",
         [t["run"], getattr(connector, "driver_version", None)])
     try:
@@ -912,7 +913,7 @@ def record_columns(conn, t, delivered, mirror, log, changes):
         if (r["target_schema"], r["target_table"]) == (t["schema"], t["table"]):
             r.update(changes.get(r["column"], {}))
             # REST's columns are all the definition's, also one taken out of it; a retired one is by its name's cause
-            if r["by"] == "source" and (t["type"] == "rest" or r["column"] in pinned or r["was"] in pinned):
+            if r["by"] == "source" and (t["catalog"] == "definition" or r["column"] in pinned or r["was"] in pinned):
                 r["by"] = "definition"
     if any(r["by"] == "source" for r in rows):  # another reader gave these columns, perhaps, not the source
         [(differs, note)] = sql(conn, """

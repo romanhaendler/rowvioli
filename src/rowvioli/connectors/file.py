@@ -22,6 +22,7 @@ from ..target import quote
 
 # the reader's version, so that columns another one delivers are recorded as by = reader (decision 54)
 driver_version = version("duckdb")
+catalog = "data"  # a file has no catalog: a column one file or one run lacks is empty (decision 54)
 
 READERS = {".csv": "read_csv", ".xlsx": "read_xlsx", ".parquet": "read_parquet", ".json": "read_json",
            ".jsonl": "read_json", ".ndjson": "read_json"}
