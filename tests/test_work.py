@@ -179,8 +179,9 @@ def test_with_the_limits_full_the_targets_connections_stay_at_the_running_tables
     apply(ready, source(ready, "erp", "parallel = 4", tables))
     ready.target("update _rowvioli.meta set max_running = 2")
     workers = [ready.start("work", "--slots", "4") for _ in range(3)]
-    connections = """select count(*) from pg_stat_activity
-                      where datname = current_database() and pid <> pg_backend_pid()"""
+    # the clients' connections: an autovacuum worker on the test's database is one of the server's own
+    connections = """select count(*) from pg_stat_activity where datname = current_database()
+                      and backend_type = 'client backend' and pid <> pg_backend_pid()"""
 
     def runs():  # the run processes of all three workers
         return sum(len(subprocess.run(["pgrep", "-P", str(w.pid)], capture_output=True, text=True).stdout.split())
@@ -192,13 +193,16 @@ def test_with_the_limits_full_the_targets_connections_stay_at_the_running_tables
             return counting.execute(connections).fetchone()[0]
         # the start-up is over when two tables load, their two run processes alone are left (one started before the
         # first claims committed finds nothing and ends) and every worker has connected
-        until(lambda: ready.target("select count(*) from _rowvioli.status where status = 'loading'") == [(2,)]
-              and runs() == 2 and count() == 2 + 3, timeout=60)
-        seen, end = set(), time.monotonic() + 8  # four polling intervals
+        until(lambda: counting.execute("select count(*) from _rowvioli.status where status = 'loading'").fetchone()
+              == (2,) and runs() == 2 and count() == 2 + 3, timeout=60)
+        seen, end, other = set(), time.monotonic() + 8, set()  # four polling intervals
         while time.monotonic() < end:
             seen.add(count())
+            if seen != {2 + 3} and not other:  # which, for the message
+                other = set(counting.execute("select backend_type, application_name, state, left(query, 80) from "
+                                             "pg_stat_activity where datname = current_database()").fetchall())
             time.sleep(0.02)
-    assert seen == {2 + 3}
+    assert seen == {2 + 3}, other
 
 
 def test_a_worker_survives_an_unreachable_target_and_loads_again_once_it_accepts_connections(ready):

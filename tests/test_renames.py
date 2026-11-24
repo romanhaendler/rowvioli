@@ -11,7 +11,7 @@ from test_run import apply, definition, erp, ok, rows  # noqa: F401 (erp is a fi
 
 PEOPLE = "raw_erp.people"
 THIS_RUN = "where _run = (select max(run) from _rowvioli.runs)"
-RECORD = f'select _op, "column", was, "by", note from _rowvioli.columns__log {THIS_RUN} order by "column"'
+RECORD = f'select _op, "column", was, "by", note from _rowvioli.columns__log {THIS_RUN} order by "column" collate "C"'  # City before city on every server
 
 
 def people(rv, n=30, table='{ key = ["id"] }'):

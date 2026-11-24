@@ -481,6 +481,7 @@ def stage(conn, t):
         except Exception:  # the driver gives what the connector raised in its stream as its own error, cut and wrapped
             if raised:
                 raise raised[0] from None
+            t["step"] = "staging the rows"  # the target refused them, not the source
             raise
     # zero rows protect a mirror that has rows; a first load or an empty mirror publishes them
     if rows_read == 0 and t["max_delete_share"] < 1 and sql(conn, "SELECT to_regclass($1)", [t["mirror"]])[0][0] and \
