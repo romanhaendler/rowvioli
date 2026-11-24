@@ -1,4 +1,5 @@
 """Checks, schema changes, failure reasons and secrets (spec tests 12, 13, 15, 16, 17, 18)."""
+import json
 import time
 
 import psycopg
@@ -308,6 +309,59 @@ def test_a_name_postgres_quotes_in_its_message_stays_in_the_reason(erp):
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
     assert reason.endswith('new row for relation "customers" violates check constraint "c"'), reason
+
+
+def withheld(rv):
+    """A run that fails one table on a message a consumer wrote; returns the reason, after making sure that the row's
+    values are in none of the answer, the lines, the status and `runs`."""
+    r = rv.run("run")
+    assert r.returncode == 1, r.stdout
+    [reason] = [a["reason"] for a in json.loads(r.stdout)["tables"].values()]
+    assert rv.target("select reason from _rowvioli.status") == rv.target(
+        "select reason from _rowvioli.runs order by run desc limit 1") == [(reason,)]
+    assert "Anna2" not in r.stdout + r.stderr and "Secret" not in r.stdout + r.stderr, r.stdout + r.stderr
+    return reason
+
+
+@pytest.mark.parametrize("statement, sqlstate", [
+    ("raise exception 'bad row %', NEW", "P0001"),
+    ("raise exception using message = 'bad row ' || NEW::text, errcode = 'check_violation'", "23514"),
+    ("assert NEW.name <> 'Anna2', 'bad row ' || NEW::text", "P0004")])
+def test_a_message_a_consumers_trigger_raises_on_the_target_is_withheld_and_the_reason_names_the_function(
+        erp, statement, sqlstate):
+    ok(erp)
+    erp.target(f"create function public.guard() returns trigger language plpgsql as $$ begin {statement}; return NEW;"
+               " end $$")
+    erp.target("create trigger g before insert on raw_erp.customers for each row execute function public.guard()")
+    erp.source("update customers set name = 'Anna2' where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert withheld(erp) == (f"function guard() raised an error (SQLSTATE {sqlstate}) in the target; its message may "
+                             "hold a row's values, so it is left out here: the target's server log has it")
+
+
+def test_a_message_a_function_in_a_source_view_raises_is_withheld(erp):
+    erp.source("create function check_name(n text) returns text language plpgsql as $$ begin "
+               "if n = 'Anna' then raise exception 'bad name Secret %', n; end if; return n; end $$")
+    erp.source("create view checked as select customer_no, check_name(name) as name from customers")
+    apply(erp, definition(erp, '"public.checked" = { key = ["customer_no"] }\n'))
+    # the driver gives a source's error while rows arrive as text only: no SQLSTATE. x is the harness's password
+    assert withheld(erp) == ("function check_name(te***t) raised an error in the source; its message may hold a row's "
+                             "values, so it is left out here: the source's server log has it")
+
+
+@pytest.mark.parametrize("constraint, change, says", [
+    ("add constraint u unique (city)", "city = 'Essen'", 'duplicate key value violates unique constraint "u"'),
+    ("add constraint f foreign key (city) references public.cities", "city = 'Ulm'",
+     'violates foreign key constraint "f"'),
+    ("alter name set not null", "name = null",
+     'null value in column "name" of relation "customers" violates not-null constraint')])
+def test_postgres_own_constraint_messages_keep_their_names(erp, constraint, change, says):
+    ok(erp)
+    erp.target("create table public.cities (city text primary key); insert into public.cities values ('Bonn'), ('Essen')")
+    erp.target(f"alter table raw_erp.customers {constraint}")
+    erp.source(f"update customers set {change} where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp).endswith(says)
 
 
 CHILD = "select * from public.branch order by customer_no"

@@ -906,7 +906,9 @@ def reason_line(values, e, step):
     wrapper, joined with the next when it ends in a colon, without a value of a row (VALUE). A message that holds a
     traceback gives the text before it, or the exception's own line (the traceback's last) when nothing is before it;
     ADBC cuts long messages, so the end may be missing. A line saying so, with the exception's type, when there is no
-    message."""
+    message. A message a consumer's PL/pgSQL code raised is withheld (RAISED)."""
+    if withheld := raised_by_a_consumer(e, step):
+        return scrub(values, CONTROL.sub("?", withheld))
     text = scrub(values, str(e)).strip()
     raised = e.__traceback__
     while raised and raised.tb_next:
@@ -925,6 +927,27 @@ def reason_line(values, e, step):
                       r"_rowvioli.\1, which rowvioli init printed with the upgrade to version 4 "
                       '(docs/operation.md "The target")', line)
     return line or f"the driver gave no message while {step} ({type(e).__name__})"
+
+
+# the innermost line of the context Postgres gives an error that PL/pgSQL code raised by RAISE or ASSERT
+RAISED = re.compile(r"PL/pgSQL function (.*) line \d+ at (?:RAISE|ASSERT)")
+
+
+def raised_by_a_consumer(e, step):
+    """Decision 54, a reason never shows a value: the reason for an error that a consumer's code raised, whose message
+    is free text that may hold a row (`raise exception 'bad row %', NEW`), or None for any other. Told by the SQLSTATE
+    only RAISE and ASSERT give and by the context the driver gives, in its fields for a statement and in its text for
+    a source's rows; Postgres's own messages, for a constraint too, keep their names."""
+    details = {k.decode(): v.decode(errors="replace") for k, v in getattr(e, "details", None) or []}
+    state = details.get("PG_DIAG_SQLSTATE")
+    context = details.get("PG_DIAG_CONTEXT") or next(iter(re.findall(r"\nCONTEXT:  (.*)", str(e))), "")
+    function = RAISED.fullmatch(context.split("\n")[0])
+    if not function and state not in ("P0001", "P0004"):  # raise_exception, assert_failure
+        return None
+    where = "source" if step == "reading the source" else "target"
+    return (f"{f'function {function[1]}' if function else 'a function'} raised an error"
+            f"{f' (SQLSTATE {state})' if state else ''} in the {where}; its message may hold a row's values, so it is "
+            f"left out here: the {where}'s server log has it")
 
 
 def scrub(values, text):
