@@ -2,6 +2,7 @@
 is a column that goes and comes (spec tests, stage 3; the numbers are those of `.scratch/schema-changes/cases.md`)."""
 import pytest
 
+from test_checks import failed
 from test_columns_go_and_come import log_replays
 from test_history import again
 from test_run import apply, definition, erp, ok  # noqa: F401 (erp is a fixture)
@@ -92,6 +93,62 @@ def test_B6_B8_B13_a_type_of_another_family_goes_and_comes_in_one_run_and_the_lo
     assert erp.target('select "column", type, source_type from _rowvioli.columns where "column" like %s order by 1',
                       ["a%"]) == [("a", named["after"], named["after"]),
                                   (f"a__{run}", named["before"], named["before"])]
+    log_replays(erp, "raw_erp.amounts")
+
+
+@pytest.mark.parametrize("table", ['{ key = ["id"], log = false }', "{}"])
+def test_B6_B8_without_a_change_log_a_type_of_another_family_stops_and_says_how_to_drop_the_column(erp, table):
+    erp.source("create table amounts (id int primary key, a timestamp)")
+    erp.source("insert into amounts values (1, '2024-01-01 12:00')")
+    apply(erp, definition(erp, f'"public.amounts" = {table}\n'))
+    ok(erp)
+    erp.source("alter table amounts alter a type timestamptz")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == ("column a has changed its type from timestamp without time zone to timestamp with time "
+                           "zone; without a change log its values are nowhere else, so a person drops it and the ne***t "
+                           'run adds it anew: ALTER TABLE "raw_erp"."amounts" DROP COLUMN "a"')  # x is the password
+    erp.target('ALTER TABLE "raw_erp"."amounts" DROP COLUMN "a"')  # the way out
+    again(erp)
+    assert erp.target("select format_type(atttypid, atttypmod) from pg_attribute where attname = 'a' "
+                      "and attrelid = 'raw_erp.amounts'::regclass") == [("timestamp with time zone",)]
+
+
+def test_a_key_column_is_widened_like_any_other_and_a_consumers_foreign_key_keeps_its_type(erp):  # story 21, C7
+    amounts(erp, "integer", "(1, 10)")
+    erp.target("create table public.orders (amount_id integer references raw_erp.amounts (id))")
+    erp.target("insert into public.orders values (1)")
+    erp.source("alter table amounts alter id type bigint")
+    erp.source("insert into amounts values (3000000000, 30)")
+    again(erp)
+    assert types(erp, "id") == ["bigint", "bigint"]
+    assert erp.target("select id from raw_erp.amounts order by id") == [(1,), (3000000000,)]
+    assert erp.target("select format_type(atttypid, atttypmod) from pg_attribute where attname = 'amount_id' "
+                      "and attrelid = 'public.orders'::regclass") == [("integer",)]
+    log_replays(erp, "raw_erp.amounts")
+
+
+def test_B19_a_column_empty_in_every_row_that_changes_its_family_writes_no_row(erp):
+    amounts(erp, "text", "(1, null), (2, null)")
+    erp.source("alter table amounts alter a type integer using null")
+    again(erp)
+    run = max_run(erp)
+    assert types(erp, "a") == ["integer", "integer"]
+    assert erp.target(f"select count(*) from raw_erp.amounts__log where _run = {run}") == [(0,)]
+    assert f"a__{run}" in [c for (c,) in erp.target("select attname from pg_attribute where attrelid = "
+                                                    "'raw_erp.amounts__log'::regclass and not attisdropped")]
+    log_replays(erp, "raw_erp.amounts")
+
+
+def test_a_table_stuck_on_a_changed_type_resolves_with_the_first_run(erp):  # story 45
+    amounts(erp, "integer", "(1, 10)")
+    erp.source("alter table amounts alter a type text")
+    # as a run of the version before left it, failing for a while
+    erp.target("update _rowvioli.tables set reason = 'column a has changed its type from integer to text', "
+               "attempts = 3, requested_at = now()")
+    ok(erp)
+    assert erp.target("select status, attempts, reason from _rowvioli.status where target_table = 'raw_erp.amounts'") \
+        == [("ok", 0, None)]
+    assert types(erp, "a") == ["text", "text"]
     log_replays(erp, "raw_erp.amounts")
 
 

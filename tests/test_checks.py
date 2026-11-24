@@ -29,7 +29,9 @@ MIRROR = "select * from raw_erp.customers"
      " insert into customers values (null, 'Nobody', null)", "is null"),
     ("delete from customers", "zero rows"),
     ("delete from customers where customer_no <> 1", "67 % of the rows would be deleted"),
-    ("alter table customers alter customer_no type bigint", "column customer_no has changed its type"),
+    ("alter table customers alter customer_no type text", "column customer_no has changed its type from integer to "
+     "te***t, a type of another family in the key, so a row before cannot be told from one after: give the table "
+     "another target_table"),  # cases C8; the harness's password is x, which a reason hides
     ("alter table customers add column _op text", "column _op is a name of the change log"),
     ("alter table customers add column _run int", "column _run is a name of the change log"),
 ])
