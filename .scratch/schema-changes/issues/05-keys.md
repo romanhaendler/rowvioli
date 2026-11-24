@@ -24,3 +24,6 @@ The part "after renames" of decision 7 is ticket 06.
 - [ ] The existing tests pass or are changed to the new behaviour. No documents (ticket 07).
 
 ## Comments
+
+- Not tested here: C7 (a widened key column) is ticket 04's, which was not merged into `schema-changes` when this was built; today a key column of another type stops (C8's test holds either way). C2 is `tests/test_history.py::test_C2_...`; C10 is the "occurs twice" and "is null" cases of `tests/test_checks.py` and `test_another_key_that_does_not_identify_a_row_...`; that the reason names the source's primary key is not built, since no decision of the spec asks for it. C11 is left out by the ticket.
+- Left the spec: whether a primary key that differs is put back (by hand) or is another key (by the definition) is told by the key `_rowvioli.columns` recorded for the table; without rows there (the first run after the upgrade) it counts as another key. The text to put back a lost comment on `_op` is the latest note `the change log's keys: <comment>` in `columns__log`, which a change of key, and a retirement of an old key's column, write. The comment is JSON: `[{"key": ["id"]}, {"key": ["id", "tenant"], "from": "<now()::text of the run>"}]`; a change log without it has had one key, the definition's.

@@ -464,8 +464,8 @@ def carry_out(conn, t, plan):
                 sql(conn, f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(c)} DROP NOT NULL" for c in loose))
         if by == "definition" and plan["key"]["log"]:  # a stretch of the change log begins under the new key
             [(now,)] = sql(conn, "SELECT now()::text")
-            note = KEYS_NOTE + keys_of_log(conn, t, (stretches(conn, t) or [{"key": was}])
-                                                           + [{"from": now, "key": key}])
+            keys = (stretches(conn, t) or [{"key": was}]) + [{"from": now, "key": key}]
+            note = KEYS_NOTE + keys_of_log(conn, t, keys)
         changes.update({c: {"by": by, "note": note} for c in {*was, *key}})
     for name in plan["gone"]:
         [(note,)] = sql(conn, DROPS_WITH, [t["mirror"], name])
