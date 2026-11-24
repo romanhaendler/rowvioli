@@ -458,7 +458,8 @@ def alter(conn, why, statement):
         sql(conn, statement)
     except Exception as e:
         details = {k.decode(): v.decode() for k, v in getattr(e, "details", None) or []}
-        if details.get("PG_DIAG_SQLSTATE") != "2BP01":  # dependent_objects_still_exist
+        # dependent_objects_still_exist, and feature_not_supported for a type a view's column holds
+        if details.get("PG_DIAG_SQLSTATE") not in ("2BP01", "0A000") or "PG_DIAG_MESSAGE_DETAIL" not in details:
             raise
         raise Exception(f"{why}, but {details['PG_DIAG_MESSAGE_DETAIL'].replace(chr(10), '; ')}: change or drop "
                         "that, and the next run goes on") from None
