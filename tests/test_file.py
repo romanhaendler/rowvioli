@@ -259,6 +259,24 @@ def test_F1_F6_files_with_more_or_fewer_columns_load_and_a_column_missing_from_a
     log_replays(files, "raw_files.orders")
 
 
+@pytest.mark.parametrize("table", ['key = ["order_no"], log = false, ', ""])
+def test_without_a_change_log_a_column_missing_from_the_files_stops_and_says_how_to_drop_it(files, table):  # story 8
+    orders(files, 1, 2)
+    tables = f'"orders_*.csv" = {{ {table}sep = ";", target_table = "orders" }}\n'
+    assert load(files, tables)[0] == 0
+    for n in (1, 2):
+        (files.dir / "files" / f"orders_{n}.csv").write_text(f"order_no\n{n}\n")
+    code, answer = load(files, tables)
+    assert code == 1
+    assert answer["raw_files.orders"]["reason"] == (
+        "column amount is missing in the source; without a change log its values are nowhere else, so a person drops "
+        'it: ALTER TABLE "raw_files"."orders" DROP COLUMN "amount"')
+    assert files.target("select amount from raw_files.orders order by 1") == [("10",), ("20",)]
+    files.target('ALTER TABLE "raw_files"."orders" DROP COLUMN "amount"')  # the way out
+    assert load(files, tables)[0] == 0
+    assert files.target("select * from raw_files.orders order by 1") == [("1",), ("2",)]
+
+
 def test_a_column_a_person_added_to_the_mirror_of_a_file_is_not_emptied_and_stops_the_run(files):  # story 8, G1
     orders(files, 1, 2)
     code, answer = load(files, '"orders_*.csv" = { key = ["order_no"], sep = ";", target_table = "orders" }\n')

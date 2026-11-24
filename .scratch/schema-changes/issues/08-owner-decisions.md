@@ -2,9 +2,9 @@
 
 **Blocked by:** 06
 
-**Status:** ready-for-agent
+**Status:** claimed
 
-**Model:** Sonnet
+**Model:** Opus. Item 4 changes the flow of a run
 
 Spec: `.scratch/schema-changes/spec.md`. Decided by the owner on 2026-11-24, after the reviews of tickets 03 to 05 (see their comments).
 
