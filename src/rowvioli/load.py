@@ -146,7 +146,7 @@ def check(conn, t, staged, mirror, log_columns):
                             + (f"drop the change log {t['name']}__log with its history view "
                                f"(DROP TABLE {t['log_table']} CASCADE) and the mirror" if log_columns
                                else "drop the mirror"))
-        if primary_key != key:
+        if set(primary_key) != set(key):  # the same columns in another order are the same key (story 20)
             raise Exception(f"the key {key} differs from the mirror's primary key {primary_key}"
                             + (f"; the change log {t['name']}__log exists: {drop}" if log_columns else ""))
     # a change log that exists is complete: a run that would leave it behind its mirror, or lay a new mirror's
