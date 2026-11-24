@@ -13,7 +13,10 @@ from test_run import apply, definition, erp, ok, run  # noqa: F401 (erp is a fix
     ("NaN", "'nan'", "NaN or Infinity, which no decimal holds"),
     ("-Infinity", "'-infinity'", "NaN or Infinity, which no decimal holds"),
     ("1e39", "1" + "0" * 39, "a value of more than 38 digits before or after the point, the most a numeric without "
-                             "precision holds here")])
+                             "precision holds here"),
+    # Arrow's cast wraps a value this long without an error: it arrived as 0 with the run ok
+    ("1.5e400", "15" + "0" * 30, "a value of more than 38 digits before or after the point, the most a numeric "
+                                 "without precision holds here")])
 def test_a_numeric_the_target_cannot_hold_fails_with_the_cause_and_no_path(erp, value, shown, has):
     erp.source("create table nn (id int primary key, v numeric)")
     erp.source(f"insert into nn values (1, '{value}')")

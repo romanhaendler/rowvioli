@@ -36,7 +36,11 @@ def _cast(table, column, field):
     """A numeric's text as a decimal. Arrow's message for one that is none (`The string 'nan' is not a valid
     decimal256 number`) holds the value, which would end up in the status view and the log: the column instead, for
     any failed cast, so that no wording of Arrow's can show a value."""
+    digits = field.type.precision - field.type.scale
     try:
+        # Arrow wraps a value of far more digits than the decimal holds without an error (1.5e400 arrived as 0)
+        if pc.any(pc.match_substring_regex(column.storage, rf"^-?\d{{{digits + 1}}}")).as_py():
+            raise pa.ArrowInvalid
         return column.storage.cast(field.type)
     except pa.ArrowInvalid:
         odd = pc.any(pc.match_substring_regex(column.storage, "nan|inf", ignore_case=True)).as_py()

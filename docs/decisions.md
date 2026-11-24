@@ -2,7 +2,7 @@
 
 Every decision of the concept with its reason, its price and what was rejected. The order follows the discussion of 2026-11-11, so the document also shows how the design got to where it is.
 
-There were two rounds on that day. Decisions 1 to 19 are the first round. The second round (decisions 20 to 30) replaced the model of orders, a jobs repo and an external scheduler with a maximum age per table, definitions in the target and stateless workers. Decisions of the first round that no longer hold are marked and kept, with their text unchanged. A third round (decisions 32 to 35) followed on 2026-11-12, after a throwaway prototype had tried out the model of the second round. A fourth round (decision 36) added load times, a fifth (decision 37) the lines of a worker, a sixth (decision 38) the rule for licences, a seventh (decisions 39 and 40) target names and history. An eighth (decisions 41 to 43) followed on 2026-11-15, after the shakedown of the built wheel, a ninth (decisions 44 to 46) on 2026-11-17, after the first mirror out of the box, and a tenth (decisions 47 to 49) on 2026-11-17, after the shakedown of the second wave. An eleventh (decision 54) followed on 2026-11-24, after the design of schema changes.
+There were two rounds on that day. Decisions 1 to 19 are the first round. The second round (decisions 20 to 30) replaced the model of orders, a jobs repo and an external scheduler with a maximum age per table, definitions in the target and stateless workers. Decisions of the first round that no longer hold are marked and kept, with their text unchanged. A third round (decisions 32 to 35) followed on 2026-11-12, after a throwaway prototype had tried out the model of the second round. A fourth round (decision 36) added load times, a fifth (decision 37) the lines of a worker, a sixth (decision 38) the rule for licences, a seventh (decisions 39 and 40) target names and history. An eighth (decisions 41 to 43) followed on 2026-11-15, after the shakedown of the built wheel, a ninth (decisions 44 to 46) on 2026-11-17, after the first mirror out of the box, and a tenth (decisions 47 to 49) on 2026-11-17, after the shakedown of the second wave. An eleventh (decisions 54 and 55) followed on 2026-11-24, after the design of schema changes and its shakedown.
 
 Evidence refers to `docs/measurements.md`.
 
@@ -696,6 +696,8 @@ On 2026-11-13 the owner asked for ways to set the name and the schema of a table
 ## 49. A numeric keeps its precision and scale, and the target's type counts
 
 > **Changed by decision 54.** The program alters a mirror and its change log when a value needs a wider type, for every family and not for `numeric` alone: a value that does not fit no longer fails the run. The rule that the target's type counts while every value fits stays.
+>
+> **Changed by decision 55.** An unconstrained `numeric` far beyond 38 digits before the point fails the run as one just beyond does; it had arrived as another value.
 
 **Decision.** The staging table gives an Arrow `decimal128(p,s)` with a scale from 0 to its precision the type `numeric(p,s)`, from every connector; the driver would create `numeric`. A staged column whose type differs from the mirror's or the change log's only in precision or scale (`numeric` and `numeric(10,2)`) counts as the mirror's type, when every value passes into it unchanged; a value that does not fails the run and names the column, the type, the table and the value. The program never alters a mirror or a change log. The `postgres` connector delivers `numeric(p,s)` up to 38 digits as `decimal128(p,s)`, and an unconstrained `numeric` and one beyond 38 digits as `decimal256`, which arrives as `numeric`.
 
@@ -813,6 +815,16 @@ Smaller departures of the build: the notification is not sent for a first fill t
 - *Ending a change log by the program.* `log = false` and a key taken away still stop while a change log exists.
 
 **Evidence.** `tests/test_columns.py`, `test_columns_go_and_come.py`, `test_types.py`, `test_keys.py`, `test_renames.py`, `test_init.py`, `test_file.py`, `test_checks.py`.
+
+## 55. What the shakedown of schema changes found older than the branch
+
+**Decision.** The owner had all of it fixed (ticket 12 of schema changes, 2026-11-24). Where it changes an earlier decision, that decision says so.
+
+- **A numeric is never stored as another value** (decision 49). An unconstrained `numeric` with more digits before the point than a decimal holds fails the run and names the column, with the reason of more than 38 digits; Arrow's cast had wrapped such a value without an error, and `1.5e400` arrived as `0` with the run `ok`.
+
+**Why.** Each was a fault of a promise already made: the value as the source has it.
+
+**Evidence.** `tests/test_run_mistakes.py`.
 
 ## Corrections after the prototype
 
