@@ -30,6 +30,9 @@ def test_a_plural_of_a_setting_is_a_typo(rv, typo):
     ('"dbo.Notes"     = {}', '"dbo.Notes"     = { renamed = { a = 1 } }', 'renamed must be a table of new = "old"'),
     ('"dbo.Notes"     = {}', '"dbo.Notes"     = { renamed = { a = "c", b = "c" } }', "each old one once"),
     ('"dbo.Notes"     = {}', '"dbo.Notes"     = { renamed = { a = "c\\u0007" } }', "renamed c\\x07 holds a control"),
+    *(('"dbo.Notes"     = {}', f'"dbo.Notes"     = {{ renamed = {{ {name} = "c" }} }}',
+       f"renamed {name}: the program keeps this name for the change log and the history view")
+      for name in ["_op", "_run", "_loaded_at", "_valid_from", "_valid_to"]),
 ])
 def test_renamed_is_a_table_setting_of_new_and_old_column_names(rv, old, new, said):
     r = check(rv, {"erp.toml": ERP.replace(old, new)})

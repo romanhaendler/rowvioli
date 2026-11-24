@@ -21,6 +21,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from . import contract, seal, target
+from .definition import RESERVED
 from .target import CLAIMABLE, literal, quote, sql
 
 TABLE = """SELECT t.id, s.name AS source, s.type, s.connection, s.key_id, t.source_table, t.target_schema AS schema,
@@ -119,7 +120,15 @@ def check(conn, t, staged, mirror, log_columns):
     old, the columns that keep their values and history under another name, and `proven`, the note of each one the
     data proved. `unpinned`, the retired ones whose pin under `columns` was taken out."""
     types, logged, had = dict(staged), dict(log_columns), dict(mirror)
-    way = ("rename that column of the change log and drop its history view, which the next run creates again: "
+    key = t["key"] or []
+    if key:  # first: the change log's own columns are never what a way out below renames
+        # the diff, the change log and the history view carry them beside the table's columns
+        for name in RESERVED if t["log"] else ["_op"]:
+            if name in types:
+                freed = "; log = false frees it" if name != "_op" else "; _op cannot be freed"
+                raise Exception(f"column {name} is a name of the change log or the history view, so a table with a "
+                                f"key cannot have it{freed}")
+    way =("rename that column of the change log and drop its history view, which the next run creates again: "
            f"ALTER TABLE {t['log_table']} RENAME COLUMN {{}} TO <another name>; DROP VIEW {t['history']}")
     # decision 54: a rename the definition states acts once its old column is gone and its new one has come
     renamed = {new: old for new, old in (t["options"].get("renamed") or {}).items() if old in had
@@ -197,7 +206,6 @@ def check(conn, t, staged, mirror, log_columns):
             raise Exception(f"column {name} of the change log is to keep its old values under {new}, a name that is "
                             + ("taken" if taken else "longer than 63 bytes") + ": " + way.format(quote(name)))
         plan["retired"][name] = new
-    key = t["key"] or []
     if mirror:
         if primary_key and not key and log_columns:  # the program does not end a change log
             raise Exception(f"the definition has no key any more, the mirror's primary key is {primary_key}: "
@@ -229,13 +237,7 @@ def check(conn, t, staged, mirror, log_columns):
                         "written under, is missing or unreadable, and the key has changed: put it back, "
                         f"COMMENT ON COLUMN {t['log_table']}._op IS {literal(noted[0][0])}")
     if key:
-        # the diff, the change log and the history view carry them beside the table's columns
-        for name in ["_op", "_run", "_loaded_at", "_valid_from", "_valid_to"] if t["log"] else ["_op"]:
-            if name in types:
-                freed = "; log = false frees it" if name != "_op" else "; _op cannot be freed"
-                raise Exception(f"column {name} is a name of the change log or the history view, so a table with a "
-                                f"key cannot have it{freed}")
-        names = ", ".join(quote(k) for k in key)
+        names =", ".join(quote(k) for k in key)
         if sql(conn, f"SELECT 1 FROM _stage WHERE {' OR '.join(quote(k) + ' IS NULL' for k in key)} LIMIT 1"):
             raise Exception(f"a key column of ({names}) is null")
         if sql(conn, f"SELECT 1 FROM _stage GROUP BY {names} HAVING count(*) > 1 LIMIT 1"):
