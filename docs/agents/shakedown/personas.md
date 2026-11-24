@@ -12,7 +12,7 @@ The wheel with `[file,odbc,rest]` into a fresh `python:3.11-slim` container (the
 newest Python on the Mac; `rowvioli --help` and every subcommand's help; the quickstart flow of the README
 step by step. Targets: the oldest Postgres still supported upstream and the newest; a target user with only
 the rights the table in `docs/operation.md` names (no superuser, no `CREATE` on the database beyond what `init` needs);
-pgbouncer in session mode in front, and transaction mode to see that it fails with a clear message. Run: 2026-11-18.
+pgbouncer in session mode in front, and transaction mode to see that it fails with a clear message. Run: 2026-11-24.
 
 ### H2 Hostile source data
 A Postgres source with what real systems hold: a table that is empty, one with a NULL or a duplicate in
@@ -21,12 +21,20 @@ the key, identifiers with capitals, spaces, quotes, umlauts and SQL keywords, a 
 odd time zones, `interval`, `NaN` and infinity, a 300-column table, a type changed between two runs, a
 key column dropped. Every case must end in a correct mirror or a reason a person understands; nothing may
 be half published. Also a `file` source (CSV with a BOM, `;`, quoted newlines) and a `rest` source against
-a local HTTP server that answers slowly, with a 500, and with a changed shape. Run: 2026-11-15.
+a local HTTP server that answers slowly, with a 500, and with a changed shape. Run: 2026-11-24.
 
 ### H4 Operation
 `work` under systemd-like stops (SIGTERM, then SIGKILL after a timeout), the target restarted during a
 run, the network to the source cut (`docker network disconnect`), the clock of the worker container set
-forward and back, two definitions applied from two places at once, a full disk on a small volume only.
+forward and back, two definitions applied from two places at once, a full disk on a small volume only. Run: 2026-11-24.
+
+### U1 Upgrade from the released version
+A fleet on the last released wheel (the coordinator builds it from its tag beside the wheel under test):
+a target with tables that load, tables stuck on each reason the old version stops with, a primary key a
+person changed by hand, a key changed in the definition, grants for a worker and a consumer. Then the
+upgrade as `docs/operation.md` says it, and as people get it wrong: `init` as the wrong role, an old worker
+left running, the grants forgotten. Every table must load or give a reason with its way out, the history at
+every moment before the upgrade must stay what it was, and the change log replayed must give the mirror. Run: 2026-11-24.
 
 ## Personas
 
@@ -58,12 +66,12 @@ Moves a working mirror from cron and hand-written scripts to rowvioli: builds th
 Secrets in output, logs, error texts and `_rowvioli` tables (source passwords, the target password, the
 private key), the encryption of connections, SQL injection through table and column names that come from
 a source or the definition, the rights a worker and the `apply` pipeline really need against what the
-README says, what a connector or an `options` value can reach, supply chain (dependencies, licences). Run: 2026-11-18.
+README says, what a connector or an `options` value can reach, supply chain (dependencies, licences). Run: 2026-11-24.
 
 ### P20 Consumer
 An analyst who only reads the target: the mirrors, `<table>__log` and `<table>__history`. Can she answer
 "what changed yesterday", "the state as of a moment", "when was this loaded" from the README and the
-pages it links to alone, and are the answers right? Does a reader ever see a half state while workers run?
+pages it links to alone, and are the answers right? Does a reader ever see a half state while workers run? Run: 2026-11-24.
 
 ### P22 ELT specialist
 Ten years of Fivetran, Airbyte, dlt, Sling and ingestr in production; judges rowvioli on its feature set
