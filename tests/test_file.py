@@ -649,3 +649,15 @@ def test_without_its_extra_the_file_connector_says_which_to_install(files):
     assert reason.startswith('connector "file" cannot be loaded on worker ') and reason.endswith(said), reason
     r = files.run("list", "files", env=env)
     assert r.returncode == 1 and r.stderr == f'connector "file" cannot be loaded: {said}\n', r.stderr
+
+
+@pytest.mark.parametrize("type, module, connection", [("odbc", "arrow_odbc", 'string = "DSN=x"'),
+                                                       ("rest", "httpx", 'url = "http://127.0.0.1:9"')])
+def test_without_its_extra_the_odbc_and_the_rest_connector_say_which_to_install(rv, type, module, connection):
+    missing = rv.dir / "missing" / module
+    missing.mkdir(parents=True)
+    (missing / "__init__.py").write_text(f"raise ModuleNotFoundError(\"No module named '{module}'\", name='{module}')\n")
+    rv.definition({"s.toml": f'[s]\ntype = "{type}"\nmax_age = "1h"\n[s.connection]\n{connection}\n[s.tables]\n'})
+    r = rv.run("list", "s", env={"PYTHONPATH": str(missing.parent)})
+    assert r.returncode == 1 and r.stderr == (f'connector "{type}" cannot be loaded: No module named \'{module}\'; '
+                                              f'pip install "rowvioli[{type}]" installs it\n'), r.stderr
