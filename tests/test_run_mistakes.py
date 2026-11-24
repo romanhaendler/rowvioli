@@ -4,7 +4,7 @@ import subprocess
 import psycopg
 import pytest
 
-from conftest import HOST, until
+from conftest import HOST, _query, _url, until
 from test_checks import failed
 from test_rest import api, load, reason  # noqa: F401 (api is a fixture)
 from test_secrets import lab
@@ -28,6 +28,23 @@ def test_a_numeric_the_target_cannot_hold_fails_with_the_cause_and_no_path(erp, 
     why = failed(erp)
     assert f"public.nn: column v has {has}; cast it in a view of the source" == why \
         and shown not in why.lower() and "Traceback" not in why and ".py" not in why, why
+
+
+@pytest.mark.parametrize("type", ["timestamp", "timestamptz", "timestamp[]"])
+def test_a_timestamp_of_infinity_fails_naming_the_column_and_minus_infinity_loads(erp, type):
+    """The driver reads infinity as a number it cannot write again; -infinity and a date's infinity it can."""
+    erp.source(f"create table inf (id int primary key, ts {type}, d date)")
+    value = "'{{{}}}'" if type.endswith("[]") else "'{}'"
+    erp.source(f"insert into inf values (1, {value.format('-infinity')}, 'infinity'), "
+               f"(2, {value.format('-infinity')}, '-infinity')")
+    apply(erp, definition(erp, '"public.inf" = { key = ["id"] }\n'))
+    ok(erp)
+    text = "select id, ts::text, d::text from {} order by 1"
+    assert erp.target(text.format("raw_erp.inf")) == erp.source(text.format("inf"))
+    erp.source(f"update inf set ts = {value.format('infinity')} where id = 2")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == ("public.inf: column ts has infinity, which the driver cannot write into a "
+                           f"{type.removesuffix('[]')} of the target; cast it in a view of the source")
 
 
 def test_a_numeric_whose_values_fit_loads_whatever_its_digits_before_the_point(erp):
@@ -291,3 +308,38 @@ def test_a_line_break_in_a_column_name_is_written_as_a_question_mark_and_the_rea
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert failed(erp) == ("column a?b is missing in the source; without a change log its values are nowhere else, "
                            'so a person drops it: ALTER TABLE "raw_erp"."customers" DROP COLUMN "a?b"')
+
+
+
+def latin1(server, db):
+    """The test's database on that server made again in LATIN1."""
+    _query(_url(server), f"drop database {db}")
+    _query(_url(server), f"create database {db} encoding latin1 template template0 lc_collate 'C' lc_ctype 'C'")
+
+def test_a_latin1_target_stores_the_sources_text_and_refuses_one_it_has_no_character_for(rv, servers):
+    """The session asks for UTF8, whatever the target database's encoding (host H1: `Müller` became `MÃ¼ller`)."""
+    db = rv.target_url.rsplit("/", 1)[1]  # the test's database, made again in LATIN1
+    latin1(servers["target"], db)
+    assert rv.run("init").returncode == 0 and rv.run("key", "new").returncode == 0
+    rv.source("create table customers (customer_no int primary key, name text);"
+              "insert into customers values (1, 'Müller')")
+    apply(rv, definition(rv).replace('max_age = "1h"', 'max_age = "1h"\ntarget_schema = "raw_ü"'))
+    ok(rv)
+    assert rv.target('select name from "raw_ü".customers') == [("Müller",)]
+    r = rv.run("status")
+    assert r.returncode == 0 and "raw_ü.customers" in r.stdout, r.stderr
+    rv.source("update customers set name = 'Ω'")
+    rv.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(rv).replace("***", "x") == (  # the harness's password is x
+        "public.customers: column name has a value its type in the target, text, cannot hold (SQLSTATE 22P05); cast "
+        "it in a view of the source or change it there")
+
+
+def test_a_latin1_source_delivers_its_text(rv, servers):
+    latin1(servers["source"], rv.source_url.rsplit("/", 1)[1])
+    assert rv.run("init").returncode == 0 and rv.run("key", "new").returncode == 0
+    rv.source("create table customers (customer_no int primary key, name text);"
+              "insert into customers values (1, 'Müller')")
+    apply(rv, definition(rv))
+    ok(rv)
+    assert rv.target("select name from raw_erp.customers") == [("Müller",)]

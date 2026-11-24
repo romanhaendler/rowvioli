@@ -95,6 +95,19 @@ def test_columns_names_types_for_csv_and_excel(files):
             (1, Decimal("2.5")), (2, None), (3, Decimal("10"))]
 
 
+def test_an_excel_date_a_datetime_and_a_boolean_arrive_as_such_where_columns_names_their_type(files):
+    """Excel keeps a date as a number of days with a format; read as text it is that number (46023)."""
+    db = duckdb.connect()
+    db.execute("LOAD excel")
+    db.execute(f"COPY (SELECT 1 AS id, DATE '2026-01-01' AS d, TIMESTAMP '2026-01-01 03:04:05.123' AS ts, true AS b, "
+               f"'2026-01-02' AS t) TO '{files.dir / 'files' / 'dates.xlsx'}' (FORMAT xlsx, HEADER true)")
+    pins = 'd = "date", ts = "timestamp", b = "bool", t = "date"'
+    code, answer = load(files, f'"dates.xlsx" = {{ columns = {{ {pins} }} }}\n')
+    assert code == 0, answer
+    assert files.target("select d, ts, b, t from raw_files.dates") == [
+        (date(2026, 1, 1), datetime(2026, 1, 1, 3, 4, 5, 123000), True, date(2026, 1, 2))]
+
+
 def test_the_separator_option_is_passed_to_duckdb(files):
     # a wrong separator proves the option is not sniffed away: the whole line becomes one column
     code, answer = load(files, '"customers_csv.csv" = {}\n', options='sep = ","')
@@ -505,13 +518,13 @@ def test_a_nul_byte_in_a_text_value_is_removed_and_a_second_run_changes_nothing(
 
 def test_a_value_the_target_refuses_while_rows_are_staged_is_the_targets_in_the_reason(files):
     """A NUL inside a list reaches the target (decision 51's shortcut), which refuses it: an error of the target, not
-    of the source, and withheld by its SQLSTATE (decision 54, item 8)."""
+    of the source, which names the column Postgres names and not the value (decision 54, item 8)."""
     pq.write_table(pa.table({"id": [1], "tags": [["Secret\x00"]]}), files.dir / "files" / "nul.parquet")
     code, answer = load(files, '"nul.parquet" = { key = ["id"] }\n')
     assert code == 1
     assert answer["raw_files.nul"]["reason"] == (
-        "a statement raised an error (SQLSTATE 22021) in the target; its message may hold a row's values, so it is "
-        "left out here: the target's server log has it")
+        "nul.parquet: column tags has a value its type in the target, text[], cannot hold (SQLSTATE 22021); cast it "
+        "in a view of the source or change it there")
 
 
 def test_a_csv_header_with_one_name_twice_arrives_with_the_second_numbered(files):  # cases A22, as it is today
@@ -555,12 +568,85 @@ def test_a_csv_without_a_header_gets_column0_and_up_and_keeps_its_first_line(fil
     assert files.target("select * from raw_files.nohead order by 1") == [("1", "Anna"), ("2", "Ben")]
 
 
-def test_a_timestamp_finer_than_microseconds_arrives_cut_to_microseconds(files):  # cases B16, as it is today
-    pq.write_table(pa.table({"k": [1], "t": pa.array([1767225600123456789], pa.timestamp("ns"))}),
-                   files.dir / "files" / "ns.parquet")
+def test_a_time_finer_than_microseconds_fails_naming_the_column_and_a_type_under_columns_rounds_it(files):  # cases B16
+    """The driver cut it to microseconds, the finest Postgres holds, with the run ok. Whole microseconds load."""
+    pq.write_table(pa.table({"k": [1], "w": pa.array([1767225600123456000], pa.timestamp("ns")),
+                             "t": pa.array([1767225600123456789], pa.timestamp("ns")),
+                             "z": pa.array([1767225600123456789], pa.timestamp("ns", tz="UTC")),
+                             "h": pa.array([3_600_000_000_001], pa.time64("ns"))}), files.dir / "files" / "ns.parquet")
     code, answer = load(files, '"ns.parquet" = {}\n')
+    assert answer["raw_files.ns"]["reason"] == (
+        'ns.parquet: column t has a time finer than a microsecond, which the target does not hold; columns = '
+        '{ t = "timestamp" } reads it rounded to microseconds')
+    code, answer = load(files, '"ns.parquet" = { columns = { t = "timestamp", z = "timestamptz", h = "time" } }\n')
     assert code == 0, answer
-    assert files.target("select t from raw_files.ns") == [(datetime(2026, 1, 1, 0, 0, 0, 123456),)]
+    assert files.target("select w, t, z::text, h::text from raw_files.ns") == [
+        (datetime(2026, 1, 1, 0, 0, 0, 123456), datetime(2026, 1, 1, 0, 0, 0, 123457), "2026-01-01 00:00:00.123457+00",
+         "01:00:00")]
+
+
+def test_a_csv_not_in_utf8_fails_without_its_text_and_loads_with_its_encoding(files):
+    (files.dir / "files" / "l1.csv").write_bytes("id;name\n1;Müller\n".encode("latin-1"))
+    code, answer = load(files, '"l1.csv" = { sep = ";" }\n')
+    assert answer["raw_files.l1"]["reason"] == "Invalid Input Error: CSV Error on Line: 2"
+    code, answer = load(files, '"l1.csv" = { sep = ";", encoding = "latin-1" }\n')
+    assert code == 0, answer
+    assert files.target("select name from raw_files.l1") == [("Müller",)]
+
+
+def test_an_unsigned_integer_of_a_parquet_file_arrives_whole(files):
+    """The driver wrote a uint64 as bigint, 2**64 - 1 as -1 with the run ok; the smaller ones it widens itself."""
+    pq.write_table(pa.table({"id": [1, 2], "u64": pa.array([2**64 - 1, 2**63], pa.uint64()),
+                             "u32": pa.array([2**32 - 1, 0], pa.uint32()), "u16": pa.array([2**16 - 1, 0], pa.uint16()),
+                             "u8": pa.array([255, 0], pa.uint8())}), files.dir / "files" / "u.parquet")
+    for _ in range(2):  # the second run changes nothing
+        code, answer = load(files, '"u.parquet" = { key = ["id"] }\n')
+        assert code == 0, answer
+    assert answer["raw_files.u"] == {"status": "ok", "inserted": 0, "updated": 0, "deleted": 0}
+    assert types(files, "u") == [("id", "bigint"), ("u64", "numeric"), ("u32", "bigint"), ("u16", "integer"),
+                                 ("u8", "smallint")]
+    assert files.target("select u64, u32, u16, u8 from raw_files.u order by id") == [
+        (2**64 - 1, 2**32 - 1, 2**16 - 1, 255), (2**63, 0, 0, 0)]
+
+
+@pytest.mark.parametrize("type, value, reason", [
+    ("hugeint", 2**127 - 1, "column h has a value its type in the target, numeric(38,0), cannot hold (SQLSTATE 22003); "
+                            "cast it in a view of the source or change it there"),
+    ("UHUGEINT", 2**128 - 1, "column h as uhugeint would arrive wrapped above 2^127 - 1; use hugeint, or text for "
+                             "more than 38 digits")])
+def test_an_integer_of_39_digits_under_columns_fails_naming_the_column(files, type, value, reason):
+    """DuckDB hands both to Arrow as a decimal of 38 digits; its uhugeint above 2**127 - 1 arrived as -1, run ok."""
+    (files.dir / "files" / "h.csv").write_text(f"id;h\n1;{value}\n2;1\n")
+    code, answer = load(files, f'"h.csv" = {{ key = ["id"], sep = ";", columns = {{ h = "{type}" }} }}\n')
+    assert code == 1, files.target("select h from raw_files.h")
+    assert answer["raw_files.h"]["reason"] == f"h.csv: {reason}"
+
+
+def test_a_parquet_decimal_of_more_than_38_digits_fails_naming_the_column(files):
+    """DuckDB reads it as a double: 10**39 + 1 arrived as 1e39 with the run ok."""
+    pq.write_table(pa.table({"id": [1], "ok": pa.array([Decimal(1)], pa.decimal128(38, 2)),
+                             "big": pa.array([Decimal(10**39 + 1)], pa.decimal256(40, 0))}),
+                   files.dir / "files" / "big.parquet")
+    code, answer = load(files, '"big.parquet" = { key = ["id"] }\n')
+    assert answer["raw_files.big"]["reason"] == (
+        "big.parquet: column big is a decimal of 40 digits, more than the 38 DuckDB reads exactly; write it into the "
+        "file as text or as a decimal of at most 38 digits")
+
+
+def test_a_struct_or_a_map_of_a_parquet_file_arrives_as_jsonb_as_a_nested_value_of_a_json_file(files):
+    """One rule for the nested values of a file; the target has no type for a struct or a map."""
+    pq.write_table(pa.table({
+        "id": [1, 2], "s": [{"a": "x", "b": 1}, None], "ls": [[{"a": "y"}], []], "l": [["a"], []],
+        "m": pa.array([[("k", 1)], []], pa.map_(pa.string(), pa.int64())), "ll": [[[1, 2]], []]}),
+        files.dir / "files" / "nested.parquet")
+    for _ in range(2):  # the second run changes nothing
+        code, answer = load(files, '"nested.parquet" = { key = ["id"] }\n')
+        assert code == 0, answer
+    assert answer["raw_files.nested"] == {"status": "ok", "inserted": 0, "updated": 0, "deleted": 0}
+    assert types(files, "nested") == [("id", "bigint"), ("s", "jsonb"), ("ls", "jsonb"), ("l", "ARRAY"),
+                                      ("m", "jsonb"), ("ll", "jsonb")]
+    assert files.target("select s, ls, l, m, ll from raw_files.nested order by id") == [
+        ({"a": "x", "b": 1}, [{"a": "y"}], ["a"], {"k": 1}, [[1, 2]]), (None, [], [], {}, [])]
 
 
 def write(rv, name, rows):
@@ -604,3 +690,31 @@ def test_excel_and_json_go_through_every_change_of_shape_a_csv_goes_through(file
     assert files.target(f"select amount {text}, memo {text} from raw_files.t order by id {text}") == [
         ("10", "a"), ("20", "b"), (None, "c")]
     log_replays(files, "raw_files.t")
+
+
+def test_without_its_extra_the_file_connector_says_which_to_install(files):
+    """A package that stands for DuckDB's absence, as on a worker installed without `rowvioli[file]`."""
+    missing = files.dir / "missing" / "duckdb"
+    missing.mkdir(parents=True)
+    (missing / "__init__.py").write_text("raise ModuleNotFoundError(\"No module named 'duckdb'\", name='duckdb')\n")
+    env = {"PYTHONPATH": str(missing.parent)}
+    load(files, '"customers_csv.csv" = { sep = ";" }\n')
+    files.target("update _rowvioli.tables set requested_at = now()")
+    said = "No module named 'duckdb'; pip install \"rowvioli[file]\" installs it"
+    r = files.run("run", "files", env=env)
+    [reason] = [t["reason"] for t in json.loads(r.stdout)["tables"].values()]
+    assert reason.startswith('connector "file" cannot be loaded on worker ') and reason.endswith(said), reason
+    r = files.run("list", "files", env=env)
+    assert r.returncode == 1 and r.stderr == f'connector "file" cannot be loaded: {said}\n', r.stderr
+
+
+@pytest.mark.parametrize("type, module, connection", [("odbc", "arrow_odbc", 'string = "DSN=x"'),
+                                                       ("rest", "httpx", 'url = "http://127.0.0.1:9"')])
+def test_without_its_extra_the_odbc_and_the_rest_connector_say_which_to_install(rv, type, module, connection):
+    missing = rv.dir / "missing" / module
+    missing.mkdir(parents=True)
+    (missing / "__init__.py").write_text(f"raise ModuleNotFoundError(\"No module named '{module}'\", name='{module}')\n")
+    rv.definition({"s.toml": f'[s]\ntype = "{type}"\nmax_age = "1h"\n[s.connection]\n{connection}\n[s.tables]\n'})
+    r = rv.run("list", "s", env={"PYTHONPATH": str(missing.parent)})
+    assert r.returncode == 1 and r.stderr == (f'connector "{type}" cannot be loaded: No module named \'{module}\'; '
+                                              f'pip install "rowvioli[{type}]" installs it\n'), r.stderr
