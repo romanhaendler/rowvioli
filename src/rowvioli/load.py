@@ -68,6 +68,11 @@ def claim(conn, worker, source, table):
         sql(conn, "ROLLBACK")
         raise
     t["options"] = json.loads(t["options"])  # the source's options, overridden by the table's
+    # a dict under columns is stored as pairs (definition.ordered), any other value as written; `pinned` are the types
+    # the definition gives, none where a connector of one's own takes another value there
+    if isinstance(c := t["options"].get("columns"), list) and all(isinstance(p, list) and len(p) == 2 for p in c):
+        t["options"]["columns"] = dict(c)
+    t["pinned"] = c if isinstance(c := t["options"].get("columns"), dict) else {}
     t["name"] = f"{t['schema']}.{t['table']}"
     t["mirror"] = f"{quote(t['schema'])}.{quote(t['table'])}"
     t["log_table"] = f"{quote(t['schema'])}.{quote(t['table'] + '__log')}"
@@ -161,7 +166,7 @@ def check(conn, t, staged, mirror, log_columns):
                     f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
             # where the definition names the columns it is the catalog. CSV, Excel and JSON deliver every other column
             # as text or jsonb, so another family there is a pin taken out; a type the file brings itself can flip
-            if t["type"] == "file" and name not in dict(t["options"].get("columns") or {}):
+            if t["type"] == "file" and name not in t["pinned"]:
                 if name in t["own_types"]:
                     raise Exception(f"{changed}; a source without a catalog guesses its types, so pin it under "
                                     "columns in the table's definition; where its pin was taken out, a person drops it "
@@ -361,8 +366,6 @@ def stage(conn, t):
     t["values"] = connection_values(connection, ("path",) if t["type"] == "file" else ())
     options = dict(t["options"])
     options.pop("renamed", None)  # the run's, not the connector's (decision 54)
-    if isinstance(c := options.get("columns"), list) and all(isinstance(p, list) and len(p) == 2 for p in c):
-        options["columns"] = dict(c)  # a dict is stored as pairs (definition.ordered), any other value as written
     batches = stream(connector.read(connection, t["source_table"], options))
     if batches is None:
         raise Exception("the connector delivered nothing, not even the columns")
@@ -734,7 +737,7 @@ def record_columns(conn, t, delivered, mirror, log, changes):
         rows.append(row)
     if not rows:
         return
-    pinned = dict(t["options"].get("columns") or {})  # a type the definition gives (decision 54), stored as pairs
+    pinned = t["pinned"]  # a type the definition gives (decision 54)
     for r in rows:
         if (r["target_schema"], r["target_table"]) == (t["schema"], t["table"]):
             r.update(changes.get(r["column"], {}))
