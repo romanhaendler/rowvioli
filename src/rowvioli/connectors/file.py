@@ -1,5 +1,6 @@
 """The file connector: expects `path`, a directory; a table is a file name in it, or a pattern with `*` or `?`
-(`orders_*.csv`) that reads every matching file as one table; they must be of one kind and have the same columns.
+(`orders_*.csv`) that reads every matching file as one table; they must be of one kind, and a column one of them
+lacks is empty in its rows.
 Every file must lie inside `path`, also through a symbolic link. Reads CSV, Excel, Parquet and JSON through DuckDB by
 extension (`.json`, `.jsonl` and `.ndjson` hold one object per row). Parquet keeps its own types; CSV and Excel
 arrive as text and JSON as jsonb, a column per key, except the columns the option `columns` names with a DuckDB type
@@ -74,22 +75,28 @@ def read(connection, table, options):
     # escaped, since DuckDB would expand *, ? and [ in a name once more and read a file nobody checked
     paths = [glob.escape(str(f)) for f in files]
     # each file's columns; its relation goes at once, since it holds the file open
-    shapes = [list(zip(part.columns, part.types)) for part in map(relation, paths)]
-    first = dict(shapes[0])
-    for name, shape in zip(names[1:], shapes[1:]):
-        if dict(shape) != first:  # the read of the list would drop or null one file's other columns
-            have = [", ".join(f"{c} {t}" for c, t in s) for s in (shape, shapes[0])]
-            raise Exception(f"{table}: {name} has the columns {have[0]}, {names[0]} has {have[1]}")
+    shapes = {path: dict(zip(part.columns, map(str, part.types))) for path, part in zip(paths, map(relation, paths))}
+    first = {}  # the columns of all files, in the order they first appear; a file without one has it empty
+    for name, shape in zip(names, shapes.values()):
+        for column, type in shape.items():
+            if first.setdefault(column, type) != type:
+                raise Exception(f"{table}: {name} has the column {column} as {type}, an earlier file as "
+                                f"{first[column]}")
     if reader == "read_csv" and len(first) == 1 and not {"sep", "delim", "delimiter"} & options.keys():
         raise Exception(f"{table}: no separator splits every line into the same number of fields; fix the lines, "
                         "or set sep (also for a file of one column) and skip (for lines before the header)")
-    order = ", ".join(quote(c) for c in first)
+
+    def order(present):
+        return ", ".join(quote(c) if c in present else f"NULL::{t} AS {quote(c)}" for c, t in first.items())
 
     def rows(group):  # the columns by name, not by position, then the casts
         if reader == "read_xlsx":  # its reader takes no list
-            part = functools.reduce(lambda a, b: a.union(b), (relation(p).project(order) for p in group))
+            part = functools.reduce(lambda a, b: a.union(b), (relation(p).project(order(shapes[p])) for p in group))
         else:
-            part = relation(group).project(order)
+            present = {c for p in group for c in shapes[p]}
+            # else the read of the list would drop or null one file's other columns
+            by_name = {"union_by_name": True} if any(shapes[p].keys() != present for p in group) else {}
+            part = relation(group, **by_name).project(order(present))
         return part.project(f"* REPLACE ({casts})") if casts else part
     # a few files per read, one read after the other: DuckDB opened up to 600 files of one list at once, and a
     # union of more than 333 files is too deep for it

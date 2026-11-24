@@ -8,6 +8,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from test_columns_go_and_come import log_replays
+
 CUSTOMERS = [(1, "Anna", 2.5), (2, "Ben", None), (3, "Cleo", 10.0)]
 
 
@@ -231,16 +233,43 @@ def test_a_pattern_that_matches_nothing_fails(files):
     assert "orders_*.csv: no file in" in answer["raw_files.orders"]["reason"]
 
 
-@pytest.mark.parametrize("other, says", [("orders_3.json", "orders_*: matches .csv and .json files"),
-                                         ("orders_3.csv", "orders_3.csv has the columns order_no VARCHAR, "
-                                                          "amount VARCHAR, note VARCHAR")])
-def test_files_of_a_pattern_of_different_kinds_or_columns_fail_naming_the_file(files, other, says):
+def test_files_of_a_pattern_of_different_kinds_fail_naming_them(files):
     orders(files, 1, 2)
-    (files.dir / "files" / other).write_text('[{"order_no": 3}]' if other.endswith(".json")
-                                             else "order_no;amount;note\n3;30;x\n")
+    (files.dir / "files" / "orders_3.json").write_text('[{"order_no": 3}]')
     code, answer = load(files, '"orders_*" = { key = ["order_no"], sep = ";", target_table = "orders" }\n')
     assert code == 1
-    assert says in answer["raw_files.orders"]["reason"]
+    assert "orders_*: matches .csv and .json files" in answer["raw_files.orders"]["reason"]
+
+
+def test_F1_F6_files_with_more_or_fewer_columns_load_and_a_column_missing_from_a_file_or_a_run_is_empty(files):
+    orders(files, 1, 2)
+    d = files.dir / "files"
+    (d / "orders_3.csv").write_text("order_no;amount;note\n3;30;n3\n")  # F6: one more column
+    code, answer = load(files, '"orders_*.csv" = { key = ["order_no"], sep = ";", target_table = "orders" }\n')
+    assert code == 0, answer
+    mirror = "select * from raw_files.orders order by 1"
+    assert files.target(mirror) == [("1", "10", None), ("2", "20", None), ("3", "30", "n3")]
+    (d / "orders_2.csv").write_text("order_no;note\n2;n2\n")  # F1: one file without amount
+    assert files.run("run", "files", "orders_*.csv").returncode == 0
+    assert files.target(mirror) == [("1", "10", None), ("2", None, "n2"), ("3", "30", "n3")]
+    for n in (2, 3):  # F1: no file has note in this run
+        (d / f"orders_{n}.csv").write_text(f"order_no;amount\n{n};{n}0\n")
+    assert files.run("run", "files", "orders_*.csv").returncode == 0
+    assert files.target(mirror) == [("1", "10", None), ("2", "20", None), ("3", "30", None)]
+    log_replays(files, "raw_files.orders")
+
+
+def test_a_column_a_person_added_to_the_mirror_of_a_file_is_not_emptied_and_stops_the_run(files):  # story 8, G1
+    orders(files, 1, 2)
+    code, answer = load(files, '"orders_*.csv" = { key = ["order_no"], sep = ";", target_table = "orders" }\n')
+    assert code == 0, answer
+    files.target("alter table raw_files.orders add column memo text")
+    files.target("update raw_files.orders set memo = 'mine'")
+    r = files.run("run", "files", "orders_*.csv")
+    assert r.returncode == 1
+    assert json.loads(r.stdout)["tables"]["raw_files.orders"]["reason"].startswith(
+        "column memo of the mirror is not in the change log")
+    assert files.target("select distinct memo from raw_files.orders") == [("mine",)]
 
 
 def test_a_pattern_without_target_table_fails_apply(files):

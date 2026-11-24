@@ -29,7 +29,6 @@ MIRROR = "select * from raw_erp.customers"
      " insert into customers values (null, 'Nobody', null)", "is null"),
     ("delete from customers", "zero rows"),
     ("delete from customers where customer_no <> 1", "67 % of the rows would be deleted"),
-    ("alter table customers drop column city", "column city is missing"),
     ("alter table customers alter customer_no type bigint", "column customer_no has changed its type"),
     ("alter table customers add column _op text", "column _op is a name of the change log"),
     ("alter table customers add column _run int", "column _run is a name of the change log"),
