@@ -205,4 +205,6 @@ def test_a_name_of_the_change_log_the_source_brings_is_never_answered_by_renamin
 
 def test_the_name_op_is_said_not_to_be_free_to_take(erp):
     erp.source("alter table customers add column _op text")
-    assert "_op cannot be freed" in failed(erp)
+    assert failed(erp) == ("column _op is a name of the change log or the history view, so a table with a key cannot "
+                           "have it; _op cannot be freed: read the source through a view of it that names that column "
+                           "otherwise")

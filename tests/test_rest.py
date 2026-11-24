@@ -221,7 +221,8 @@ def test_a_token_outside_ascii_fails_without_showing_a_character_of_it():
 def test_a_type_mismatch_names_table_column_and_type_but_not_the_value(api):
     r, _ = load(api, 'a = { key = ["station"], path = "/bad", columns = { station = "text", n = "int8" } }')
     assert r.returncode == 1
-    assert "n" in reason(api) and "int8" in reason(api)
+    assert reason(api) == ("a: column n is not int8 in every row; change the value at the source, or its type under "
+                           "columns")  # as the file connector says it
     assert "abc" not in reason(api) + r.stdout + r.stderr
 
 

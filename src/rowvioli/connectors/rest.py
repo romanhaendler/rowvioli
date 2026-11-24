@@ -88,7 +88,8 @@ def read(connection, table, options):
                 arrays.append(pa.array([None if v is None else parse(v) for v in values] if parse else values,
                                        TYPES[type]))
             except Exception:  # the value stays out of the reason: it would end up in the status view and the log
-                raise Exception(f"{table}: column {name} is not {type}") from None
+                raise Exception(f"{table}: column {name} is not {type} in every row; change the value at the source, "
+                                "or its type under columns") from None
         yield pa.RecordBatch.from_arrays(arrays, schema=schema)
         if not paged:
             return

@@ -125,7 +125,8 @@ def check(conn, t, staged, mirror, log_columns):
         # the diff, the change log and the history view carry them beside the table's columns
         for name in RESERVED if t["log"] else ["_op"]:
             if name in types:
-                freed = "; log = false frees it" if name != "_op" else "; _op cannot be freed"
+                freed = "; log = false frees it" if name != "_op" else \
+                    "; _op cannot be freed: read the source through a view of it that names that column otherwise"
                 raise Exception(f"column {name} is a name of the change log or the history view, so a table with a "
                                 f"key cannot have it{freed}")
     way =("rename that column of the change log and drop its history view, which the next run creates again: "
