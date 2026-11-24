@@ -222,3 +222,21 @@ def test_the_comment_on_op_removed_after_a_change_of_key_stops_the_run_with_the_
     again(erp)
     assert comment(erp) == keys
     log_replays(erp)
+
+
+def test_a_column_of_an_old_key_retired_in_the_change_log_is_renamed_in_the_comment_on_op_too(erp):  # decision 9
+    ok(erp)
+    first = erp.target(LOADED_AT)[0][0]
+    apply(erp, definition(erp, '"public.customers" = { key = ["name"] }\n'))
+    seam = again(erp)
+    erp.source("alter table customers drop column customer_no")
+    again(erp)
+    erp.source("alter table customers add column customer_no text")
+    again(erp)
+    [(run,)] = erp.target("select max(run) from _rowvioli.runs")
+    assert [k["key"] for k in comment(erp)] == [[f"customer_no__{run}"], ["name"]]
+    assert erp.target(f"select customer_no__{run}, _valid_from, _valid_to from raw_erp.customers__history "
+                      "where name = 'Anna' order by _valid_from limit 1") == [(1, first, seam)]
+    assert erp.target(f'select note from _rowvioli.columns__log {THIS_RUN} and "column" = %s',
+                      [f"customer_no__{run}"]) == [(f"the change log's keys: {json.dumps(comment(erp))}",)]
+    log_replays(erp)

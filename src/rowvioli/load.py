@@ -444,6 +444,12 @@ def carry_out(conn, t, plan):
     for old, new in plan["retired"].items():
         sql(conn, f"ALTER TABLE {t['log_table']} RENAME COLUMN {quote(old)} TO {quote(new)}")
         changes[new] = {"was": old}
+    # decision 9: the comment on _op names the key columns of every stretch, the retired ones under their new names
+    if plan["retired"] and (keys := stretches(conn, t)):
+        if (named := [{**k, "key": [plan["retired"].get(c, c) for c in k["key"]]} for k in keys]) != keys:
+            note = KEYS_NOTE + keys_of_log(conn, t, named)
+            for old in {c for k in keys for c in k["key"]} & plan["retired"].keys():
+                changes[plan["retired"][old]]["note"] = note
     if plan["key"]:  # decision 7: publish adds the new primary key once the rows are in
         was, key, by = plan["key"]["was"], t["key"] or [], plan["key"]["by"]
         note = (f"the primary key ({', '.join(was)}) was put back to the definition's ({', '.join(key)})"
