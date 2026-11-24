@@ -26,18 +26,22 @@ def test_a_run_that_changes_columns_while_pg_dump_reads_the_target_gives_up_afte
     dump = subprocess.Popen(["docker", "exec", servers["target"], "sh", "-c",
                              f"pg_dump -U postgres {database(erp)} | (until [ -e {go} ]; do sleep 0.2; done; wc -c)"],
                             stdout=subprocess.PIPE, text=True)
-    until(lambda: erp.target("select 1 from pg_locks l join pg_stat_activity a using (pid) where a.application_name "
-                             "= 'pg_dump' and l.relation = 'raw_erp.customers'::regclass"))
-    erp.source("update customers set name = 'Anna2' where customer_no = 1")
-    again(erp)  # rows alone: pg_dump's share lock lets them through
-    erp.source("alter table customers drop column city")
-    erp.target("update _rowvioli.tables set requested_at = now()")
-    assert failed(erp).replace("***", "x") == (  # the source's password is x
-        "raw_erp.customers, its change log or its history view stayed in use for 10 s, so its columns could not "
-        "change; the next run tries again")
-    subprocess.run(["docker", "exec", servers["target"], "touch", go], check=True)
-    assert int(dump.communicate(timeout=30)[0]) > 1_000_000 and dump.returncode == 0
-    subprocess.run(["docker", "exec", servers["target"], "rm", go], check=True)
+    try:  # pg_dump and pg_restore are the target container's, of the server's version
+        until(lambda: erp.target("select 1 from pg_locks l join pg_stat_activity a using (pid) where "
+                                 "a.application_name = 'pg_dump' and l.relation = 'raw_erp.customers'::regclass"),
+              timeout=60)
+        erp.source("update customers set name = 'Anna2' where customer_no = 1")
+        again(erp)  # rows alone: pg_dump's share lock lets them through
+        erp.source("alter table customers drop column city")
+        erp.target("update _rowvioli.tables set requested_at = now()")
+        assert failed(erp).replace("***", "x") == (  # the source's password is x
+            "raw_erp.customers, its change log or its history view stayed in use for 10 s, so its columns could not "
+            "change; the next run tries again")
+    finally:  # also when the test fails, so that neither the dump nor its waiting shell outlives it
+        subprocess.run(["docker", "exec", servers["target"], "touch", go], check=True)
+        written = dump.communicate(timeout=60)[0]
+        subprocess.run(["docker", "exec", servers["target"], "rm", go], check=True)
+    assert int(written) > 1_000_000 and dump.returncode == 0
     again(erp)
     assert columns(erp) == ["customer_no", "name"]
     log_replays(erp)
@@ -65,9 +69,9 @@ def test_a_dump_taken_after_every_kind_of_change_restores_and_a_run_against_it_g
     try:
         _query(_url(target), f"create database {restored}")
         dumped = subprocess.run(["docker", "exec", target, "pg_dump", "-U", "postgres", "-Fc", database(erp)],
-                                capture_output=True, check=True).stdout
+                                capture_output=True, check=True, timeout=120).stdout
         subprocess.run(["docker", "exec", "-i", target, "pg_restore", "-U", "postgres", "--exit-on-error", "-d",
-                        restored], input=dumped, capture_output=True, check=True)
+                        restored], input=dumped, capture_output=True, check=True, timeout=120)
         url = _url(target, restored)
         same = ["select pg_get_viewdef('raw_erp.customers__history'::regclass)",
                 "select relacl::text from pg_class where oid = 'raw_erp.customers__history'::regclass",
