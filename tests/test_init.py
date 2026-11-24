@@ -89,6 +89,30 @@ def test_init_from_version_3_prints_the_grants_a_worker_needs_and_they_are_enoug
     assert erp.target("select mirror from _rowvioli.columns where \"column\" = 'city'") == [(False,)]
 
 
+@pytest.mark.parametrize("given, lacking", [(0, "columns"), (1, "columns__log")])
+def test_a_worker_without_the_grants_init_printed_is_told_where_they_are(erp, given, lacking):
+    version_3(erp)
+    grants = [line for line in erp.run("init").stdout.splitlines() if line.startswith("GRANT")]
+    role, db = f"worker_{erp.target_url.rsplit('/', 1)[1]}", erp.target_url.rsplit("/", 1)[1]
+    try:
+        for statement in [f"CREATE ROLE {role} LOGIN PASSWORD 'w'", f"GRANT USAGE ON SCHEMA _rowvioli TO {role}",
+                          f"GRANT SELECT ON _rowvioli.sources, _rowvioli.tables, _rowvioli.meta, _rowvioli.status "
+                          f"TO {role}", f"GRANT UPDATE ON _rowvioli.tables TO {role}",
+                          f"GRANT SELECT, INSERT, UPDATE ON _rowvioli.runs TO {role}",
+                          f"GRANT USAGE ON ALL SEQUENCES IN SCHEMA _rowvioli TO {role}",
+                          f"GRANT CREATE ON DATABASE {db} TO {role}",
+                          *(g.replace(" TO worker;", f" TO {role}") for g in grants[:given])]:
+            erp.target(statement)
+        url = {"ROWVIOLI_TARGET_URL": erp.target_url.replace("postgres:x@", f"{role}:w@")}
+        reason = json.loads(erp.run("run", env=url).stdout)["tables"]["raw_erp.customers"]["reason"]
+        assert reason.endswith(f"permission denied for table {lacking}: the worker's role lacks a right on "
+                          f"_rowvioli.{lacking}, which rowvioli init printed with the upgrade to version 4 "
+                          '(docs/operation.md "The target")'), reason
+    finally:
+        erp.target(f"drop owned by {role}")
+        erp.target(f"drop role {role}")
+
+
 @pytest.mark.parametrize("change", ["drop column city", "alter column city type integer using length(city)"])
 def test_the_first_run_after_the_upgrade_records_what_it_changed_by_its_cause_and_notifies(erp, change):  # story 45
     assert erp.run("run").returncode == 0
@@ -215,6 +239,7 @@ def test_every_command_using_the_target_refuses_another_schema_version_naming_bo
     r = rv.run(*command, timeout=20)
     assert r.returncode != 0
     assert re.search(r"\b99\b", r.stderr) and re.search(r"\b4\b", r.stderr), r.stderr
+    assert "init brings" not in r.stderr  # only an older target is brought up
     assert rv.target(SHAPE) == shape
     assert rv.target("select count(*) from _rowvioli.sources") == [(0,)]
 
@@ -226,7 +251,8 @@ def test_a_version_3_target_is_refused_by_every_command_but_init_naming_both_ver
     version_3(rv)
     r = rv.run(*command, timeout=20)
     assert r.returncode != 0
-    assert re.search(r"\b3\b", r.stderr) and re.search(r"\b4\b", r.stderr), r.stderr
+    assert "the target has schema version 3, this program works with version 4; rowvioli init brings it to 4" \
+        in r.stderr, r.stderr
 
 
 def test_the_control_connection_asks_postgres_to_notice_a_dead_worker_within_a_minute(rv, monkeypatch):

@@ -906,7 +906,10 @@ def reason_line(values, e, step):
     first, *rest = (WRAPPER.sub("", before).strip() or traceback.strip().split("\n")[-1]).split("\n")
     line = f"{first} {rest[0].strip()}" if first.endswith(":") and rest else first
     line = VALUE.sub('"***"', line)
-    return line.strip() or f"the driver gave no message while {step} ({type(e).__name__})"
+    line = re.sub(r"permission denied for table (columns(?:__log)?)$",r"\g<0>: the worker's role lacks a right on "
+                  r"_rowvioli.\1, which rowvioli init printed with the upgrade to version 4 "
+                  '(docs/operation.md "The target")', line.strip())
+    return line or f"the driver gave no message while {step} ({type(e).__name__})"
 
 
 def scrub(values, text):
