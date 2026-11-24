@@ -12,7 +12,8 @@ def test_init_twice_leaves_the_same_schema_and_meta(rv):
     first = rv.run("init")
     assert first.returncode == 0, first.stderr
     shape = rv.target(SHAPE)
-    assert {r[0] for r in shape} == {"sources", "tables", "runs", "meta", "status"}
+    assert {r[0] for r in shape} == {"sources", "tables", "runs", "meta", "status", "columns", "columns__log",
+                                  "columns__history"}
 
     second = rv.run("init")
     assert second.returncode == 0, second.stderr
@@ -30,7 +31,9 @@ def test_init_keeps_what_is_there(rv):
 
 
 def version_3(rv):
-    """A target as version 3 left it: without the version columns of runs."""
+    """A target as version 3 left it: without the version columns of runs and the columns table."""
+    rv.target("drop view _rowvioli.columns__history")
+    rv.target("drop table _rowvioli.columns__log, _rowvioli.columns")
     rv.target("alter table _rowvioli.runs drop column program_version, drop column driver_version")
     rv.target("update _rowvioli.meta set schema_version = 3")
 
