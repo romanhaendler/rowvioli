@@ -638,13 +638,15 @@ DROPS_WITH = """
       FROM pg_attribute a WHERE attrelid = $1::regclass AND attname = $2"""
 
 
-# the grants on a view but its owner's, as (privilege, column or None, grantee, grant option)
+# the grants on a view but its owner's, as (privilege, column or None, grantee, grant option, grantor or None for the
+# owner), in the order Postgres keeps them, which gives a grantee its grant option before it passes the grant on
 GRANTS = """
-    SELECT a.privilege_type, NULL::text, CASE a.grantee WHEN 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END,
-           a.is_grantable FROM pg_class r, aclexplode(r.relacl) a WHERE r.oid = to_regclass($1) AND a.grantee <> r.relowner
-    UNION ALL
     SELECT a.privilege_type, c.attname::text, CASE a.grantee WHEN 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END,
-           a.is_grantable FROM pg_attribute c, aclexplode(c.attacl) a WHERE c.attrelid = to_regclass($1)"""
+           a.is_grantable, nullif(a.grantor, r.relowner)::regrole::text
+      FROM pg_class r CROSS JOIN LATERAL (SELECT NULL::name AS attname, 0 AS attnum, r.relacl AS acl UNION ALL
+                                          SELECT attname, attnum, attacl FROM pg_attribute WHERE attrelid = r.oid) c,
+           aclexplode(c.acl) WITH ORDINALITY a WHERE r.oid = to_regclass($1) AND a.grantee <> r.relowner
+     ORDER BY c.attnum, a.ordinality"""
 
 
 def carry_out(conn, t, plan):
@@ -860,9 +862,22 @@ def write_log(conn, t, staged, log, names):
               FROM ONLY {t['log_table']}{' WHERE ' + ' AND '.join(cut) if cut else ''}) h
          WHERE _op <> 'D'""")
     sql(conn, f"CREATE OR REPLACE VIEW {t['history']} AS" + "\n        UNION ALL".join(branches))
-    for privilege, column, grantee, option in t.pop("grants", []):  # those carry_out found before it dropped the view
+    for privilege, column, grantee, option, grantor in t.pop("grants", []):  # those carry_out found before the drop
+        # decision 54: a grant a grantee passed on comes back from it, given as that role; Postgres 14 to 17 take no
+        # other grantor than the current role (GRANTED BY). Where the run's role may not act as it, the grant is its own
+        if grantor:
+            sql(conn, "SAVEPOINT grantor")
+            try:
+                sql(conn, f"SET LOCAL ROLE {grantor}")
+            except Exception as e:
+                if getattr(e, "sqlstate", None) != "42501":  # insufficient_privilege
+                    raise
+                sql(conn, "ROLLBACK TO SAVEPOINT grantor")
+                grantor = None
         sql(conn, f"GRANT {privilege}{f' ({quote(column)})' if column else ''} ON {t['history']} TO {grantee}"
                   + (" WITH GRANT OPTION" if option else ""))
+        if grantor:
+            sql(conn, "RESET ROLE")
 
 
 def record_columns(conn, t, delivered, mirror, log, changes):
