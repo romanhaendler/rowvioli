@@ -251,6 +251,8 @@ The second round therefore looked for ideas that make rules disappear instead of
 ## 20. A maximum age per table instead of orders
 
 > **Changed by decision 36.** A table may name times of day as well.
+>
+> **Changed by decision 55.** A table that never loaded is taken before the overdue ones.
 
 **Decision.** The definition says how old each table may be (`max_age`). A worker loads whatever is older than allowed, starting with the table that misses its target the most. There are no orders, no queue and no submitters. `rowvioli run` loads what is due once, `rowvioli work` does not stop.
 
@@ -824,10 +826,11 @@ Smaller departures of the build: the notification is not sent for a first fill t
 
 - **A numeric is never stored as another value** (decision 49). An unconstrained `numeric` with more digits before the point than a decimal holds fails the run and names the column, with the reason of more than 38 digits; Arrow's cast had wrapped such a value without an error, and `1.5e400` arrived as `0` with the run `ok`.
 - **A table that inherits from a mirror keeps its rows** (decision 2). Every statement that reads, counts or deletes the rows of a mirror, and the first fill of a change log, names the mirror with `ONLY`, and the history view reads its change log with `ONLY`. A consumer's child table was read as part of the mirror: its rows became `D` rows, were deleted and counted towards `max_delete_share`. What alters the mirror's columns (a column that goes, a rename, a widening, a new column) still reaches the child, since Postgres keeps a child's columns those of its parent.
+- **A table that never loaded goes first** (decision 20). A worker claims the tables without a successful run before the others, and among the others the most overdue, measured in its own `max_age`, as before. A new table is due the moment it comes, so it counted as overdue by nothing and waited behind every table that stayed overdue: 34 of 50 new tables were still `new` after four minutes with `max_age = "1s"` and `parallel = 8` (H4). When a table is due, `max_age` and `at` are untouched; only the order among due tables changes, and the order among tables that never loaded is as it was, none before another.
 
 **Why.** Each was a fault of a promise already made: the value as the source has it.
 
-**Evidence.** `tests/test_run_mistakes.py`, `test_checks.py`.
+**Evidence.** `tests/test_run_mistakes.py`, `test_checks.py`, `test_pause_requests.py`.
 
 ## Corrections after the prototype
 

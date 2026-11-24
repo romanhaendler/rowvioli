@@ -43,6 +43,7 @@ Fixed:
 - A reason no longer shows a value of the source: a value a type under `columns` does not take names the file, the column and the type instead of DuckDB's message with the value; a `numeric` that no decimal holds from the `postgres` connector names its column; a value that Postgres quotes in its message is written `"***"`. An ODBC driver's message is not covered (docs/open-points.md).
 - A message that a consumer's PL/pgSQL code raises, a trigger on a mirror (`raise exception 'bad row %', NEW`) or a function a source view calls, no longer reaches the status, `_rowvioli.runs` or the lines: the reason names the function and the SQLSTATE and says that the server's log has the message.
 - An unconstrained `numeric` far beyond 38 digits before the point fails the run with the reason of more than 38 digits. Before, Arrow's cast wrapped it without an error, and `1.5e400` arrived as `0` with the run `ok` (in 0.4.1 too).
+- A table that never loaded is claimed before the tables that are overdue, and among those the most overdue first, as before. Before, a new table counted as hardly late and waited behind tables that stayed overdue: 34 of 50 new tables were still `new` after four minutes with `max_age = "1s"` (in 0.4.1 too).
 - A consumer's table that inherits from a mirror keeps its rows. Before, a run read them as the mirror's, deleted them as `D` rows and counted them towards `max_delete_share` (in 0.4.1 too). The history view reads only the change log's own rows.
 
 ## 0.4.1 (2026-11-23)

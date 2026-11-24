@@ -23,6 +23,22 @@ def back(rv, minutes):
     rv.target("update _rowvioli.tables set attempted_at = attempted_at - %s", [timedelta(minutes=minutes)])
 
 
+def test_a_table_that_never_loaded_goes_first_and_then_the_most_overdue(erp):  # H4: new tables starved
+    tables = '"public.customers" = { key = ["customer_no"] }\n"public.notes" = {}\n'
+    one = 'max_age = "1h"\nparallel = 1'  # one run at a time, so the run numbers give the order of the claims
+    apply(erp, definition(erp, tables).replace('max_age = "1h"', one))
+    ok(erp)
+    for table, hours in (("public.customers", 10), ("public.notes", 2)):
+        erp.target("update _rowvioli.tables set loaded_at = now() - %s * interval '1 hour', attempted_at = "
+                   "now() - %s * interval '1 hour' where source_table = %s", [hours, hours, table])
+    erp.source("create table fresh (id int primary key); create table later (id int primary key)")
+    apply(erp, definition(erp, tables + '"public.fresh" = {}\n"public.later" = {}\n').replace('max_age = "1h"', one))
+    ok(erp)
+    claims = [t for (t,) in erp.target('select t.source_table from _rowvioli.runs r join _rowvioli.tables t '
+                                       'on t.id = r."table" order by run')][2:]
+    assert sorted(claims[:2]) == ["public.fresh", "public.later"] and claims[2:] == ["public.customers", "public.notes"]
+
+
 def test_a_failed_run_pauses_one_minute_doubling_never_beyond_max_age_then_loads(erp):
     apply(erp, definition(erp, '"public.gone" = { key = ["id"] }\n"public.lost" = { key = ["id"], max_age = "3m" }\n'))
     m = timedelta(minutes=1)
