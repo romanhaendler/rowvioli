@@ -54,8 +54,12 @@ def test_A5_a_column_gone_from_the_source_leaves_the_mirror_and_its_values_stay_
     assert erp.target(CITY) == [("Bonn", first, second), (None, second, None)]
     # story 5: the mirror's rows are not rewritten for it
     assert erp.target("select customer_no, ctid::text from raw_erp.customers order by 1") == places
+    assert erp.target(COUNTS) == [(0, 0, 0)]  # the counts are the mirror's rows (H1 saw ~60 for 3 rows changed)
     assert erp.target(LAST) == [("U", "city", False, "source", None)]
     log_replays(erp)
+
+
+COUNTS = "select inserted, updated, deleted from _rowvioli.runs order by run desc limit 1"
 
 
 @pytest.mark.parametrize("table", ['{ key = ["customer_no"], log = false }', "{}"])
@@ -79,6 +83,11 @@ def test_a_column_goes_in_the_run_that_changes_deletes_and_inserts_rows(erp):  #
     again(erp)
     assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
     assert erp.target(LOG) == [("U", 1, None), ("D", 2, "Essen"), ("I", 4, None)]
+    assert erp.target(COUNTS) == [(1, 1, 1)]
+    erp.source("alter table customers drop column name")  # a U in the log for each row, none in the mirror
+    erp.source("update customers set customer_no = 5 where customer_no = 4")
+    again(erp)
+    assert erp.target(COUNTS) == [(1, 0, 1)]
     log_replays(erp)
 
 

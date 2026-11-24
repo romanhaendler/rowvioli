@@ -548,7 +548,10 @@ def publish(conn, t, staged, delivered, mirror, log, rows_read, counts, plan):
             kept = f" AND (d._op = 'D' OR ROW({ds}) IS DISTINCT FROM ROW({ms}))"
             only = f" AND NOT EXISTS (SELECT FROM ONLY {t['mirror']} m WHERE {on})"
         sql(conn, f"DELETE FROM ONLY {t['mirror']} m USING _diff d WHERE d._op IN ('D', 'U') AND {on}{kept}")
-        sql(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _diff d WHERE _op IN ('I', 'U'){only}")
+        written = rowcount(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _diff d "
+                                 f"WHERE _op IN ('I', 'U'){only}")
+        # the counts are the mirror's: a U only the change log gets, for a column that went, updates no row of it
+        counts = {**counts, "updated": written - counts["inserted"]}
     else:  # without a key, or under another key (decision 54): replaced as a whole
         deleted = rowcount(conn, f"DELETE FROM ONLY {t['mirror']}")
         counts = {"inserted": rowcount(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _stage"),
