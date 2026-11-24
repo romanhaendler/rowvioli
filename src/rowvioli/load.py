@@ -129,8 +129,10 @@ def check(conn, t, staged, mirror, log_columns):
     moved = {old: new for new, old in renamed.items()}
     primary_key = [moved.get(k, k) for (k,) in sql(conn, PRIMARY_KEY, [t["mirror"]])] if mirror else []
     plan = {"renamed": renamed, "proven": {}, "gone": [], "retired": {}, "key": {}}
+    # nothing is proven without a catalog, a key or a change log, nor joined by a key of another family, which stops below
     if t["key"] and t["log"] and log_columns and t["type"] not in ("file", "rest") \
-            and set(primary_key) == set(t["key"]):  # nothing is proven without a catalog, a key or a change log
+            and set(primary_key) == set(t["key"]) \
+            and all(family(had[renamed.get(k, k)]) == family(types[k]) for k in t["key"]):
         proofs = proven(conn, t, mirror, staged, log_columns, renamed)
         renamed.update({new: old for new, (old, _) in proofs.items()})
         plan["proven"] = {new: note for new, (_, note) in proofs.items()}

@@ -219,6 +219,15 @@ def test_C9_a_key_column_renamed_in_the_run_that_changes_the_key_keeps_its_was(e
     log_replays(erp, "raw_erp.customers")
 
 
+def test_a_key_column_of_another_family_stops_as_before_while_a_column_is_renamed(erp):
+    ok(erp)
+    erp.source("alter table customers alter customer_no type text; alter table customers rename column city to town")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    assert reason.startswith("column customer_no has changed its type from integer to ") \
+        and "a type of another family in the key" in reason, reason
+
+
 def test_renamed_in_the_definition_renames_the_mirror_of_a_table_without_a_change_log(erp):
     people(erp, table='{ key = ["id"], log = false }')
     erp.source("alter table people rename column city to town")
