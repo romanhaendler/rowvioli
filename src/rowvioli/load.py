@@ -1277,6 +1277,11 @@ def scrub(values, text):
     return text
 
 
+def lost(e):
+    """Whether Postgres ended the connection (a restart, pg_terminate_backend), which a reason says in our words."""
+    return getattr(e, "sqlstate", None) in ("57P01", "57P02")
+
+
 def rowcount(conn, query):
     with conn.cursor() as c:
         c.execute(query)
@@ -1330,8 +1335,12 @@ def main(worker, source, table):
     CHANNEL = os.fdopen(os.dup(1), "w")
     os.dup2(os.open(os.devnull, os.O_WRONLY), 1)
     threading.Thread(target=orphaned, daemon=True).start()
-    conn = target.connect(pooler=False)  # the worker that started this process checked for a pooler
-    t = claim(conn, worker, source, table)
+    try:
+        conn = target.connect(pooler=False)  # the worker that started this process checked for a pooler
+        t = claim(conn, worker, source, table)
+    except Exception as e:  # nothing to record it on: the worker says it (decision 54, item 8: by the one rule)
+        say(error="connection to the target lost" if lost(e) else reason_line(target_secrets(), e, "claiming"))
+        raise SystemExit(1) from None
     if t is None:
         return
     say(claimed=t["name"], run=t["run"], max_seconds=t["max_seconds"])
