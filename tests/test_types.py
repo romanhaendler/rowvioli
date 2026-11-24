@@ -479,8 +479,9 @@ def slow_index(rv, table, column):
      "once, until a run has written them"),
     ("key", 'replacing raw_erp.customers under the key (customer_no, name), with a D and an I in the change log for '
             "every row; raise max_seconds once, until a run has replaced it"),
-    ("alter table customers rename city to town", "comparing city with town in every row of raw_erp.customers to "
-                                                   "prove a rename; raise max_seconds once, until a run has proven it")])
+    ("alter table customers rename city to town",
+     "comparing city with town in every row of raw_erp.customers to prove a rename; raise max_seconds once, until a "
+     "run has proven it")])
 def test_a_run_ended_after_max_seconds_in_a_long_step_of_a_change_says_which_rolls_back_and_the_next_finishes(
         erp, change, step):  # decision 54, ticket 14 of schema changes
     erp.source("insert into customers select g, 'n' || g, 'c' || (g % 7) from generate_series(4, 30) g")

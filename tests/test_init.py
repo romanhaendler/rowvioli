@@ -287,3 +287,20 @@ def test_a_first_run_after_the_upgrade_ended_while_it_reads_the_change_log_under
     again(erp)
     assert primary_key(erp) == ["customer_no"]
     log_replays(erp)
+
+
+def test_a_change_log_from_before_the_upgrade_that_fits_neither_key_stops_with_the_statement_for_each(erp):
+    """Ticket 11 left it untested, since 0.4.1 never wrote such a log itself: a person changed primary key and
+    definition by hand and kept loading, so the log has rows under both keys (ticket 14 of schema changes)."""
+    ok(erp)
+    erp.target(HAND)
+    apply(erp, elsewhere(erp))
+    released(erp)
+    # an I for a key that lives, under either key: written by hand, or under the other one
+    erp.target("insert into raw_erp.customers__log select _run, 'I', _loaded_at + interval '1 s', customer_no, name, "
+               "city from raw_erp.customers__log where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp).replace("***", "x")  # the source's password is x
+    assert reason.startswith("the primary key of raw_erp.customers is (customer_no, name), the definition's key is "
+                             "(customer_no), and nothing in the target tells"), reason
+    assert """'[{"key": ["customer_no"]}]'""" in reason and """'[{"key": ["customer_no", "name"]}]'""" in reason

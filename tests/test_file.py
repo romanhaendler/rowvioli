@@ -535,7 +535,8 @@ def write(rv, name, rows):
 
 @pytest.mark.parametrize("kind, unpinned", [("xlsx", "text"), ("json", "jsonb")])
 def test_excel_and_json_go_through_every_change_of_shape_a_csv_goes_through(files, kind, unpinned):  # ticket 14
-    """A pattern whose files differ, a header renamed, a pin set, changed and taken out, a field missing (decision 54)."""
+    """A pattern whose files differ, a header renamed, a pin set, changed and taken out, a field missing
+    (decision 54)."""
     from test_columns_go_and_come import columns
     table = f'"t_*.{kind}" = {{{{ key = ["id"], target_table = "t"{{}} }}}}\n'
     text = "#>> '{}'" if kind == "json" else ""  # a JSON value as its text

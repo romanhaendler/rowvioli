@@ -386,3 +386,13 @@ def test_renamed_with_a_type_changed_to_another_family_stops_and_its_way_out_lea
     assert api.target("select station, n, m from raw_weather.a__history where _valid_to is null order by 1") == [
         ("a", None, 1.0), ("b", None, 2.0)]
     log_replays(api, "raw_weather.a")
+
+
+def test_A20_a_rest_column_name_longer_than_63_bytes_fails_the_run_and_names_the_column(api):  # ticket 10 left it
+    long = "c" * 64
+    r, _ = load(api, f'a = {{ key = ["station"], path = "/readings", columns = {{ station = "text", '
+                     f'{long} = "int8" }} }}')
+    assert r.returncode == 1
+    assert reason(api) == (f"column {long} of the source is longer than 63 bytes, the most Postgres keeps of a name: "
+                           "give it a shorter name in the source")
+    assert api.target("select to_regclass('raw_weather.a')") == [(None,)]
