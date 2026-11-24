@@ -445,19 +445,34 @@ def test_a_source_column_named_like_a_retired_one_that_goes_and_comes_back_conti
     log_replays(erp)
 
 
-def test_a_retired_column_whose_comment_a_person_removed_stops_with_the_text_to_put_back(erp):
+@pytest.mark.parametrize("meanwhile", [None, "a type changed by hand", "a new target name"])
+def test_a_retired_column_whose_comment_a_person_removed_stops_with_the_text_to_put_back(erp, meanwhile):
     ok(erp)
     erp.source("alter table customers drop column city")
     again(erp)
     erp.source("alter table customers add column city integer")
     again(erp)
     [(run,)] = erp.target("select max(run) from _rowvioli.runs")
-    erp.target(f"comment on column raw_erp.customers__log.city__{run} is null")
+    name = "customers"
+    if meanwhile == "a type changed by hand":  # a run records it, and the note with the text goes on
+        erp.target("drop view raw_erp.customers__history")  # a run creates it again
+        erp.target(f"alter table raw_erp.customers__log alter column city__{run} type varchar(100)")
+        again(erp)
+    elif meanwhile == "a new target name":
+        name = "clients"
+        for old, new in [("customers", "clients"), ("customers__log", "clients__log"),
+                         ("customers__history", "clients__history")]:
+            erp.target(f"alter table raw_erp.{old} rename to {new}")
+        apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], target_table = "clients" }\n'))
+        again(erp)
+    erp.target(f"comment on column raw_erp.{name}__log.city__{run} is null")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    put_back = f"""COMMENT ON COLUMN "raw_erp"."customers__log"."city__{run}" IS '{{"retired": "city"}}'"""
+    put_back = f"""COMMENT ON COLUMN "raw_erp"."{name}__log"."city__{run}" IS '{{"retired": "city"}}'"""
     reason = failed(erp)
-    assert reason == (f"the comment on column city__{run} of the change log raw_erp.customers__log, which says that it "
+    assert reason == (f"the comment on column city__{run} of the change log raw_erp.{name}__log, which says that it "
                       f"keeps the old values of city, is missing or unreadable: put it back, {put_back}"), reason
+    if meanwhile:
+        return
     erp.target(put_back)
     again(erp)
     erp.source(f"alter table customers add column city__{run} text")  # and the comment keeps the retired name taken

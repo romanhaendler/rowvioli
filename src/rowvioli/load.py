@@ -260,9 +260,8 @@ def check(conn, t, staged, mirror, log_columns, renamed):
                         "written under, is missing or unreadable, and the key has changed: put it back, "
                         f"COMMENT ON COLUMN {t['log_table']}._op IS {literal(noted[0][0])}")
     # the same for a retired column's comment, whose text the record noted when the run retired it
-    for name, note in sql(conn, 'SELECT "column", note FROM _rowvioli.columns WHERE id = $1 AND target_schema = $2 '
-                                "AND target_table = $3 AND NOT mirror AND strpos(note, $4) > 0",
-                          [t["id"], t["schema"], t["table"], RETIRED_NOTE]):
+    for name, note in sql(conn, 'SELECT "column", note FROM _rowvioli.columns WHERE id = $1 AND NOT mirror '
+                                "AND strpos(note, $2) > 0", [t["id"], RETIRED_NOTE]):  # also under an old target name
         if name in said and name not in retired:
             text = json.dumps(json.JSONDecoder().raw_decode(note.partition(RETIRED_NOTE)[2])[0])
             raise Exception(f"the comment on column {name} of the change log {t['name']}__log, which says that it "
@@ -948,6 +947,10 @@ def record_columns(conn, t, delivered, mirror, log_columns, changes):
         recorded = c.fetchall()
     names = ["target_schema", "target_table", "column", "type", "source_type", "key", "mirror", "was", "by", "note"]
     old = {r[2]: dict(zip(names, r)) for r in recorded if (r[0], r[1]) == (t["schema"], t["table"])}
+    # the text to put back a retired column's comment (check) goes on with every later row of it, as `was` does, also
+    # under a new target name
+    retired = {r[2]: RETIRED_NOTE + json.dumps(json.JSONDecoder().raw_decode(r[9].partition(RETIRED_NOTE)[2])[0])
+               for r in recorded if r[9] and RETIRED_NOTE in r[9] and not r[6]}
     # a mirror renamed by hand: what was recorded under a name that is no table any more is closed
     rows = [{**dict(zip(names, r)), "op": "D", "by": "hand"} for r in recorded if r[10]]
     rows += [{**r, "op": "D", "by": "hand"} for name, r in old.items() if name not in now]
@@ -955,7 +958,8 @@ def record_columns(conn, t, delivered, mirror, log_columns, changes):
         # one the source did not deliver keeps the type it last did, a retired one that of the name it had (story 34)
         last = old.get(changes.get(name, {}).get("was", name), {}).get("source_type", type)
         row = dict(target_schema=t["schema"], target_table=t["table"], column=name, type=type,
-                   source_type=delivered.get(name, last), key=key.get(name), mirror=in_mirror, was=None, note=None)
+                   source_type=delivered.get(name, last), key=key.get(name), mirror=in_mirror, was=None,
+                   note=None if in_mirror else retired.get(name))
         if (before := old.get(name)) is None:
             # a first fill finds what is there; what this run changed in a mirror it found has its cause (story 45)
             untouched = not mirror or found.get(name) == (type, in_mirror) and name not in changes
