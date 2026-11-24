@@ -83,6 +83,8 @@ The first idea was a very fast Rust program. The discussion showed that speed wa
 
 ## 7. The lock hangs on the connection, and publishing happens on that connection
 
+> **Changed by decision 55.** A pooler in transaction mode is refused at the start of every command, also an idle one.
+
 **Decision.** A session-level advisory lock per target table, taken on the control connection. The publishing transaction runs on the same connection.
 
 **Why.** If the process dies, connection, lock and open transaction are gone together. A zombie cannot commit, because a COMMIT needs a command from a client that no longer exists. This makes a fencing token unnecessary.
@@ -827,10 +829,11 @@ Smaller departures of the build: the notification is not sent for a first fill t
 - **A numeric is never stored as another value** (decision 49). An unconstrained `numeric` with more digits before the point than a decimal holds fails the run and names the column, with the reason of more than 38 digits; Arrow's cast had wrapped such a value without an error, and `1.5e400` arrived as `0` with the run `ok`.
 - **A table that inherits from a mirror keeps its rows** (decision 2). Every statement that reads, counts or deletes the rows of a mirror, and the first fill of a change log, names the mirror with `ONLY`, and the history view reads its change log with `ONLY`. A consumer's child table was read as part of the mirror: its rows became `D` rows, were deleted and counted towards `max_delete_share`. What alters the mirror's columns (a column that goes, a rename, a widening, a new column) still reaches the child, since Postgres keeps a child's columns those of its parent.
 - **A table that never loaded goes first** (decision 20). A worker claims the tables without a successful run before the others, and among the others the most overdue, measured in its own `max_age`, as before. A new table is due the moment it comes, so it counted as overdue by nothing and waited behind every table that stayed overdue: 34 of 50 new tables were still `new` after four minutes with `max_age = "1s"` and `parallel = 8` (H4). When a table is due, `max_age` and `at` are untouched; only the order among due tables changes, and the order among tables that never loaded is as it was, none before another.
+- **A pooler in transaction mode is refused, idle or busy** (decision 7). Every command reads `pg_backend_pid()` on its connection, on a second connection and on its connection again, once at its start; a run process leaves it to its worker. The second connection with the first one's server process, a connection that changed it, or a statement the driver loses (`SQLSTATE 26000`, `08P01`) is a pooler in transaction mode, and the command stops with `a connection pooler in transaction mode is in front of the target; use session mode or connect directly` before it claims anything. Before, an idle pooler passed the two reads on one connection, and `run` and `work` failed with the driver's messages and left tables `loading` until the pooler restarted (H1).
 
 **Why.** Each was a fault of a promise already made: the value as the source has it.
 
-**Evidence.** `tests/test_run_mistakes.py`, `test_checks.py`, `test_pause_requests.py`.
+**Evidence.** `tests/test_run_mistakes.py`, `test_checks.py`, `test_pause_requests.py`; measurement 14.
 
 ## Corrections after the prototype
 

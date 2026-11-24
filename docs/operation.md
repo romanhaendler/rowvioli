@@ -91,7 +91,7 @@ The target is exactly one database. Mirrors and bookkeeping have to be in the sa
 - **A cluster with failover.** The address names all nodes and asks for the one that accepts writes: `postgresql://etl@pg01,pg02/dwh?target_session_attrs=read-write`. Without `target_session_attrs` libpq takes the first node that answers, a standby too.
 - **Several target databases.** Each gets its own workers and its own definition.
 - **Consumers on replicas** see only published states.
-- **A connection pooler** in front of the target works in session mode only.
+- **A connection pooler** in front of the target works in session mode only. One in transaction mode is refused at the start of every command, before anything is claimed ([Failures](target.md#failures)).
 
 Rights in the target:
 

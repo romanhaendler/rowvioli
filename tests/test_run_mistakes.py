@@ -1,6 +1,10 @@
 """Mistakes named at run: key columns, types, pause, names, variables, reasons, pooler, schema (shakedown ticket 05)."""
+import subprocess
+
+import psycopg
 import pytest
 
+from conftest import HOST, until
 from test_checks import failed
 from test_rest import api, load, reason  # noqa: F401 (api is a fixture)
 from test_secrets import lab
@@ -118,6 +122,54 @@ def test_a_reason_is_one_line_without_wrapper_traceback_or_path(erp):
 
 def test_a_run_on_a_direct_connection_passes_the_pooler_check(erp):
     ok(erp)
+
+
+POOLER = "edoburu/pgbouncer:v1.26.1-p0"
+
+
+def reachable(url):
+    try:
+        psycopg.connect(url, connect_timeout=1).close()
+        return True
+    except psycopg.OperationalError:
+        return False
+
+
+@pytest.fixture
+def pooler(erp, servers, request):
+    """A PgBouncer in front of the test's target database, in the mode given; returns the target URL through it. The
+    pooler has no other client, so it hands out the same server connection each time. Its image (30 MB) is not
+    pulled by the tests: without it they are skipped."""
+    if subprocess.run(["docker", "image", "inspect", POOLER], capture_output=True).returncode:
+        pytest.skip(f"docker pull {POOLER} to run it")
+    db = erp.target_url.rsplit("/", 1)[1]
+    ip = subprocess.run(["docker", "inspect", "-f", "{{.NetworkSettings.Networks.bridge.IPAddress}}", servers["target"]],
+                        check=True, capture_output=True, text=True).stdout.strip()
+    name = f"{servers['target']}-pooler-{db}"
+    subprocess.run(["docker", "run", "-d", "--name", name, "--label", "rowvioli-test", "-e", "AUTH_TYPE=scram-sha-256",
+                    "-e", f"DATABASE_URL=postgres://postgres:x@{ip}:5432/{db}", "-e", f"POOL_MODE={request.param}",
+                    "-p", "127.0.0.1::5432", POOLER], check=True, capture_output=True)
+    request.addfinalizer(lambda: subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True))
+    port = subprocess.run(["docker", "port", name, "5432/tcp"], check=True, capture_output=True,
+                          text=True).stdout.split()[0].rsplit(":", 1)[1]
+    url = f"postgresql://postgres:x@{HOST}:{port}/{db}"
+    until(lambda: reachable(url))
+    return url
+
+
+@pytest.mark.parametrize("pooler", ["transaction", "session"], indirect=True)
+def test_a_pooler_in_transaction_mode_is_refused_before_anything_is_claimed_and_one_in_session_mode_loads(
+        erp, pooler, request):
+    through = {"ROWVIOLI_TARGET_URL": pooler}
+    r = erp.run("run", env=through)
+    if request.node.callspec.params["pooler"] == "session":
+        assert r.returncode == 0, r.stderr + r.stdout
+        return
+    assert r.returncode == 1 and r.stderr.endswith(
+        "a connection pooler in transaction mode is in front of the target; use session mode or connect directly\n"), \
+        r.stderr + r.stdout
+    assert erp.target("select count(*) from _rowvioli.runs") == [(0,)]
+    assert erp.run("status", env=through).returncode == 1
 
 
 def test_a_worker_without_create_on_the_database_loads_into_a_precreated_schema(erp):

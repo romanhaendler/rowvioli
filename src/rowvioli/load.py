@@ -1036,7 +1036,7 @@ def main(worker, source, table):
     CHANNEL = os.fdopen(os.dup(1), "w")
     os.dup2(os.open(os.devnull, os.O_WRONLY), 1)
     threading.Thread(target=orphaned, daemon=True).start()
-    conn = target.connect()
+    conn = target.connect(pooler=False)  # the worker that started this process checked for a pooler
     t = claim(conn, worker, source, table)
     if t is None:
         return

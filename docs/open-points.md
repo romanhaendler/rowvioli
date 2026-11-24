@@ -78,7 +78,7 @@ Unchanged from the first round:
 - **Each file of a pattern is checked before it is read**, about 3 ms per file: 10,000 files take half a minute before the first row. A pattern reads 50 files at a time; open files under Linux were not measured.
 - **A JSON file is read twice**, once for its columns and once for its rows; so is every file of a pattern of JSON files.
 - **A REST field whose own name contains a dot cannot be named in `rows`**, and `apply` does not check `rows`: a value that is not text fails at the run.
-- **The pooler check has holes.** A control connection behind a pooler in transaction mode is caught by comparing `pg_backend_pid()` in two transactions. An idle pooler hands out the same server connection and passes it; a busy one was caught in 84 of 100 checks (PgBouncer 1.26.1, eight busy neighbours; [measurements](measurements.md#14-the-pooler-check-behind-pgbouncer-in-transaction-mode)). Session mode is the requirement, the check a net.
+- **The pooler check was tried with PgBouncer alone**, in one version and one pool size, idle and with up to 16 busy neighbours ([measurements](measurements.md#14-the-pooler-check-behind-pgbouncer-in-transaction-mode)). A pooler that hands its server connections round-robin, or another pooler, was not tried. Session mode is the requirement.
 - **Tables without a key** are replaced as a whole on every run, have no change log, and bloat until autovacuum has run.
 - **Advisory locks share one number space per database.** Another application using two-key advisory locks in the same database could collide.
 - **An idle worker keeps one connection to the target open**, with which it asks whether something is claimable.
