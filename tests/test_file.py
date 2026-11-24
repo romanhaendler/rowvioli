@@ -285,6 +285,14 @@ def test_a_field_named_under_columns_that_the_files_lack_is_empty_in_every_reade
         (1, 10, None), (2, 20, None)][:1 if "_1" in table else 2]
 
 
+def test_a_key_column_named_under_columns_that_no_file_has_stops_the_run_as_null(files):  # as REST
+    orders(files, 1, 2)
+    code, answer = load(files, '"orders_*.csv" = { key = ["order_id"], sep = ";", target_table = "orders", '
+                               'columns = { order_id = "integer" } }\n')
+    assert (code, answer["raw_files.orders"]["reason"]) == (1, 'a key column of ("order_id") is null')
+    assert files.target("select to_regclass('raw_files.orders')") == [(None,)]
+
+
 def test_a_column_gone_from_the_files_for_good_leaves_the_mirror_by_hand_and_keeps_its_history(files):  # H2
     orders(files, 1, 2)
     d = files.dir / "files"
