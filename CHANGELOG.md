@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+Added:
+
+- **The mirror follows the source where a change log keeps what was** (decision 54). A table with a key and a change log no longer stops at a changed shape:
+  - A column the source drops leaves the mirror and stays in the change log and the history, with a `U` for every row that had a value. One that comes back in its old family continues its log column; in another family the old values stay under `<name>__<run>`.
+  - A type of the same family is kept while every value fits and widened, in mirror and change log, when one does not. A type of another family is a column that goes and comes back. This replaces the handling of `numeric` alone: a value that does not fit a `numeric(p,s)` no longer fails the run.
+  - Another key replaces the mirror as a whole and keeps the history: the change log gets a `D` per old row and an `I` per new one, and the history view has a branch per key. A first key adds the primary key and begins the change log; the same columns in another order are the same key; a primary key changed by hand is put back.
+  - A column the data prove renamed, or the table says is, is renamed in mirror and change log with no row written, and a consumer's view on it keeps working.
+  - A run stops where a consumer's view, foreign key or other object depends on what would change; Postgres refuses, nothing is published and the reason names the object.
+- `renamed = { new = "old" }`, a setting of a table for a rename the data cannot prove (docs/definition.md).
+- `_rowvioli.columns`, `columns__log` and `columns__history`: which columns and types every mirror and change log had at a moment, what caused each change (`source`, `definition`, `reader`, `hand`, `found`) and a note. `NOTIFY` on `rowvioli_schema` when a run commits a change of columns, key or name, not for a first fill. Queries in docs/target.md.
+- Version 4 of `_rowvioli`: `rowvioli init` brings a target of version 3 to 4, changes nothing else and prints the `GRANT` statements a worker's role needs. `_rowvioli.runs` records the version of the program and of the driver. A connector may report its driver's version (`driver_version`); the shipped ones report the package they read with.
+
+Changed (a working set-up can notice these):
+
+- **After `rowvioli init` brings a target to version 4, a worker's role needs `GRANT SELECT, INSERT, UPDATE, DELETE ON _rowvioli.columns` and `GRANT SELECT, INSERT ON _rowvioli.columns__log`** (`init` prints them on that upgrade). Without them every publish fails with `permission denied`. Auditors and consumers who read the columns need `SELECT` on `_rowvioli.columns__history` and nothing else. All workers of a target run the same drivers. A worker of 0.4.1 refuses version 4, and every command of this version but `init` refuses version 3: stop the old workers, run `init`, grant, start the new ones (docs/operation.md).
+- A change log is complete from its last change of key: replaying it from there gives the mirror.
+- A changed key no longer stops the table. A key taken away still stops while a change log exists, and a key column of another family stops.
+- A column missing from one file, one page or one run of a file or REST table is empty, and with a change log never goes. A REST column absent from every row of a page no longer fails the run, and the files of a pattern may have different columns. Where the definition names the columns it is the catalog: a type under `columns` that changes to another family goes and comes back, and a column taken out of a REST table's `columns` leaves the mirror, both recorded `by = definition`.
+- A table without a change log stops at a column that is gone or of another family, as before, and the reason now says the way out (`ALTER TABLE ... DROP COLUMN ...`). So does a file or REST table without one at a mirror column missing from the data, which is no longer emptied. A column a person added to the mirror is never dropped or overwritten: the run stops with `is not in the change log`. A type a person changed in the mirror to another family stops, and the reason says to drop the column.
+- The history view is dropped and created again whenever a run does more than add columns, so a consumer's view on a history view stops a change to any column of it. A prepared `SELECT *` on a mirror fails once after a new column.
+- A source that delivers a type of another family than before writes a row per row into the change log, once, on every affected table, at the first run of this version.
+- docs/loading.md: the table of checks and "What a person does by hand" are rewritten. The recipes for a dropped column, a changed type, more digits and a changed key are gone for tables with a change log and stay for tables without one; every stop gives its reason and its way out.
+
+Fixed:
+
+- A table stuck on `is missing in the source` or `has changed its type` resolves with the first run of this version, if it has a change log.
+
 ## 0.4.1 (2026-11-23)
 
 Fixed:
