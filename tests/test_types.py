@@ -7,8 +7,8 @@ import pytest
 from test_checks import failed
 from test_columns_go_and_come import log_replays
 from test_file import files, load  # noqa: F401 (files is a fixture)
-from test_history import again
-from test_run import apply, definition, erp, ok  # noqa: F401 (erp is a fixture)
+from test_history import MIRROR, again, at
+from test_run import apply, definition, erp, ok, rows  # noqa: F401 (erp is a fixture)
 
 TYPES = ("select format_type(atttypid, atttypmod) from pg_attribute where attname = %s and attrelid in "
          "(%s::regclass, (%s || '__log')::regclass) order by attrelid::regclass::text")
@@ -269,3 +269,42 @@ def test_B2_B3_B5_B7_a_type_of_the_same_family_is_kept_while_the_values_fit_and_
     assert erp.target("select a::text from raw_erp.amounts") == erp.source("select a::text from amounts")
     assert (erp.target(FILE) != file) == rewritten  # more digits before the point alone rewrite nothing
     log_replays(erp, "raw_erp.amounts")
+
+
+ANOTHER_KEY = '"public.customers" = { key = ["customer_no", "name"] }\n'
+
+
+def test_C7_a_key_column_widened_in_the_run_that_changes_the_key_keeps_the_history(erp):
+    ok(erp)
+    before = erp.target("select loaded_at from _rowvioli.tables")[0][0], rows(erp.target, MIRROR)
+    apply(erp, definition(erp, ANOTHER_KEY))
+    erp.source("alter table customers alter customer_no type bigint")
+    erp.source("insert into customers values (3000000000, 'Dora', 'Ulm')")
+    after = again(erp), rows(erp.source, "select customer_no, name, city from customers")
+    assert types(erp, "customer_no", "raw_erp.customers") == ["bigint", "bigint"]
+    assert rows(erp.target, MIRROR) == after[1]
+    for moment, mirror in (before, after):
+        assert at(erp, moment) == mirror, moment
+    log_replays(erp)
+
+
+def test_a_column_of_another_family_in_the_run_that_changes_the_key_keeps_its_old_values_in_the_log(erp):
+    ok(erp)
+    first = erp.target("select loaded_at from _rowvioli.tables")[0][0]
+    old = rows(erp.target, MIRROR)
+    apply(erp, definition(erp, ANOTHER_KEY))
+    erp.source("alter table customers alter city type integer using length(city)")
+    seam = again(erp)
+    run = max_run(erp)
+    then = f"select customer_no, name, city__{run} from raw_erp.customers__history where _valid_from <= %s and " \
+           "(_valid_to > %s or _valid_to is null)"
+    assert rows(lambda q: erp.target(q, [first, first]), then) == old
+    assert rows(lambda q: erp.target(q, [seam, seam]), "select customer_no, name, city from raw_erp.customers__history"
+                " where _valid_from <= %s and (_valid_to > %s or _valid_to is null)") \
+        == rows(erp.source, "select customer_no, name, city from customers")
+    assert types(erp, "city", "raw_erp.customers") == ["integer", "integer"]
+    # the D of every old row carries its old value under the retired name, the I of every new one the new value
+    log = f"select _op, customer_no, city__{run}, city from raw_erp.customers__log where _run = {run}"
+    assert rows(erp.target, log) == sorted([("D", n, c, None) for n, _, c in old]
+                                           + [("I", n, None, c and len(c)) for n, _, c in old], key=repr)
+    log_replays(erp)
