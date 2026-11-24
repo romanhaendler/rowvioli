@@ -175,33 +175,34 @@ def test_ctrl_c_ends_the_worker_with_one_line_130_and_no_run_process_left(ready,
 def test_with_the_limits_full_the_targets_connections_stay_at_the_running_tables_plus_one_per_worker(ready):
     tables = "\n".join(f'"public.slow{i}" = {{ key = ["id"] }}' for i in range(4))
     for i in range(4):
-        slow(ready, f"slow{i}", 30, 1)
+        slow(ready, f"slow{i}", 3600, 1)  # loading for longer than the test looks, however busy the machine
     apply(ready, source(ready, "erp", "parallel = 4", tables))
     ready.target("update _rowvioli.meta set max_running = 2")
-    for _ in range(3):
-        ready.start("work", "--slots", "4")
-    until(lambda: ready.target("select count(*) from _rowvioli.status where status = 'loading'") == [(2,)])
-    connections = """select count(*) from pg_stat_activity
-                      where datname = current_database() and pid <> pg_backend_pid()"""
-    # the start-up is over when the count has stayed at 2 + 3 for 2 s: run processes started before the first
-    # claims committed find nothing and end, and a slow worker may connect late
+    workers = [ready.start("work", "--slots", "4") for _ in range(3)]
+    # the clients' connections: an autovacuum worker on the test's database is one of the server's own
+    connections = """select count(*) from pg_stat_activity where datname = current_database()
+                      and backend_type = 'client backend' and pid <> pg_backend_pid()"""
+
+    def runs():  # the run processes of all three workers
+        return sum(len(subprocess.run(["pgrep", "-P", str(w.pid)], capture_output=True, text=True).stdout.split())
+                   for w in workers)
     # one connection for all the counting: ready.target opens one per query, and on a busy machine the backend of
     # the query before is still closing when the next one counts, which reads as a sixth connection
     with psycopg.connect(ready.target_url, autocommit=True) as counting:
         def count():
             return counting.execute(connections).fetchone()[0]
-        stable, deadline, values = time.monotonic(), time.monotonic() + 30, []
-        while time.monotonic() - stable < 2:
-            values.append(count())
-            if values[-1] != 2 + 3:
-                stable = time.monotonic()
-            assert time.monotonic() < deadline, f"the connections never settled at 5, seen {sorted(set(values))}"
-            time.sleep(0.05)
-        seen, end = set(), time.monotonic() + 8  # four polling intervals
+        # the start-up is over when two tables load, their two run processes alone are left (one started before the
+        # first claims committed finds nothing and ends) and every worker has connected
+        until(lambda: counting.execute("select count(*) from _rowvioli.status where status = 'loading'").fetchone()
+              == (2,) and runs() == 2 and count() == 2 + 3, timeout=60)
+        seen, end, other = set(), time.monotonic() + 8, set()  # four polling intervals
         while time.monotonic() < end:
             seen.add(count())
+            if seen != {2 + 3} and not other:  # which, for the message
+                other = set(counting.execute("select backend_type, application_name, state, left(query, 80) from "
+                                             "pg_stat_activity where datname = current_database()").fetchall())
             time.sleep(0.02)
-    assert seen == {2 + 3}
+    assert seen == {2 + 3}, other
 
 
 def test_a_worker_survives_an_unreachable_target_and_loads_again_once_it_accepts_connections(ready):
@@ -488,3 +489,39 @@ def test_the_target_table_of_a_run_line_is_padded_to_28_characters(monkeypatch, 
     monkeypatch.setattr(work, "colour", lambda: False)
     work.say_run({"claimed": "raw_erp.t", "started": time.monotonic()}, "started", "run 1")
     assert f"▶ {'raw_erp.t':<28} started " in capsys.readouterr().err
+
+
+def test_two_workers_and_a_run_on_a_table_whose_shape_changes_publish_each_change_once(ready):  # ticket 14, item 4
+    from test_columns import replays
+    from test_columns_go_and_come import columns, log_replays
+    ready.source("create table customers (id int primary key, v int, city text);"
+                 "insert into customers select g, g, 'c' || g from generate_series(1, 30) g")
+    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }').replace('"1h"', '"1s"'))
+    workers = [ready.start("work", "--slots", "2") for _ in range(2)]
+    shape = "select format_type(atttypid, atttypmod) from pg_attribute where attrelid = 'raw_erp.customers'::regclass" \
+            " and attname = 'v'"
+    until(lambda: ready.target("select status from _rowvioli.status") == [("ok",)], timeout=30)
+    for change, published in [
+            ("alter table customers drop column city", lambda: columns(ready) == ["id", "v"]),
+            ("alter table customers add column city text; update customers set city = 'x' || id",
+             lambda: "city" in columns(ready) and ready.target("select count(city) from raw_erp.customers") == [(30,)]),
+            ("alter table customers alter v type bigint; update customers set v = 10000000000 where id = 1",
+             lambda: ready.target(shape) == [("bigint",)]),
+            ("alter table customers alter v type text using v || 'x'", lambda: ready.target(shape) == [("text",)])]:
+        ready.source(change)
+        racing = [ready.start("run", "erp") for _ in range(2)]  # beside the workers, on the same table
+        until(published, timeout=30)
+        for r in racing:
+            assert r.wait(timeout=30) in (0, 1)
+    for w in workers:
+        w.send_signal(signal.SIGTERM)
+        assert w.wait(timeout=30) == 0
+    assert ready.target("select reason from _rowvioli.runs where status <> 'ok'") == []
+    # each change once in the columns table, in its order
+    assert [(c, op, type, mirror) for c, op, type, mirror in ready.target(
+        'select "column", _op, type, mirror from _rowvioli.columns__log where "column" in (\'city\', \'v\') '
+        'order by _loaded_at, "column"')] == [
+        ("city", "I", "text", True), ("v", "I", "integer", True), ("city", "U", "text", False),
+        ("city", "U", "text", True), ("v", "U", "bigint", True), ("v", "U", "text", True)]
+    replays(ready)
+    log_replays(ready)

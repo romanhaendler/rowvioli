@@ -293,15 +293,20 @@ def test_a_table_without_a_key_is_emptied_the_same_way(erp):
     assert rows(erp.target, MIRROR) == []
 
 
-@pytest.mark.parametrize("value, said", [('my "secret": value', 'invalid input syntax for type integer: "***"'),
-                                         ("3000000000", 'value "***" is out of range for type integer')])
-def test_a_value_postgres_quotes_in_its_message_stays_out_of_the_reason(erp, value, said):  # decision 54, item 8
+@pytest.mark.parametrize("value, column, state", [
+    ('my "secret": value', "n::int", "22P02"), ("3000000000", "n::int", "22003"),
+    # Postgres's own messages that show the value unquoted or as a name: date field value out of range: 2000-13-01,
+    # relation "3000000000" does not exist
+    ("3000000000", "make_date(2000, length(n) + 3, 1)", "22008"), ("3000000000", "n::regclass", "42P01")])
+def test_a_value_in_the_sources_message_is_withheld_by_its_sqlstate(erp, value, column, state):  # decision 54, item 8
     erp.source("create table texts (k int, n text)")
     erp.source("insert into texts values (1, %s)", [value])
-    erp.source("create view quoting as select k, n::int as n from texts")
+    erp.source(f"create view quoting as select k, {column} as n from texts")
     apply(erp, definition(erp, '"public.quoting" = {}\n'))
-    reason = failed(erp)  # x is the harness's password, which a reason hides
-    assert reason == said.replace("x", "***") and "secret" not in reason and "3000000000" not in reason, reason
+    reason = failed(erp)
+    assert reason == (f"a statement raised an error (SQLSTATE {state}) in the source, reading public.quoting; its "
+                      "message may hold a row's values, so it is left out here: the source's server log has it"), reason
+    assert "secret" not in reason and "3000000000" not in reason and "2000-13" not in reason
 
 
 def test_a_name_postgres_quotes_in_its_message_stays_in_the_reason(erp):
@@ -372,9 +377,10 @@ def test_a_message_a_function_in_a_source_view_raises_is_withheld(erp, statement
                f"if n = 'Anna' then {statement}; end if; return n; end $$")
     erp.source("create view checked as select customer_no, check_name(name) as name from customers")
     apply(erp, definition(erp, '"public.checked" = { key = ["customer_no"] }\n'))
-    # the driver gives a source's error while rows arrive as text only: no SQLSTATE. x is the harness's password
-    assert withheld(erp) == ("function check_name(te***t) raised an error in the source; its message may hold a row's "
-                             "values, so it is left out here: the source's server log has it")
+    state = "P0001" if "raise" in statement else "42P01"  # x is the harness's password
+    assert withheld(erp) == (f"function check_name(te***t) raised an error (SQLSTATE {state}) in the source, reading "
+                             "public.checked; its message may hold a row's values, so it is left out here: the "
+                             "source's server log has it")
 
 
 @pytest.mark.parametrize("constraint, change, says", [
@@ -442,3 +448,42 @@ def test_a_consumers_table_that_inherits_from_the_mirror_keeps_its_rows_when_the
     # the history view reads the change log, not a consumer's table that inherits from it
     assert rows(erp.target, "select customer_no from raw_erp.customers__history where _valid_to is null") == [
         (1,), (2,), (3,)]
+
+# a function that raises with a row's value, in a language whose frames Postgres names otherwise than PL/pgSQL's
+RAISES = {"plperl": ("""elog(ERROR, "bad row $_TD->{new}{name}"); return;""",
+                     """elog(ERROR, "bad name Secret$_[0]") if $_[0] eq 'Anna'; return $_[0];"""),
+          "plpython3u": ("""plpy.error("bad row " + TD["new"]["name"])""",
+                         """if n == "Anna": plpy.error("bad name Secret" + n)\nreturn n""")}
+PL = ("the test image has PL/Perl's and PL/Python's libraries but not perl and python3: start two postgres:16-alpine "
+      "containers, in both `apk add perl python3 && ln -s /usr/lib/perl5/core_perl/CORE/libperl.so /usr/lib/`, and run "
+      "with ROWVIOLI_TEST_SERVERS=<source container>,<target container>")
+
+
+def language(query, name):
+    try:
+        query(f"create extension {name}")
+    except psycopg.Error:
+        pytest.skip(PL)
+
+
+@pytest.mark.parametrize("name", RAISES)
+def test_a_message_a_consumers_trigger_in_pl_perl_or_pl_python_raises_is_withheld(erp, name):  # ticket 14, item 8
+    language(erp.target, name)
+    ok(erp)
+    erp.target(f"create function public.guard() returns trigger language {name} as $${RAISES[name][0]}$$")
+    erp.target("create trigger g before insert on raw_erp.customers for each row execute function public.guard()")
+    erp.source("update customers set name = 'Anna2' where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    state = {"plperl": "38000", "plpython3u": "XX000"}[name]  # external_routine_exception, internal_error
+    assert withheld(erp) == (f'function "guard" raised an error (SQLSTATE {state}) in the target; its message may '
+                             "hold a row's values, so it is left out here: the target's server log has it")
+
+
+@pytest.mark.parametrize("name", RAISES)
+def test_a_message_a_function_in_pl_perl_or_pl_python_in_a_source_view_raises_is_withheld(erp, name):
+    language(erp.source, name)
+    erp.source(f"create function check_name(n text) returns text language {name} as $${RAISES[name][1]}$$")
+    erp.source("create view checked as select customer_no, check_name(name) as name from customers")
+    apply(erp, definition(erp, '"public.checked" = { key = ["customer_no"] }\n'))
+    assert withheld(erp) == ('function "check_name" raised an error in the source; its message may hold a row\'s '
+                             "values, so it is left out here: the source's server log has it")

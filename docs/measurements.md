@@ -276,7 +276,16 @@ Limitations: one pooler version, one pool size, a synthetic load. A pass is no p
 | 8 | 0 | 0 | 100 | 0 |
 | 16 | 0 | 0 | 100 | 0 |
 
-`rowvioli status` through the pooler said `a connection pooler in transaction mode is in front of the target` 20 times of 20 with 0, 2 and 8 neighbours. Postgres gives every connection a server process of its own for its life, and a pooler in session mode keeps one per client, so neither is ever taken for a pooler: in `tests/test_run_mistakes.py` an idle pooler in transaction mode is refused and one in session mode loads. In the review of ticket 12, idle, with `SERVER_ROUND_ROBIN=1` and `MIN_POOL_SIZE=5`, so that five server connections wait and each goes to the next client in turn: 20 of 20 refused. Limitations: one pooler, one pool size.
+`rowvioli status` through the pooler said `a connection pooler in transaction mode is in front of the target` 20 times of 20 with 0, 2 and 8 neighbours. Postgres gives every connection a server process of its own for its life, and a pooler in session mode keeps one per client, so neither is ever taken for a pooler: in `tests/test_run_mistakes.py` an idle pooler in transaction mode is refused and one in session mode loads. In the review of ticket 12, idle, with `SERVER_ROUND_ROBIN=1` and `MIN_POOL_SIZE=5`, so that five server connections wait and each goes to the next client in turn: 20 of 20 refused. **Behind PgCat** (2026-11-24, review of ticket 14 of schema changes, `ghcr.io/postgresml/pgcat:v1.2.0`, 248 MB, pulled for the measurement and removed after; in front of `postgres:16-alpine` with `max_connections=200`; one pool of 5 server connections, `prepared_statements = true`, `query_parser_enabled = false`, `pool_mode` `transaction` or `session`). The check's three reads, as `target.connect()` makes them with the same driver, 100 times per row, each with its own two connections, beside neighbours running `pg_sleep(0.05)` through PgCat:
+
+| Mode | Neighbours | Second connection on the first's server process | Control connection moved | Driver's statement lost (`26000`) | Missed |
+|---|---|---|---|---|---|
+| transaction | 0 | 100 | 0 | 0 | 0 |
+| transaction | 2 | 53 | 15 | 32 | 0 |
+| transaction | 8 | 0 | 1 | 99 | 0 |
+| transaction | 16 | 0 | 0 | 100 | 0 |
+
+`rowvioli status` through PgCat in transaction mode said `a connection pooler in transaction mode is in front of the target` 20 times of 20 with 0, 2 and 8 neighbours. Idle, PgCat gives its one open server connection to every client, so the second connection lands on the first's server process, as behind PgBouncer. In session mode the check passed 100 of 100 with 0 and 2 neighbours (the second connection had a server process of its own, the first kept its own) and `status` worked 20 of 20; with 8 and 16 neighbours each holding one of the five server connections for its life, no further client got one (`could not get connection from the pool`), which is the pool's size and not the check. Limitations: two poolers, one pool size, one PgCat version. Supavisor's image is over 360 MB compressed and Odyssey publishes none, so neither was tried.
 
 ## 15. A whole run on a wide table
 
@@ -320,6 +329,21 @@ What the numbers say:
 
 Limitations: two runs per case, spread of the two up to 15 % (up to 30 % for the first load of the narrow table and the changed runs at 300,000 rows). The samples are one-second ones: a statement shorter than a second is counted by chance. Everything on one machine, no network, the source and the target competing for the same 8 cores. Not measured: 900 columns in a whole run, a million rows of this width (extrapolated about 2 minutes, not measured), the other connectors, a table that does not fit in the container's memory, a source on a real network, and the earlier staging step for comparison with the shakedown. The read alone at 300,000 rows was not timed.
 
+## 16. The first run after the upgrade on a large change log
+
+2026-11-24, the program at commit 037ff75 of `sc-14` (ticket 14 of schema changes, item 6), by hand, once per size; the script is not kept. Apple M2, 8 cores, 16 GB, macOS, Docker 29.3.1, one `postgres:16-alpine` (PostgreSQL 16.16, `shared_buffers = 512MB`) holding source and target, beside another agent's test containers.
+
+The case: a target as 0.4.1 leaves it (no columns table, no comment on `_op`), brought to version 4 by `init`; a mirror whose primary key a person changed by hand to `(id, v)`, and a definition changed since the table's last successful run, so that the run reads the change log once under each key to tell which wrote it (decision 54, ticket 11 item 1). The change log: a first fill of a quarter of its rows and three rounds of a `U` for every row, `(_run, _op, _loaded_at, id int, v text, w int)`, vacuumed and analysed. Both keys fit it, so the run reads it whole twice and stops to ask, the worst case of the step.
+
+| Log rows | Log size | The read under `(id)` | under `(id, v)` | The whole run (reported) |
+|---|---|---|---|---|
+| 500,000 | 33 MB | 0.56 s | 0.57 s | 2.8 s |
+| 2,000,000 | 130 MB | 1.25 s | 1.37 s | 3.7 s |
+
+The read is a window over the log sorted by key and `_loaded_at`, about 0.6 s per million rows, linear. Against the default `max_seconds = 3600` it would need billions of log rows; a table given a small `max_seconds` can outlast it, and then the reason says so and names the step (`while reading the change log raw_erp.t__log under the definition's key and the primary key, to tell which of them wrote it; raise max_seconds once, until a run has told it`), tested in `tests/test_init.py`. It happens once: the run that tells records the key.
+
+Limitations: one series, one key shape, a log that fits in memory, the read alone timed by `EXPLAIN ANALYZE`; a log larger than memory sorts on disk and was not measured.
+
 ## Summary
 
 | Claim | Evidence |
@@ -337,3 +361,4 @@ Limitations: two runs per case, spread of the two up to 15 % (up to 30 % for the
 | A process per run costs 0.1 to 0.2 s | prototype |
 | A transaction-mode pooler is caught, idle or busy, by `pg_backend_pid()` read on the control connection twice and on a second connection once, and by the driver's statement it loses | experiment 14 |
 | A whole run on 300 columns costs no more per cell than on 8; 100,000 rows take about 11 s, three times the rows 3.5 times as long, and the read from the source is most of it | experiment 15 |
+| The first run after the upgrade reads a change log under two keys at about 0.6 s per million rows | experiment 16 |

@@ -503,6 +503,17 @@ def test_a_nul_byte_in_a_text_value_is_removed_and_a_second_run_changes_nothing(
     assert answer["raw_files.nul"] == {"status": "ok", "inserted": 0, "updated": 0, "deleted": 0}
 
 
+def test_a_value_the_target_refuses_while_rows_are_staged_is_the_targets_in_the_reason(files):
+    """A NUL inside a list reaches the target (decision 51's shortcut), which refuses it: an error of the target, not
+    of the source, and withheld by its SQLSTATE (decision 54, item 8)."""
+    pq.write_table(pa.table({"id": [1], "tags": [["Secret\x00"]]}), files.dir / "files" / "nul.parquet")
+    code, answer = load(files, '"nul.parquet" = { key = ["id"] }\n')
+    assert code == 1
+    assert answer["raw_files.nul"]["reason"] == (
+        "a statement raised an error (SQLSTATE 22021) in the target; its message may hold a row's values, so it is "
+        "left out here: the target's server log has it")
+
+
 def test_a_csv_header_with_one_name_twice_arrives_with_the_second_numbered(files):  # cases A22, as it is today
     (files.dir / "files" / "twice.csv").write_text("a;a;b\n1;2;3\n")
     code, answer = load(files, '"twice.csv" = {}\n')
@@ -550,3 +561,46 @@ def test_a_timestamp_finer_than_microseconds_arrives_cut_to_microseconds(files):
     code, answer = load(files, '"ns.parquet" = {}\n')
     assert code == 0, answer
     assert files.target("select t from raw_files.ns") == [(datetime(2026, 1, 1, 0, 0, 0, 123456),)]
+
+
+def write(rv, name, rows):
+    """A JSON or an Excel file of `rows`, dicts of text; a key a row lacks is a field the file lacks."""
+    path = rv.dir / "files" / name
+    if name.endswith(".json"):
+        return path.write_text(json.dumps(rows))
+    columns = list(dict.fromkeys(k for r in rows for k in r))
+    db = duckdb.connect()
+    db.execute("LOAD excel")
+    db.register("t", pa.table({c: [r.get(c) for r in rows] for c in columns}))
+    db.execute(f"COPY t TO '{path}' (FORMAT xlsx, HEADER true)")
+
+
+@pytest.mark.parametrize("kind, unpinned", [("xlsx", "text"), ("json", "jsonb")])
+def test_excel_and_json_go_through_every_change_of_shape_a_csv_goes_through(files, kind, unpinned):  # ticket 14
+    """A pattern whose files differ, a header renamed, a pin set, changed and taken out, a field missing
+    (decision 54)."""
+    from test_columns_go_and_come import columns
+    table = f'"t_*.{kind}" = {{{{ key = ["id"], target_table = "t"{{}} }}}}\n'
+    text = "#>> '{}'" if kind == "json" else ""  # a JSON value as its text
+    type = "select format_type(atttypid, atttypmod) from pg_attribute where attname = 'amount' and attrelid in " \
+           "('raw_files.t'::regclass, 'raw_files.t__log'::regclass)"
+    write(files, f"t_1.{kind}", [{"id": "1", "amount": "10", "note": "a"}, {"id": "2", "amount": "20", "note": "b"}])
+    write(files, f"t_2.{kind}", [{"id": "3", "amount": "30"}])  # a file without note
+    code, answer = load(files, table.format(""))
+    assert code == 0, answer
+    assert files.target(f"select id {text}, amount {text}, note {text} from raw_files.t order by 1") == [
+        ("1", "10", "a"), ("2", "20", "b"), ("3", "30", None)]
+    write(files, f"t_1.{kind}", [{"id": "1", "amount": "10", "memo": "a"}, {"id": "2", "amount": "20", "memo": "b"}])
+    code, answer = load(files, table.format(', renamed = { memo = "note" }'))  # the header renamed
+    assert code == 0, answer
+    assert columns(files, "raw_files.t") == ["id", "amount", "memo"]
+    for pin, expected in [("integer", "integer"), ("bigint", "integer"), (None, unpinned)]:  # set, widened, taken out
+        code, answer = load(files, table.format(f', columns = {{ amount = "{pin}" }}' if pin else ""))
+        assert code == 0, answer
+        assert files.target(type) == [(expected,), (expected,)], pin
+    write(files, f"t_2.{kind}", [{"id": "3", "memo": "c"}])  # a field missing
+    code, answer = load(files, table.format(""))
+    assert code == 0, answer
+    assert files.target(f"select amount {text}, memo {text} from raw_files.t order by id {text}") == [
+        ("10", "a"), ("20", "b"), (None, "c")]
+    log_replays(files, "raw_files.t")

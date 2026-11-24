@@ -91,6 +91,7 @@ The target is exactly one database. Mirrors and bookkeeping have to be in the sa
 - **A cluster with failover.** The address names all nodes and asks for the one that accepts writes: `postgresql://etl@pg01,pg02/dwh?target_session_attrs=read-write`. Without `target_session_attrs` libpq takes the first node that answers, a standby too.
 - **Several target databases.** Each gets its own workers and its own definition.
 - **Consumers on replicas** see only published states.
+- **A backup with `pg_dump`** of the whole database keeps all a run needs: the mirrors, change logs and history views with their grants, the comments on `_op` and the record of the columns; a run against the restored database goes on as before. While a dump reads, rows load as usual, and a run that would change columns gives up after 10 s, since the dump holds its share lock to the end; the next run after the dump makes the change.
 - **A connection pooler** in front of the target works in session mode only. One in transaction mode is refused at the start of every command, before anything is claimed ([Failures](target.md#failures)).
 
 Rights in the target:

@@ -350,3 +350,49 @@ def test_a_missing_rows_field_fails_the_run_naming_rows_and_keeps_the_mirror(api
 def test_rows_that_is_no_field_name_fails_the_run_naming_the_option(api, rows):
     r, _ = load(api, f'a = {{ key = ["station"], path = "/readings", rows = {rows}, columns = {COLUMNS} }}')
     assert r.returncode == 1 and reason(api).endswith("a: the option rows must be a field name"), reason(api)
+
+
+def test_renamed_with_a_column_taken_out_of_columns_in_the_same_apply(api):  # ticket 14, item 3
+    load(api, 'a = { key = ["station"], path = "/readings", columns = { station = "text", n = "int8", day = "date" } }')
+    api.target("update _rowvioli.tables set requested_at = now()")
+    r, _ = load(api, 'a = { key = ["station"], path = "/renamed", columns = { station = "text", m = "int8" }, '
+                     'renamed = { m = "n" } }')
+    assert r.returncode == 0, r.stdout
+    assert columns(api, "raw_weather.a") == ["station", "m"]
+    assert api.target("select station, m from raw_weather.a order by 1") == [("a", 1), ("b", 2)]
+    # the rename writes no row: a is a U for day, which leaves the mirror, and b is new
+    assert api.target("select _op, station, m from raw_weather.a__log where _run = (select max(run) from "
+                      "_rowvioli.runs) order by 2, 1") == [("U", "a", 1), ("I", "b", 2)]
+    assert api.target('select _op, "column", mirror, was, "by" from _rowvioli.columns__log where _run = (select '
+                      'max(run) from _rowvioli.runs) order by "column"') == [
+        ("U", "day", False, None, "definition"), ("I", "m", True, "n", "definition"),
+        ("D", "n", True, None, "definition")]
+    log_replays(api, "raw_weather.a")
+
+
+def test_renamed_with_a_type_changed_to_another_family_stops_and_its_way_out_leads_out(api):  # ticket 14, item 3
+    load(api, 'a = { key = ["station"], path = "/readings", columns = { station = "text", n = "int8" } }')
+    api.target("update _rowvioli.tables set requested_at = now()")
+    r, _ = load(api, 'a = { key = ["station"], path = "/renamed", columns = { station = "text", m = "float8" }, '
+                     'renamed = { m = "n" } }')
+    assert r.returncode == 1
+    assert reason(api) == ("column n is renamed m in the table's definition, but bigint and double precision are types "
+                           "of two families, so their values are not the same: take m out of renamed")
+    assert columns(api, "raw_weather.a") == ["station", "n"]
+    api.target("update _rowvioli.tables set requested_at = now()")
+    r, _ = load(api, 'a = { key = ["station"], path = "/renamed", columns = { station = "text", m = "float8" } }')
+    assert r.returncode == 0, r.stdout
+    assert columns(api, "raw_weather.a") == ["station", "m"]
+    assert api.target("select station, n, m from raw_weather.a__history where _valid_to is null order by 1") == [
+        ("a", None, 1.0), ("b", None, 2.0)]
+    log_replays(api, "raw_weather.a")
+
+
+def test_A20_a_rest_column_name_longer_than_63_bytes_fails_the_run_and_names_the_column(api):  # ticket 10 left it
+    long = "c" * 64
+    r, _ = load(api, f'a = {{ key = ["station"], path = "/readings", columns = {{ station = "text", '
+                     f'{long} = "int8" }} }}')
+    assert r.returncode == 1
+    assert reason(api) == (f"column {long} of the source is longer than 63 bytes, the most Postgres keeps of a name: "
+                           "give it a shorter name in the source")
+    assert api.target("select to_regclass('raw_weather.a')") == [(None,)]

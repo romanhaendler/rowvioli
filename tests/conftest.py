@@ -26,7 +26,8 @@ from pathlib import Path
 import psycopg
 import pytest
 
-IMAGE = "postgres:16-alpine"
+# both containers on another Postgres: ROWVIOLI_TEST_IMAGE=postgres:14-alpine, or postgres:17
+IMAGE = os.environ.get("ROWVIOLI_TEST_IMAGE", "postgres:16-alpine")
 # where the containers' ports are reached: tests/odbc/run.sh runs the tests in a container and sets the Docker host
 HOST = os.environ.get("ROWVIOLI_TEST_HOST", "127.0.0.1")
 ROWVIOLI = shutil.which("rowvioli", path=os.path.dirname(sys.executable))

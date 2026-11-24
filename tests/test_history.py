@@ -188,6 +188,31 @@ def test_a_grant_passed_on_with_the_grant_option_comes_back_from_its_grantor_whe
                 erp.target(f"drop owned by {role} cascade; drop role {role}")
 
 
+def test_a_grant_passed_on_by_a_grantee_that_lost_its_grant_option_comes_back_from_the_runs_role(erp):
+    """A column grant a grantee passed on under its table grant's option outlives that option (Postgres revokes the
+    table's grants it passed on, not the column's); given again as that grantee it would be no grant, with a warning."""
+    db = erp.target("select current_database()")[0][0]
+    lender, borrower = f"lender_{db}", f"borrower_{db}"
+    try:
+        erp.target(f"create role {lender}; create role {borrower}")
+        ok(erp)
+        erp.target(f"grant usage on schema raw_erp to {lender}, {borrower}")
+        erp.target(f"grant select on raw_erp.customers__history to {lender} with grant option")
+        with psycopg.connect(erp.target_url, autocommit=True) as c:
+            c.execute(f"set role {lender}")
+            c.execute(f"grant select (city) on raw_erp.customers__history to {borrower}")
+        erp.target(f"revoke grant option for select on raw_erp.customers__history from {lender} cascade")
+        erp.source("alter table customers drop column name")  # the history view is built anew
+        again(erp)
+        assert erp.target("""select a.grantor::regrole::text, c.attname from pg_attribute c, aclexplode(c.attacl) a
+                              where c.attrelid = 'raw_erp.customers__history'::regclass
+                                and a.grantee = %s::regrole""", [borrower]) == [("postgres", "city")]
+    finally:
+        erp.target("drop view if exists raw_erp.customers__history")
+        for role in (borrower, lender):
+            erp.target(f"drop owned by {role} cascade; drop role {role}")
+
+
 LOG_FALSE = '"public.customers" = { key = ["customer_no"], log = false }\n'
 
 

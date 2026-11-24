@@ -88,3 +88,27 @@ def test_postgres_own_message_of_a_violated_constraint_under_a_function_keeps_it
     assert reason('IO: [libpq] Execution error [PGRES_FATAL_ERROR]: ERROR:  duplicate key value violates unique '
                   'constraint "u"\nDETAIL:  Key (id)=(1) already exists.\nCONTEXT:  SQL function "f" statement 1') \
         == 'duplicate key value violates unique constraint "u"'
+
+
+ODBC = "ODBC emitted an error calling 'SQLFetch': State: {}, Native error: 1, Message: "
+
+
+@pytest.mark.parametrize("state, message, shown", [
+    # a value as SQL Server, MySQL and a driver that tells nothing write it: withheld by the class, whatever the words
+    ("22018", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Conversion failed when converting the varchar "
+              "value 'Secret' to data type int.", None),
+    ("HY000", "[MySQL][ODBC 9.1(w) Driver][mysqld-9.1.0]Incorrect integer value: 'Secret' for column 'n' at row 1", None),
+    ("\0\0\0\0\0", "Secret is no number", None),
+    ("P0001", "ERROR: bad row Secret;\nError while executing the query", None),
+    # names alone: a refused login, a table that is not there in SQL Server, the driver manager's own
+    ("28000", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Login failed for user 'reader'.", True),
+    ("42S02", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Invalid object name 'dbo.orders'.", True),
+    ("IM002", "[unixODBC][Driver Manager]Data source name not found and no default driver specified", True)])
+def test_an_odbc_drivers_message_is_shown_by_its_sqlstate_alone(state, message, shown):  # decision 54, item 8
+    said = reason_line([], RuntimeError(ODBC.format(state) + message), "reading the source", "dbo.orders")
+    if shown:
+        assert said == ODBC.format(state) + message
+    else:
+        assert said == (f"a{' function' if state == 'P0001' else ' statement'} raised an error"
+                        f"{f' (SQLSTATE {state})' if state.isalnum() else ''} in the source, reading dbo.orders; its "
+                        "message may hold a row's values, so it is left out here: the source's server log has it")

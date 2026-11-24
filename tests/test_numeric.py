@@ -15,6 +15,8 @@ def prices(rv, columns, values):
 
 
 def test_a_new_mirror_has_the_sources_precision_and_scale_and_a_second_run_finds_no_change(erp):
+    if int(erp.source("show server_version_num")[0][0]) < 150000:
+        pytest.skip("a numeric's scale below 0 or above its precision needs Postgres 15 in the source")
     prices(erp, "a numeric(12, 2), b numeric(38, 10), c numeric(50, 5), d numeric, e numeric(5, 0), f numeric(5, -2),"
                 " g numeric(3, 5)",
            "(1, 137.00, 1.5, 123.45, 1.10, 5, 12345, 0.00123), (2, null, null, null, null, null, null, null),"

@@ -365,3 +365,23 @@ def test_a_change_log_begun_anew_after_a_change_of_key_has_one_key_and_does_not_
     erp.source("update customers set city = 'Köln' where customer_no = 1")
     again(erp)
     log_replays(erp)
+
+
+def test_a_foreign_key_and_a_view_on_the_key_are_named_with_a_view_on_a_gone_column_in_one_reason(erp):  # ticket 14
+    ok(erp)
+    erp.target("create schema reporting; create table reporting.orders (id int, customer_no int references "
+               "raw_erp.customers); create view reporting.names as select customer_no, name from raw_erp.customers "
+               "group by customer_no; create view reporting.cities as select city from raw_erp.customers")
+    erp.source("alter table customers drop column city")
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no", "name"] }\n'))
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp).replace("***", "x")  # the source's password is x, and the reason hides it
+    for named in ("constraint orders_customer_no_fkey on table reporting.orders depends on index "
+                  "raw_erp.customers_pkey", "view reporting.names depends on constraint customers_pkey on table "
+                  "raw_erp.customers", "view reporting.cities depends on column city of table raw_erp.customers"):
+        assert named in reason, reason
+    assert primary_key(erp) == ["customer_no"] and columns(erp) == ["customer_no", "name", "city"]
+    erp.target("drop table reporting.orders; drop view reporting.names, reporting.cities")  # one round of work
+    again(erp)
+    assert primary_key(erp) == ["customer_no", "name"] and columns(erp) == ["customer_no", "name"]
+    log_replays(erp)

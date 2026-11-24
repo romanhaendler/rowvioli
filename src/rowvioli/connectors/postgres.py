@@ -18,7 +18,9 @@ def read(connection, table, options):
     # the schema without running the query; each column is read as the type that arrives faithfully
     columns = ", ".join(_read_as(f) for f in cur.adbc_execute_schema("SELECT * FROM " + name))
     cur.execute(f"SELECT {columns} FROM {name}")
-    reader = cur.fetch_record_batch()
+    # the driver manager's own reader: an error while rows arrive keeps Postgres's SQLSTATE and fields, which decide
+    # what of its message a reason shows (decision 54, item 8); fetch_record_batch() gives Arrow's, with the text alone
+    reader = cur._results.reader
     schema = pa.schema([pa.field(f.name, _decimal(f)) if _is_numeric(f) else f for f in reader.schema])
 
     def batches():

@@ -285,3 +285,44 @@ def test_the_control_connection_asks_postgres_to_notice_a_dead_worker_within_a_m
     names = ["tcp_keepalives_idle", "tcp_keepalives_interval", "tcp_keepalives_count", "tcp_user_timeout"]
     assert [target.sql(conn, f"SELECT current_setting('{n}')")[0][0] for n in names] == ["30", "10", "3", "60000"]
     conn.close()
+
+
+def test_a_first_run_after_the_upgrade_ended_while_it_reads_the_change_log_under_two_keys_names_that_step(erp):
+    """Ticket 14 of schema changes, item 6: the read takes about 0.6 s per million log rows (docs/measurements.md 16);
+    a consumer who holds the change log stands in for a log large enough to outlast max_seconds."""
+    table = '"public.customers" = {{ key = ["customer_no"], max_seconds = {} }}\n'
+    ok(erp)
+    erp.source("update customers set name = 'Anna2' where customer_no = 1")  # a U the other key never saw
+    again(erp)
+    erp.target(HAND)
+    apply(erp, definition(erp, table.format(3)))  # the definition no longer tells
+    released(erp)
+    holder = psycopg.connect(erp.target_url)
+    holder.execute("lock table raw_erp.customers__log in access exclusive mode")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    holder.close()
+    assert reason.replace("***", "x") == (
+        "ended after max_seconds = 3 while reading the change log raw_erp.customers__log under the definition's key "
+        "and the primary key, to tell which of them wrote it; raise max_seconds once, until a run has told it")
+    apply(erp, definition(erp, table.format(30)))
+    again(erp)
+    assert primary_key(erp) == ["customer_no"]
+    log_replays(erp)
+
+
+def test_a_change_log_from_before_the_upgrade_that_fits_neither_key_stops_with_the_statement_for_each(erp):
+    """Ticket 11 left it untested, since 0.4.1 never wrote such a log itself: a person changed primary key and
+    definition by hand and kept loading, so the log has rows under both keys (ticket 14 of schema changes)."""
+    ok(erp)
+    erp.target(HAND)
+    apply(erp, elsewhere(erp))
+    released(erp)
+    # an I for a key that lives, under either key: written by hand, or under the other one
+    erp.target("insert into raw_erp.customers__log select _run, 'I', _loaded_at + interval '1 s', customer_no, name, "
+               "city from raw_erp.customers__log where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp).replace("***", "x")  # the source's password is x
+    assert reason.startswith("the primary key of raw_erp.customers is (customer_no, name), the definition's key is "
+                             "(customer_no), and nothing in the target tells"), reason
+    assert """'[{"key": ["customer_no"]}]'""" in reason and """'[{"key": ["customer_no", "name"]}]'""" in reason
