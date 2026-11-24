@@ -158,6 +158,13 @@ def check(conn, t, staged, mirror, log_columns):
            else "its mirror is missing" if not mirror else None)
     if log_columns and why:
         raise Exception(f"the change log {t['name']}__log exists and {why}: {drop}")
+    # decision 9: one branch over a change log written under two keys gives wrong rows, so the record says them
+    if log_columns and stretches(conn, t) is None and (noted := sql(
+            conn, """SELECT substr(note, length($2) + 1) FROM _rowvioli.columns__log WHERE id = $1
+                      AND starts_with(note, $2) ORDER BY _loaded_at DESC LIMIT 1""", [t["id"], KEYS_NOTE])):
+        raise Exception(f"the comment on column _op of the change log {t['name']}__log, which says the keys it was "
+                        "written under, is missing or unreadable, and the key has changed: put it back, "
+                        f"COMMENT ON COLUMN {t['log_table']}._op IS '{noted[0][0].replace(chr(39), chr(39) * 2)}'")
     if key:
         # the diff, the change log and the history view carry them beside the table's columns
         for name in ["_op", "_run", "_loaded_at", "_valid_from", "_valid_to"] if t["log"] else ["_op"]:
@@ -451,7 +458,7 @@ def carry_out(conn, t, plan):
                 sql(conn, f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(c)} DROP NOT NULL" for c in loose))
         if by == "definition" and plan["key"]["log"]:  # a stretch of the change log begins under the new key
             [(now,)] = sql(conn, "SELECT now()::text")
-            note = "the change log's keys: " + keys_of_log(conn, t, (stretches(conn, t) or [{"key": was}])
+            note = KEYS_NOTE + keys_of_log(conn, t, (stretches(conn, t) or [{"key": was}])
                                                            + [{"from": now, "key": key}])
         changes.update({c: {"by": by, "note": note} for c in {*was, *key}})
     for name in plan["gone"]:
@@ -460,6 +467,9 @@ def carry_out(conn, t, plan):
         alter(conn, f"column {name} is gone from the source and would leave the mirror {t['name']}",
               f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
     return changes
+
+
+KEYS_NOTE = "the change log's keys: "  # the note in the columns table of a change of key, before the comment's text
 
 
 def stretches(conn, t):

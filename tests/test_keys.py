@@ -200,3 +200,25 @@ def test_C13_a_key_value_that_changes_is_a_D_and_an_I(erp):
     assert erp.target(f"select _op, customer_no, name from raw_erp.customers__log {THIS_RUN} order by _op") == [
         ("D", 1, "Anna"), ("I", 8, "Anna")]
     log_replays(erp)
+
+
+ANOTHER_KEY = '"public.customers" = { key = ["customer_no", "name"] }\n'
+
+
+@pytest.mark.parametrize("removal", ["is null", "is 'our customers'"])
+def test_the_comment_on_op_removed_after_a_change_of_key_stops_the_run_with_the_text_to_put_back(erp, removal):
+    ok(erp)
+    apply(erp, definition(erp, ANOTHER_KEY))
+    again(erp)
+    keys = comment(erp)
+    erp.target(f"comment on column raw_erp.customers__log._op {removal}")
+    erp.source("update customers set city = 'Köln' where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp).replace("***", "x")  # the source's password is x, and the reason hides it
+    put_back = f"""COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '{json.dumps(keys)}'"""
+    assert reason == ("the comment on column _op of the change log raw_erp.customers__log, which says the keys it was "
+                      f"written under, is missing or unreadable, and the key has changed: put it back, {put_back}")
+    erp.target(put_back)
+    again(erp)
+    assert comment(erp) == keys
+    log_replays(erp)
