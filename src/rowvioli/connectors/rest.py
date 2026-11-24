@@ -4,17 +4,16 @@ timestamptz) and `page` names a query parameter that counts from 1 until a page 
 before fails the run. Each response is a JSON array of flat objects and becomes one batch; with the option `rows` the
 array sits in a field of a JSON object instead, `rows = "data"` or `rows = "result.items"` (names joined by dots), and a
 page ends the paging when the array in the field is empty."""
-import importlib.metadata
 from datetime import date, datetime, timezone
 from urllib.parse import urlsplit
 
 import httpx
 import pyarrow as pa
 
-from ..contract import known_options
+from ..contract import known_options, version
 
 # the reader's version, so that columns another one delivers are recorded as by = reader (decision 11)
-driver_version = f"httpx {importlib.metadata.version('httpx')}"
+driver_version = version("httpx")
 
 TYPES = {"text": pa.string(), "int8": pa.int64(), "float8": pa.float64(), "bool": pa.bool_(), "date": pa.date32(),
          "timestamp": pa.timestamp("us"), "timestamptz": pa.timestamp("us", tz="UTC")}

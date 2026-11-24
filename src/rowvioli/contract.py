@@ -2,6 +2,7 @@
 Arrow batches, and optionally `tables(connection)` for `rowvioli list` and `driver_version`, a string recorded with
 every run. Connectors register as modules in the entry point group `rowvioli.connectors` under their `type`; the
 shipped ones do the same."""
+import importlib.metadata
 from importlib.metadata import entry_points
 
 
@@ -24,3 +25,12 @@ def known_options(type, table, options, known=()):
         if name not in known:
             raise Exception(f"{table}: the option {name} is not one of the {type} connector's; it knows "
                             + (", ".join(known) or "no option"))
+
+
+def version(package):
+    """A shipped connector's `driver_version`: the package it reads with and its version, or none for a package
+    installed without its metadata, which a run does not need."""
+    try:
+        return f"{package} {importlib.metadata.version(package)}"
+    except importlib.metadata.PackageNotFoundError:
+        return None

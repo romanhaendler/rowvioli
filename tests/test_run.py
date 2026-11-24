@@ -105,6 +105,17 @@ def test_runs_record_the_version_of_the_program_and_of_the_driver_the_connector_
         (version, f"adbc-driver-postgresql {importlib.metadata.version('adbc-driver-postgresql')}")]
 
 
+def test_a_driver_installed_without_its_metadata_loads_and_its_version_is_none(erp):
+    (erp.dir / "site").mkdir()  # Python runs a sitecustomize it finds on the path at its start
+    (erp.dir / "site" / "sitecustomize.py").write_text(
+        "import importlib.metadata\nfound = importlib.metadata.version\n\n\ndef version(name):\n"
+        "    if name == 'adbc-driver-postgresql':\n        raise importlib.metadata.PackageNotFoundError(name)\n"
+        "    return found(name)\n\n\nimportlib.metadata.version = version\n")
+    r = erp.run("run", env={"PYTHONPATH": str(erp.dir / "site")})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert erp.target("select driver_version from _rowvioli.runs") == [(None,)]
+
+
 def test_a_column_name_longer_than_63_bytes_arrives_cut_and_a_key_naming_it_fails(erp):  # cases A20, as it is today
     long = "c" * 70
     erp.source(f'create table wide (k int primary key, "{long}" int)')
