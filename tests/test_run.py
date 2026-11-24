@@ -160,7 +160,7 @@ def test_a_table_without_a_key_is_replaced_as_a_whole_and_has_no_change_log(erp)
 
 def column_types(rv, table):
     return rv.target("""select attname, format_type(atttypid, atttypmod) from pg_attribute
-                         where attrelid = %s::regclass and attnum > 0 order by attnum""", [table])
+                         where attrelid = %s::regclass and attnum > 0 and not attisdropped order by attnum""", [table])
 
 
 FAITHFUL = {"b": "bytea", "u": "uuid", "ts": "timestamp without time zone", "tz": "timestamp with time zone",
@@ -243,6 +243,27 @@ def test_a_mirror_with_a_json_column_from_before_fails_naming_the_column_and_sta
     erp.target('ALTER TABLE "raw_erp"."docs" DROP COLUMN "j"')  # the way out
     ok(erp, "erp")
     assert erp.target("select pg_typeof(j)::text, j::text from raw_erp.docs") == [("jsonb", '{"a": 1}')]
+
+
+def test_a_json_column_from_before_in_mirror_and_change_log_goes_and_comes_back_as_jsonb(erp):  # ticket 15, P2
+    erp.source("""create table docs (id int primary key, j json, js json[]);
+                  insert into docs values (1, '{"a": 1}', array['{"b": 2}'::json]), (2, null, null)""")
+    apply(erp, definition(erp, '"public.docs" = { key = ["id"] }\n'))
+    ok(erp)
+    erp.target("drop view raw_erp.docs__history")  # as an earlier build left them; the run creates the view again
+    for table in ("raw_erp.docs", "raw_erp.docs__log"):
+        erp.target(f"alter table {table} alter j type json, alter js type json[]")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    assert column_types(erp, "raw_erp.docs") == [("id", "integer"), ("j", "jsonb"), ("js", "jsonb[]")]
+    assert rows(erp.target, "select id, j::text, js::text from raw_erp.docs") == [
+        (1, '{"a": 1}', '{"{\\"b\\": 2}"}'), (2, None, None)]
+    [(run_,)] = erp.target("select max(run) from _rowvioli.runs")  # the change log keeps the old values as they were
+    assert erp.target(f"select _run = {run_}, pg_typeof(j__{run_})::text, j__{run_}::text, j::text from "
+                      "raw_erp.docs__log where id = 1 order by _run") == [
+        (False, "json", '{"a": 1}', None), (True, "json", None, '{"a": 1}')]
+    assert run(erp, "erp")[1]["tables"]["raw_erp.docs"] == {"status": "ok", "inserted": 0, "updated": 0,
+                                                            "deleted": 0}
 
 
 def test_run_exits_1_when_a_table_fails_and_names_every_table_it_touched(erp):

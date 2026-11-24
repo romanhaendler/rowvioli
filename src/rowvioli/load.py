@@ -496,13 +496,17 @@ def stage(conn, t):
     if rows_read == 0 and t["max_delete_share"] < 1 and sql(conn, "SELECT to_regclass($1)", [t["mirror"]])[0][0] and \
             sql(conn, f"SELECT 1 FROM ONLY {t['mirror']} LIMIT 1"):
         raise Exception("the source delivered zero rows; max_delete_share = 1.0 allows an empty table")
-    # json has no equality, so the comparison could not run; the driver writes Arrow's json only as json
-    jsonb = {"json": "jsonb", "json[]": "jsonb[]"}
-    to_jsonb = [f"ALTER {quote(n)} TYPE {jsonb[type]} USING {quote(n)}::{jsonb[type]}"
-                for n, type in sql(conn, COLUMNS, ["pg_temp._stage"]) if type in jsonb]
+    # the driver writes Arrow's json only as json
+    to_jsonb = [f"ALTER {quote(n)} TYPE {JSONB[type]} USING {quote(n)}::{JSONB[type]}"
+                for n, type in sql(conn, COLUMNS, ["pg_temp._stage"]) if type in JSONB]
     if to_jsonb:
         sql(conn, "ALTER TABLE _stage " + ", ".join(to_jsonb))
     return rows_read
+
+
+# json has no equality, so a comparison of it could not run: it is staged as jsonb, and the mirror's json of before is
+# compared as jsonb while it goes
+JSONB = {"json": "jsonb", "json[]": "jsonb[]"}
 
 
 def without_nul(batches, raised):
@@ -544,11 +548,12 @@ def diff(conn, t, staged, mirror, plan):
     # name and never compared with its successor, a renamed one under its old name
     read = {c: c for c in had if c not in plan["gone"]} | {plan["retired"].get(c, c): c for c in plan["gone"]} \
         | plan["renamed"]
-    columns = staged + [(plan["retired"].get(c, c), had[c]) for c in plan["gone"]]
+    columns = staged + [(plan["retired"].get(c, c), JSONB.get(had[c], had[c])) for c in plan["gone"]]
     # a new column is null in the mirror once added, and one that went is null in the source, so a row differs only
     # if the other side has a value there
     s = ", ".join(f"s.{quote(c)}" if c in staging else f"NULL::{type}" for c, type in columns)
-    m = ", ".join(f"m.{quote(read[c])}" if c in read else f"NULL::{type}" for c, type in columns)
+    m = ", ".join(f"m.{quote(read[c])}" + (f"::{type}" if had[read[c]] in JSONB else "") if c in read
+                  else f"NULL::{type}" for c, type in columns)
     first = quote(read.get(t["key"][0], t["key"][0]))
     on = " AND ".join(f"s.{quote(k)} = m.{quote(read.get(k, k))}" for k in t["key"])
     if not mirror or plan["key"].get("by") == "definition":  # under another key: every old row goes, every new comes
