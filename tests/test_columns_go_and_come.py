@@ -414,6 +414,43 @@ def test_A19_a_new_source_column_named_like_a_retired_one_stops_until_a_person_r
     log_replays(erp)
 
 
+def test_a_source_column_named_like_a_retired_one_that_goes_and_comes_back_continues_its_log_column(erp):
+    erp.source("alter table customers add column city__2024 text")  # a column of the source, retired by no run
+    erp.source("update customers set city__2024 = 'old' where customer_no = 1")
+    ok(erp)
+    erp.source("alter table customers drop column city__2024")
+    again(erp)
+    erp.source("alter table customers add column city__2024 text")
+    erp.source("update customers set city__2024 = 'new' where customer_no = 2")
+    again(erp)
+    assert columns(erp) == ["customer_no", "name", "city", "city__2024"]
+    assert [c for c in columns(erp, "raw_erp.customers__log") if c.startswith("city")] == ["city", "city__2024"]
+    assert erp.target("select customer_no, city__2024 from raw_erp.customers__history where _valid_to is null "
+                      "order by 1") == [(1, None), (2, "new"), (3, None)]
+    log_replays(erp)
+
+
+def test_a_retired_column_whose_comment_a_person_removed_stops_with_the_text_to_put_back(erp):
+    ok(erp)
+    erp.source("alter table customers drop column city")
+    again(erp)
+    erp.source("alter table customers add column city integer")
+    again(erp)
+    [(run,)] = erp.target("select max(run) from _rowvioli.runs")
+    erp.target(f"comment on column raw_erp.customers__log.city__{run} is null")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    put_back = f"""COMMENT ON COLUMN "raw_erp"."customers__log"."city__{run}" IS '{{"retired": "city"}}'"""
+    reason = failed(erp)
+    assert reason == (f"the comment on column city__{run} of the change log raw_erp.customers__log, which says that it "
+                      f"keeps the old values of city, is missing or unreadable: put it back, {put_back}"), reason
+    erp.target(put_back)
+    again(erp)
+    erp.source(f"alter table customers add column city__{run} text")  # and the comment keeps the retired name taken
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp).startswith(f"column city__{run} of the source has the name under which the change log keeps "
+                                  "the old values of city")
+
+
 def follow(rv, reason):
     """Runs the statements a reason about retired names longer than 63 bytes gives, each column under its first
     letter and _old, the same name in mirror and change log."""

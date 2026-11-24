@@ -194,12 +194,14 @@ def check(conn, t, staged, mirror, log_columns):
                                 f"the mirror and the next run brings it again: "
                                 f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
             plan["gone"].append(name)
+    said = comments(conn, t)  # decision 54: a retired column is known by its comment, never by its name
+    retired = {n: was for n, text in said.items() if (was := retirement(text))}
     for name, type in staged:
         if name not in logged or name in had and name not in plan["gone"]:
             continue
-        if (retired := re.fullmatch(r"(.+)__\d+", name)) and retired[1] in logged:
+        if name in retired:
             raise Exception(f"column {name} of the source has the name under which the change log keeps the old "
-                            f"values of {retired[1]}: " + way.format(quote(name)))
+                            f"values of {retired[name]}: " + way.format(quote(name)))
         if family(logged[name]) == family(type):
             continue
         new = f"{name}__{t['run']}"
@@ -247,6 +249,15 @@ def check(conn, t, staged, mirror, log_columns):
         raise Exception(f"the comment on column _op of the change log {t['name']}__log, which says the keys it was "
                         "written under, is missing or unreadable, and the key has changed: put it back, "
                         f"COMMENT ON COLUMN {t['log_table']}._op IS {literal(noted[0][0])}")
+    # the same for a retired column's comment, whose text the record noted when the run retired it
+    for name, note in sql(conn, 'SELECT "column", note FROM _rowvioli.columns WHERE id = $1 AND target_schema = $2 '
+                                "AND target_table = $3 AND NOT mirror AND strpos(note, $4) > 0",
+                          [t["id"], t["schema"], t["table"], RETIRED_NOTE]):
+        if name in said and name not in retired:
+            text = json.dumps(json.JSONDecoder().raw_decode(note.partition(RETIRED_NOTE)[2])[0])
+            raise Exception(f"the comment on column {name} of the change log {t['name']}__log, which says that it "
+                            f"keeps the old values of {retirement(text)}, is missing or unreadable: put it back, "
+                            f"COMMENT ON COLUMN {t['log_table']}.{quote(name)} IS {literal(text)}")
     if key:
         names =", ".join(quote(k) for k in key)
         if sql(conn, f"SELECT 1 FROM _stage WHERE {' OR '.join(quote(k) + ' IS NULL' for k in key)} LIMIT 1"):
@@ -652,7 +663,9 @@ def carry_out(conn, t, plan):
         changes[old], changes[new] = {"by": by}, {"was": old, "by": by, "note": plan["proven"].get(new)}
     for old, new in plan["retired"].items():
         sql(conn, f"ALTER TABLE {t['log_table']} RENAME COLUMN {quote(old)} TO {quote(new)}")
-        changes[new] = {"was": old}
+        text = json.dumps({"retired": old})  # the change log says it of itself, as of its keys
+        sql(conn, f"COMMENT ON COLUMN {t['log_table']}.{quote(new)} IS {literal(text)}")
+        changes[new] = {"was": old, "note": RETIRED_NOTE + text}
     # decision 54: the comment on _op names the key columns of every stretch, renamed and retired ones by their new names
     moved = plan["retired"] | {o: n for n, o in plan["renamed"].items()}
     if moved and keys:
@@ -703,18 +716,32 @@ def carry_out(conn, t, plan):
 
 KEYS_NOTE = "the change log's keys: "  # the note in the columns table of a change of key, before the comment's text
 # (the reader's versions may come first)
+RETIRED_NOTE = "the change log's comment: "  # the note of a retired column, before its comment's text
+
+
+def comments(conn, t):
+    """Decision 54: what the change log says of itself, the comment on each of its columns by name (None for none):
+    on _op its keys, on a retired column whose old values it keeps. Empty without a change log."""
+    return dict(sql(conn, "SELECT attname, col_description(attrelid, attnum) FROM pg_attribute WHERE attrelid = "
+                          "to_regclass($1) AND attnum > 0 AND NOT attisdropped", [t["log_table"]]))
+
+
+def retirement(text):
+    """The column whose old values a change log's column keeps, as its comment says it, or None."""
+    try:
+        was = json.loads(text)["retired"]
+        return was if isinstance(was, str) else None
+    except Exception:  # no comment, or one the program did not write
+        return None
 
 
 def stretches(conn, t):
     """Decision 54: the keys the change log was written under, as the comment on its column _op says them, a list of
     {"key": [...]} with "from", the moment it began, on every one but the first. None without a readable comment, also
     for one that names a column the change log lacks: such a change log has had one key."""
-    [(text, names)] = sql(conn, "SELECT col_description(to_regclass($1), (SELECT attnum FROM pg_attribute WHERE attrelid "
-                                "= to_regclass($1) AND attname = '_op')), (SELECT json_agg(attname) FROM pg_attribute "
-                                "WHERE attrelid = to_regclass($1) AND attnum > 0 AND NOT attisdropped)::text",
-                          [t["log_table"]])
+    said = comments(conn, t)
     try:
-        keys, names = json.loads(text), json.loads(names)
+        keys, names = json.loads(said.get("_op")), list(said)
         if keys and all(isinstance(k["key"], list) and k["key"] and all(c in names for c in k["key"])
                         and ("from" in k) == (i > 0) and (not i or datetime.fromisoformat(k["from"]))
                         for i, k in enumerate(keys)):

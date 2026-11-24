@@ -5,7 +5,7 @@
 Added:
 
 - **The mirror follows the source where a change log keeps what was** (decision 54). A table with a key and a change log no longer stops at a changed shape:
-  - A column the source drops leaves the mirror and stays in the change log and the history, with a `U` for every row that had a value. One that comes back in its old family continues its log column; in another family the old values stay under `<name>__<run>`.
+  - A column the source drops leaves the mirror and stays in the change log and the history, with a `U` for every row that had a value. One that comes back in its old family continues its log column; in another family the old values stay under `<name>__<run>`, a retired column, which the change log's comment on it says (`{"retired": "<name>"}`).
   - A type of the same family is kept while every value fits and widened, in mirror and change log, when one does not. A type of another family is a column that goes and comes back. This replaces the handling of `numeric` alone: a value that does not fit a `numeric(p,s)` no longer fails the run.
   - Another key replaces the mirror as a whole and keeps the history: the change log gets a `D` per old row and an `I` per new one, and the history view has a branch per key. A first key adds the primary key and begins the change log; the same columns in another order are the same key; a primary key changed by hand is put back.
   - A column the data prove renamed, or the table says is, is renamed in mirror and change log with no row written, and a consumer's view on it keeps working.
