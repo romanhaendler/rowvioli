@@ -16,7 +16,9 @@ MIGRATIONS = [("sql/migrate_3_4.sql", "GRANT SELECT, INSERT, UPDATE, DELETE ON _
 # and frees its locks (measured: 62 s after the network was cut, without it still held after 240 s)
 KEEPALIVE = "keepalives_idle=30&keepalives_interval=10&keepalives_count=3&tcp_user_timeout=60000"
 SESSION = {"client_connection_check_interval": "2s", "tcp_keepalives_idle": "30", "tcp_keepalives_interval": "10",
-           "tcp_keepalives_count": "3", "tcp_user_timeout": "60000"}
+           "tcp_keepalives_count": "3", "tcp_user_timeout": "60000",
+           # the driver reads and writes text as UTF8: in a LATIN1 database Müller was stored as MÃ¼ller
+           "client_encoding": "UTF8"}
 
 # what a worker may start and a run may claim, asked with the same counts by both (decision 34)
 CLAIMABLE = files(__package__).joinpath("sql/claimable.sql").read_text()
@@ -84,18 +86,30 @@ def connect(init=False, versioned=True, pooler=True):
         if not sql(conn, "SELECT to_regclass('_rowvioli.status') IS NOT NULL")[0][0]:
             raise SystemExit(NO_SCHEMA)
         return conn
+    if init:  # a second init waits for the first and reads the version it left (init containers on replicas)
+        sql(conn, "SELECT pg_advisory_lock(hashtext('_rowvioli'))")
     version = None
     if sql(conn, "SELECT to_regclass('_rowvioli.meta') IS NOT NULL")[0][0]:
         version = sql(conn, "SELECT schema_version FROM _rowvioli.meta")[0][0]
     if init and (version is None or 3 <= version < SCHEMA_VERSION):  # below 3 there is no step: refused below
         steps = [step for step, _ in MIGRATIONS[0 if version is None else version - 3:]]
         steps = ["sql/schema.sql", *steps] if version is None else steps
-        transaction(conn, "".join(files(__package__).joinpath(step).read_text() for step in steps))
+        role = ""
+        if version is not None:  # the new objects get the owner of the old ones, also when a superuser runs the step
+            [(owner, member)] = sql(conn, "SELECT relowner::regrole::text, pg_has_role(relowner, 'MEMBER') "
+                                          "FROM pg_class WHERE oid = '_rowvioli.runs'::regclass")
+            if not member:
+                raise SystemExit(f"_rowvioli belongs to the role {owner}: run rowvioli init as {owner} or as a "
+                                 "superuser; nothing was changed")
+            role = f"SET LOCAL ROLE {owner};\n"
+        transaction(conn, role + "".join(files(__package__).joinpath(step).read_text() for step in steps))
         if version is not None:
             print(f"the schema _rowvioli is brought from version {version} to {SCHEMA_VERSION}; a worker's role needs "
                   "these rights on its new objects, which the program does not grant (worker stands for that role):\n"
                   + "\n".join(grants for _, grants in MIGRATIONS[version - 3:]))
         version = SCHEMA_VERSION
+    if init:
+        sql(conn, "SELECT pg_advisory_unlock(hashtext('_rowvioli'))")
     if version is None:
         raise SystemExit(NO_SCHEMA)
     if version != SCHEMA_VERSION:

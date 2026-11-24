@@ -2,7 +2,8 @@
 (`orders_*.csv`) that reads every matching file as one table; they must be of one kind, and a column one of them
 lacks is empty in its rows.
 Every file must lie inside `path`, also through a symbolic link. Reads CSV, Excel, Parquet and JSON through DuckDB by
-extension (`.json`, `.jsonl` and `.ndjson` hold one object per row). Parquet keeps its own types; CSV and Excel
+extension (`.json`, `.jsonl` and `.ndjson` hold one object per row). Parquet keeps its own types (a struct or a map
+becomes jsonb, as a nested JSON value); CSV and Excel
 arrive as text and JSON as jsonb, a column per key, except the columns the option `columns` names with a DuckDB type
 (a JSON value is cast from its text, so `"Anna"` loses its quotes); one it names that no file has is empty. Every other option is a named parameter of
 DuckDB's reader, such as `sep`, `skip` or `sheet`; a name that belongs to rowvioli, such as `parallel`, reaches no
@@ -68,11 +69,25 @@ def read(connection, table, options):
     for name in options:
         if not name.isidentifier():
             raise Exception(f"{table}: {name} is not an option of DuckDB's {reader}")
-    for type in columns.values():
+    for column, type in columns.items():
         if not TYPE.fullmatch(type):
             raise Exception(f"{table}: {type} is not a column type")
-    text = "->>'$'" if json else ""  # a JSON value is cast from its text, as in a CSV: "Anna" without the quotes
-    casts = ", ".join(f'CAST({quote(c)}{text} AS {t}) AS {quote(c)}' for c, t in columns.items())
+        if type.strip().lower() in ("uhugeint", "uint128"):  # DuckDB hands it to Arrow as a signed decimal, wrapped
+            raise Exception(f"{table}: column {column} as uhugeint would arrive wrapped above 2^127 - 1; use "
+                            "hugeint, or text for more than 38 digits")
+
+    def text(c, t):
+        """What a column under `columns` is cast from. A JSON value's text, as in a CSV: "Anna" without the quotes. An
+        Excel cell's date and time where it holds a number: Excel keeps a date as the days since 1899-12-30 (up to
+        9999-12-31), the time as their fraction, to the millisecond, and a format the text DuckDB reads leaves out."""
+        if json:
+            return f"{quote(c)}->>'$'"
+        if reader == "read_xlsx" and re.match(r"\s*(date|timestamp)", t, re.IGNORECASE):
+            days = f"TRY_CAST({quote(c)} AS DOUBLE)"
+            return (f"CASE WHEN {days} BETWEEN 0 AND 2958466 THEN strftime(TIMESTAMP '1899-12-30' + "
+                    f"to_milliseconds(round({days} * 86400e3)::BIGINT), '%Y-%m-%d %H:%M:%S.%f') ELSE {quote(c)} END")
+        return quote(c)
+    casts = ", ".join(f'CAST({text(c, t)} AS {t}) AS {quote(c)}' for c, t in columns.items())
     db = duckdb.connect()
 
     def relation(path, **extra):
@@ -84,6 +99,11 @@ def read(connection, table, options):
     # each file's columns; its relation goes at once, since it holds the file open
     shapes = {path: dict(zip(part.columns, map(str, part.types))) for path, part in zip(paths, map(relation, paths))}
     first = {}  # the columns of all files, in the order they first appear; a file without one has it empty
+    for name, path in zip(names, paths):  # DuckDB reads a decimal of more than 38 digits as a double, rounded
+        if reader == "read_parquet" and (wide := db.sql("SELECT name, precision FROM parquet_schema(?) WHERE "
+                                                        "precision > 38 LIMIT 1", params=[path]).fetchall()):
+            raise Exception(f"{name}: column {wide[0][0]} is a decimal of {wide[0][1]} digits, more than the 38 DuckDB "
+                            "reads exactly; write it into the file as text or as a decimal of at most 38 digits")
     for name, shape in zip(names, shapes.values()):
         for column, type in shape.items():
             if first.setdefault(column, type) != type:
@@ -94,6 +114,11 @@ def read(connection, table, options):
                         "or set sep (also for a file of one column) and skip (for lines before the header)")
     for column in [c for c in columns if c not in first]:  # named and in no file: empty, as in REST (decision 54)
         first[column] = "JSON" if json else "VARCHAR"
+
+    # a struct or a map, also in a list, and a list of lists have no type the driver writes into the target: jsonb, as
+    # the JSON reader gives a nested value
+    nested = ", ".join(f"to_json({quote(c)}) AS {quote(c)}" for c, t in first.items()
+                       if c not in columns and re.search(r"\b(STRUCT|MAP)\(|\]\[", t))
 
     def order(present):
         return ", ".join(quote(c) if c in present else f"NULL::{t} AS {quote(c)}" for c, t in first.items())
@@ -106,6 +131,7 @@ def read(connection, table, options):
             # else the read of the list would drop or null one file's other columns
             by_name = {"union_by_name": True} if any(shapes[p].keys() != present for p in group) else {}
             part = relation(group, **by_name).project(order(present))
+        part = part.project(f"* REPLACE ({nested})") if nested else part
         return part.project(f"* REPLACE ({casts})") if casts and cast else part
 
     def uncast(e):
@@ -115,7 +141,7 @@ def read(connection, table, options):
         for group in groups:
             part = rows(group, cast=False)
             for c, t in columns.items():
-                if part.filter(f"{quote(c)}{text} IS NOT NULL AND TRY_CAST({quote(c)}{text} AS {t}) IS NULL").limit(1) \
+                if part.filter(f"{text(c, t)} IS NOT NULL AND TRY_CAST({text(c, t)} AS {t}) IS NULL").limit(1) \
                         .fetchall():
                     return Exception(f"{table}: column {c} is not {t} in every row; change the value in the file, or "
                                      "its type under columns")

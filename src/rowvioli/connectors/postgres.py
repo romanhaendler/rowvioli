@@ -8,12 +8,18 @@ from ..target import quote
 
 # the reader's version, so that columns another one delivers are recorded as by = reader (decision 54)
 driver_version = version("adbc-driver-postgresql")
+# a timestamp's infinity as the driver reads it: Postgres's largest number moved to Arrow's epoch, wrapped around. It
+# cannot write it again ("Error occurred writing COPY data"); -infinity and a date's infinity it writes as they were
+INFINITY = -2**63 + 946_684_800_000_000 - 1
+# the driver reads text as UTF8: a LATIN1 database's Müller arrived as bytes the target refused
+UTF8 = "SET client_encoding = 'UTF8'"
 
 
 def read(connection, table, options):
     known_options("postgres", table, options)
     conn = adbc.connect(connection["url"])
     cur = conn.cursor()
+    cur.execute(UTF8)
     name = ".".join(quote(p) for p in table.split("."))
     # the schema without running the query; each column is read as the type that arrives faithfully
     columns = ", ".join(_read_as(f) for f in cur.adbc_execute_schema("SELECT * FROM " + name))
@@ -26,6 +32,12 @@ def read(connection, table, options):
     def batches():
         try:
             for b in reader:
+                for f, c in zip(reader.schema, b.columns):
+                    c = c.flatten() if pa.types.is_list(f.type) else c  # an array of timestamps too
+                    if pa.types.is_timestamp(c.type) and pc.any(pc.equal(c.view(pa.int64()), INFINITY)).as_py():
+                        raise Exception(f"{table}: column {f.name} has infinity, which the driver cannot write into a "
+                                        f"timestamp{'tz' if c.type.tz else ''} of the target; cast it in a view of "
+                                        "the source")
                 yield pa.record_batch([_cast(table, c, f) if _is_numeric(r) else c
                                        for c, f, r in zip(b.columns, schema, reader.schema)], schema=schema)
         finally:
@@ -55,6 +67,7 @@ def _cast(table, column, field):
 def tables(connection):
     """Every table outside the system schemas as `schema.table`, with its primary key in key order or None."""
     with adbc.connect(connection["url"]) as conn, conn.cursor() as cur:
+        cur.execute(UTF8)
         cur.execute(r"""
             SELECT n.nspname || '.' || c.relname,
                    (SELECT array_agg(a.attname::text ORDER BY k.ord)

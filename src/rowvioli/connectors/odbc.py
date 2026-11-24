@@ -26,7 +26,7 @@ def read(connection, table, options):
     # shortcut: 1 MiB per text value, a longer one fails the run; when sources hold more, add an option
     reader = arrow_odbc.read_arrow_batches_from_odbc(
         "SELECT * FROM " + table, connection["string"],
-        max_bytes_per_batch=16 * 2**20, max_text_size=2**20).into_pyarrow_record_batch_reader()
+        max_bytes_per_batch=16 * 2**20, max_text_size=2**20, map_schema=doubles).into_pyarrow_record_batch_reader()
 
     def batches():
         try:
@@ -34,6 +34,13 @@ def read(connection, table, options):
         except Exception as e:
             raise without_value(e, table) from None
     return pa.RecordBatchReader.from_batches(reader.schema, batches())
+
+
+def doubles(schema):
+    """Every float read as a double. arrow-odbc takes a float of a precision up to 24 for a single, and psqlODBC
+    describes float8 with 17, its digits, so 1e300 arrived as Infinity; a double holds every single too, and the
+    schema says nothing more that would tell them apart."""
+    return pa.schema([f.with_type(pa.float64()) if pa.types.is_float32(f.type) else f for f in schema])
 
 
 def without_value(e, table):

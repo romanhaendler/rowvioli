@@ -1,9 +1,11 @@
 import json
 import re
+import signal
 
 import psycopg
 import pytest
 
+from conftest import until
 from test_checks import failed
 from test_columns_go_and_come import log_replays
 from test_history import LOADED_AT, LOG_FALSE, MIRROR, again, at
@@ -326,3 +328,83 @@ def test_a_change_log_from_before_the_upgrade_that_fits_neither_key_stops_with_t
     assert reason.startswith("the primary key of raw_erp.customers is (customer_no, name), the definition's key is "
                              "(customer_no), and nothing in the target tells"), reason
     assert """'[{"key": ["customer_no"]}]'""" in reason and """'[{"key": ["customer_no", "name"]}]'""" in reason
+
+
+WAITING = "select count(*) from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'"
+
+
+def test_two_inits_at_once_both_end_as_on_a_ready_target(rv):
+    """Init containers on several replicas: the one that comes second waits for the first and finds version 4."""
+    rv.run("init")
+    version_3(rv)
+    with psycopg.connect(rv.target_url) as held:  # the first step waits here, so that both have started
+        held.execute("lock table _rowvioli.runs in access exclusive mode")
+        inits = [rv.start("init") for _ in range(2)]
+        until(lambda: rv.target(WAITING)[0][0] == 2)
+    out = [p.communicate(timeout=30) + (p.returncode,) for p in inits]
+    assert [code for _, _, code in out] == [0, 0], out
+    assert rv.target("select schema_version from _rowvioli.meta") == [(4,)]
+
+
+def test_three_inits_at_once_on_an_empty_target_all_end_as_on_a_ready_target(rv):
+    """Without the lock two of three failed on CREATE SCHEMA (`pg_namespace_nspname_index`), 10 rounds of 10."""
+    inits = [rv.start("init") for _ in range(3)]
+    out = [p.communicate(timeout=30) + (p.returncode,) for p in inits]
+    assert [code for _, _, code in out] == [0, 0, 0], out
+    assert rv.target("select schema_version from _rowvioli.meta") == [(4,)]
+
+
+def as_role(rv, role):
+    return {"ROWVIOLI_TARGET_URL": rv.target_url.replace("postgres:x@", f"{role}:secret_o@")}
+
+
+@pytest.fixture
+def owner(rv):
+    """A version 3 target whose bookkeeping a role of its own owns, as when that role ran the first init (roles
+    belong to the cluster: a name of its own)."""
+    db = rv.target_url.rsplit("/", 1)[1]
+    role = f"owner_{db}"
+    rv.target(f"create role {role} login password 'secret_o'")
+    rv.target(f"grant create on database {db} to {role}")
+    try:
+        assert rv.run("init", env=as_role(rv, role)).returncode == 0
+        version_3(rv)
+        yield role
+    finally:
+        rv.target(f"drop owned by {role}")
+        rv.target(f"drop role {role}")
+
+
+def test_init_by_a_superuser_gives_the_new_objects_the_owner_of_the_bookkeeping(rv, owner):
+    r = rv.run("init")
+    assert r.returncode == 0, r.stderr
+    assert rv.target("select relname, relowner::regrole::text from pg_class where relnamespace = "
+                     "'_rowvioli'::regnamespace and relowner::regrole::text <> %s", [owner]) == []
+
+
+def test_init_by_a_role_that_does_not_own_the_bookkeeping_names_the_owner(rv, owner):
+    other = owner.replace("owner_", "other_")
+    rv.target(f"create role {other} login password 'secret_o'")
+    try:
+        rv.target(f"grant all on schema _rowvioli to {other}; grant all on all tables in schema _rowvioli to {other}")
+        r = rv.run("init", env=as_role(rv, other))
+        assert r.returncode == 1
+        assert r.stderr == (f"_rowvioli belongs to the role {owner}: run rowvioli init as {owner} or as a "
+                            "superuser; nothing was changed\n"), r.stderr
+        assert rv.target("select schema_version from _rowvioli.meta") == [(3,)]
+    finally:
+        rv.target(f"drop owned by {other}")
+        rv.target(f"drop role {other}")
+
+def test_init_interrupted_says_that_nothing_was_changed(rv):
+    rv.run("init")
+    version_3(rv)
+    with psycopg.connect(rv.target_url) as held:
+        held.execute("lock table _rowvioli.runs in access exclusive mode")
+        p = rv.start("init")
+        until(lambda: rv.target(WAITING)[0][0] == 1)
+        p.send_signal(signal.SIGINT)
+        _, err = p.communicate(timeout=30)
+    assert p.returncode == 1
+    assert err == "init was interrupted; nothing was changed\n", err
+    assert rv.target("select schema_version from _rowvioli.meta") == [(3,)]
