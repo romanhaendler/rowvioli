@@ -2,7 +2,7 @@
 
 **Blocked by:** 14
 
-**Status:** claimed
+**Status:** resolved
 
 **Model:** Opus
 
@@ -165,3 +165,5 @@ items 6, 7 and 10 also with their one line taken out alone). Judged right as bui
   beyond `bigint` in a JSON file keeps its digits as `jsonb` (seen); in Excel it is a float in the file (documented).
   Not settled: an interval's nanoseconds (DuckDB's intervals have none; another connector's are cut), and a `uint64`
   or nanoseconds inside a list (shortcut in `whole()`).
+
+Resolved on branch `schema-changes`, from sc-16 (2a85b7b). Review fixes: 2a3edbc, e9b03a8, 6321887, f6c3c8d, 0458a09, 1b14f22, 77f5031, 370c2a1.
