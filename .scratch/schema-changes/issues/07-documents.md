@@ -2,7 +2,7 @@
 
 **Blocked by:** 06
 
-**Status:** claimed
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -32,3 +32,4 @@ Also `CHANGELOG` in the manner of its existing entries.
   - Decision 7, a primary key that differs: put back (`hand`) or another key (`definition`) is told by the key the columns table recorded; without rows there it counts as another key (ticket 05). The text to put back the comment on `_op` is the latest note `the change log's keys: ...` in `columns__log`; every change log the program begins has the comment with its one key.
   - Decision 10, `renamed`: stored with the table's options and taken out before the connector is called, not in `known_options`; on a table with a change log it acts only if the old column is in the change log, else the old column stops as not known to be from the source; it stops onto a name the change log has; `apply` refuses an old name stated twice; it works for a file or REST source (ticket 06). The proof also needs the key unchanged after stated renames and its columns in one family, compares only columns of one family on both sides, and each proof must be the only one for its gone and its new column.
 - Ticket 09 (two behaviours on another branch) is documented as the ticket states it, not as the code of `schema-changes` does: a mirror column the change log does not have stops the run also when the source brings the name in the same family (`loading.md` "The stops", `CHANGELOG.md`), and a pin taken out of a file table's `columns` is a change of type by the definition (`definition.md`). The reason's exact words after `is not in the change log, so it is not known to be from the source` are not quoted; today's way out in the code names the drop and adding to the change log, and the ticket says drop or rename. Check both against the merged ticket 09.
+- Resolved on branch `schema-changes`, from sc-07 (87d0075). Review fixes: 7fcd4d2, 3843fdb, 87d0075.
