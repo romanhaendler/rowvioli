@@ -139,6 +139,18 @@ def test_C15_a_primary_key_changed_by_hand_is_put_back_and_recorded_by_hand(erp)
     log_replays(erp)
 
 
+def test_a_primary_key_changed_by_hand_under_a_new_target_name_is_put_back_whatever_the_old_name_recorded(erp):
+    ok(erp)  # ticket 15, B3: the old target name, which stays, recorded the key that the hand now set
+    apply(erp, definition(erp, '"public.customers" = { key = ["name"], target_table = "clients" }\n'))
+    again(erp)
+    erp.target("alter table raw_erp.clients drop constraint clients_pkey, add primary key (customer_no)")
+    again(erp)
+    assert primary_key(erp, "raw_erp.clients") == ["name"]
+    assert erp.target("select count(*) from raw_erp.clients__log " + THIS_RUN) == [(0,)]
+    assert erp.target(f'select "column", "by" from _rowvioli.columns__log {THIS_RUN} order by 1') == [
+        ("customer_no", "hand"), ("name", "hand")]
+
+
 @pytest.mark.parametrize("consumer, named", [
     ("create table reporting.orders (id int, customer_no int references raw_erp.customers)",
      "constraint orders_customer_no_fkey on table reporting.orders depends on index raw_erp.customers_pkey"),

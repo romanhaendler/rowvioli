@@ -244,7 +244,9 @@ def check(conn, t, staged, mirror, log_columns, renamed):
     if mirror:
         if set(primary_key) != set(key):  # the same columns in another order are the same key (story 20)
             # decision 54: the key the last run recorded is the definition's, so a person changed the primary key
-            recorded = sql(conn, 'SELECT "column", "key" FROM _rowvioli.columns WHERE id = $1', [t["id"]])
+            # (this target name's: an old one that stays keeps the key it had)
+            recorded = sql(conn, 'SELECT "column", "key" FROM _rowvioli.columns WHERE id = $1 AND target_schema = $2 '
+                                 'AND target_table = $3', [t["id"], t["schema"], t["table"]])
             # without a record (a program that kept none), the comment on _op names the key the change log was
             # written under, which is the definition's where a person changed the primary key
             keys = None if recorded or not log_columns else stretches(conn, t)
