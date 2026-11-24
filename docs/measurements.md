@@ -276,7 +276,16 @@ Limitations: one pooler version, one pool size, a synthetic load. A pass is no p
 | 8 | 0 | 0 | 100 | 0 |
 | 16 | 0 | 0 | 100 | 0 |
 
-`rowvioli status` through the pooler said `a connection pooler in transaction mode is in front of the target` 20 times of 20 with 0, 2 and 8 neighbours. Postgres gives every connection a server process of its own for its life, and a pooler in session mode keeps one per client, so neither is ever taken for a pooler: in `tests/test_run_mistakes.py` an idle pooler in transaction mode is refused and one in session mode loads. In the review of ticket 12, idle, with `SERVER_ROUND_ROBIN=1` and `MIN_POOL_SIZE=5`, so that five server connections wait and each goes to the next client in turn: 20 of 20 refused. Limitations: one pooler, one pool size. Another pooler was looked for on 2026-11-24 (ticket 14 of schema changes, item 7) and not tried: PgCat's image is 248 MB (`ghcr.io/postgresml/pgcat`, 1.2.0) and Supavisor's over 360 MB compressed, both beyond the 150 MB a test's image may take; Odyssey publishes no image and no binary, and building it from source was not allowed on the machine of the run.
+`rowvioli status` through the pooler said `a connection pooler in transaction mode is in front of the target` 20 times of 20 with 0, 2 and 8 neighbours. Postgres gives every connection a server process of its own for its life, and a pooler in session mode keeps one per client, so neither is ever taken for a pooler: in `tests/test_run_mistakes.py` an idle pooler in transaction mode is refused and one in session mode loads. In the review of ticket 12, idle, with `SERVER_ROUND_ROBIN=1` and `MIN_POOL_SIZE=5`, so that five server connections wait and each goes to the next client in turn: 20 of 20 refused. **Behind PgCat** (2026-11-24, review of ticket 14 of schema changes, `ghcr.io/postgresml/pgcat:v1.2.0`, 248 MB, pulled for the measurement and removed after; in front of `postgres:16-alpine` with `max_connections=200`; one pool of 5 server connections, `prepared_statements = true`, `query_parser_enabled = false`, `pool_mode` `transaction` or `session`). The check's three reads, as `target.connect()` makes them with the same driver, 100 times per row, each with its own two connections, beside neighbours running `pg_sleep(0.05)` through PgCat:
+
+| Mode | Neighbours | Second connection on the first's server process | Control connection moved | Driver's statement lost (`26000`) | Missed |
+|---|---|---|---|---|---|
+| transaction | 0 | 100 | 0 | 0 | 0 |
+| transaction | 2 | 53 | 15 | 32 | 0 |
+| transaction | 8 | 0 | 1 | 99 | 0 |
+| transaction | 16 | 0 | 0 | 100 | 0 |
+
+`rowvioli status` through PgCat in transaction mode said `a connection pooler in transaction mode is in front of the target` 20 times of 20 with 0, 2 and 8 neighbours. Idle, PgCat gives its one open server connection to every client, so the second connection lands on the first's server process, as behind PgBouncer. In session mode the check passed 100 of 100 with 0 and 2 neighbours (the second connection had a server process of its own, the first kept its own) and `status` worked 20 of 20; with 8 and 16 neighbours each holding one of the five server connections for its life, no further client got one (`could not get connection from the pool`), which is the pool's size and not the check. Limitations: two poolers, one pool size, one PgCat version. Supavisor's image is over 360 MB compressed and Odyssey publishes none, so neither was tried.
 
 ## 15. A whole run on a wide table
 

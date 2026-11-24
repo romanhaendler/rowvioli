@@ -508,6 +508,8 @@ def test_a_run_ended_after_max_seconds_in_a_long_step_of_a_change_says_which_rol
         holder.close()
     assert reason == f"ended after max_seconds = 3 while {step}"
     assert (rows(erp.target, MIRROR), rows(erp.target, "select * from raw_erp.customers__log")) == before
+    if holder is None:  # the next run's rows go through the index at once
+        erp.target("update public.pause set seconds = 0")
     apply(erp, definition(erp, table.format('"customer_no", "name"' if change == "key" else '"customer_no"', 30)))
     again(erp)
     log_replays(erp)
