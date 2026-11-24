@@ -692,8 +692,10 @@ def carry_out(conn, t, plan):
                             t["mirror"], constraint=name)
         # Postgres leaves NOT NULL behind, also where LIKE copied it; a column still in a key it refuses to free
         if (loose := [c for c in was if c not in key]) and (not was or dropped):
-            for table in [t["mirror"], t["log_table"]] if plan["key"]["log"] else [t["mirror"]]:
-                sql(conn, f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(c)} DROP NOT NULL" for c in loose))
+            for table, named in [(t["mirror"], {}), (t["log_table"], plan["retired"])][:2 if plan["key"]["log"] else 1]:
+                # one retired in this run has its new name in the change log already
+                sql(conn, f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(named.get(c, c))} DROP NOT NULL"
+                                                              for c in loose))
         if by == "definition" and plan["key"]["log"]:  # a stretch of the change log begins under the new key
             [(now,)] = sql(conn, "SELECT to_json(now()) #>> '{}'")  # ISO 8601, whatever the DateStyle
             keys = (stretches(conn, t) or [{"key": was}]) + [{"from": now, "key": key}]
