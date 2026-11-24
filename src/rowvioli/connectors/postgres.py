@@ -23,12 +23,24 @@ def read(connection, table, options):
     def batches():
         try:
             for b in reader:
-                yield pa.record_batch([c.storage.cast(f.type) if _is_numeric(r) else c
+                yield pa.record_batch([_cast(table, c, f) if _is_numeric(r) else c
                                        for c, f, r in zip(b.columns, schema, reader.schema)], schema=schema)
         finally:
             cur.close()
             conn.close()
     return pa.RecordBatchReader.from_batches(schema, batches())
+
+
+def _cast(table, column, field):
+    """A numeric's text as a decimal. Arrow's message for one that is none (`The string 'nan' is not a valid
+    decimal256 number`) holds the value, which would end up in the status view and the log: the column instead."""
+    try:
+        return column.storage.cast(field.type)
+    except pa.ArrowInvalid as e:
+        if "is not a valid" not in str(e):
+            raise
+        raise Exception(f"{table}: column {field.name} has a value no decimal holds, such as NaN or Infinity; cast it "
+                        "in a view of the source") from None
 
 
 def tables(connection):

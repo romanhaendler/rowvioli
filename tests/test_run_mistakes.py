@@ -12,7 +12,23 @@ def test_a_numeric_the_target_cannot_hold_fails_with_the_cause_and_no_path(erp):
     erp.source("insert into nn values (1, 'NaN')")
     apply(erp, definition(erp, '"public.nn" = { key = ["id"] }\n'))
     why = failed(erp)
-    assert "not a valid decimal" in why and "\n" not in why and "Traceback" not in why and ".py" not in why, why
+    assert "public.nn: column v has a value no decimal holds, such as NaN or Infinity; cast it in a view of the " \
+           "source" in why and "'nan'" not in why and "Traceback" not in why and ".py" not in why, why
+
+
+@pytest.mark.parametrize("value, type, says", [
+    ("Secret3", "int", "invalid input synta*** for type integer"),  # x is the harness's password
+    ("3000000000", "int", "out of range for type integer"),
+    ("2024-13-45 Secret4", "date", "date/time field value out of range")])
+def test_a_value_the_source_cannot_convert_stays_out_of_the_reason(erp, value, type, says):
+    erp.source("create table raw (id int primary key, v text)")
+    erp.source(f"insert into raw values (1, '{value}')")
+    erp.source(f"create view cast_view as select id, v::{type} as v from raw")
+    apply(erp, definition(erp, '"public.cast_view" = { key = ["id"] }\n'))
+    code, answer = run(erp)
+    assert code == 1
+    why = erp.target("select reason from _rowvioli.runs where status = 'failed'")[0][0]
+    assert says in why and value not in why and value not in str(answer), why
 
 
 def test_a_failed_rest_path_stays_in_the_reason(api):

@@ -822,9 +822,14 @@ WRAPPER = re.compile(r"^(?:[A-Z_]+: )?(?:\[libpq\] )?(?:nanoarrow call failed: )
                      r"(?:PGRES_[A-Z_]+ )?(?:ERROR:\s+)?", re.S)
 
 
+# a row's value Postgres quotes in a message: last, after a colon (`invalid input syntax for type integer: "abc"`), or
+# `value "…" is out of range`. Names are quoted too, but never in these two places
+VALUE = re.compile(r'(?:(?<=: )|(?<=\bvalue ))"[^\n]*"(?=$| is out of range)')
+
+
 def reason_line(values, e, step):
     """The reason as it is stored, shown and logged: scrubbed, the first line of the driver's message without its
-    wrapper, joined with the next when it ends in a colon. A message that holds a traceback gives the text before
+    wrapper, joined with the next when it ends in a colon, without a value of a row (VALUE). A message that holds a traceback gives the text before
     it, or the exception's own line (the traceback's last) when nothing is before it; ADBC cuts long messages, so
     the end may be missing. A line saying so, with the exception's type, when there is no message."""
     text = scrub(values, str(e)).strip()
@@ -832,6 +837,7 @@ def reason_line(values, e, step):
     before = re.sub(r"\s*Detail: Python exception:\s*$", "", before)
     first, *rest = (WRAPPER.sub("", before).strip() or traceback.strip().split("\n")[-1]).split("\n")
     line = f"{first} {rest[0].strip()}" if first.endswith(":") and rest else first
+    line = VALUE.sub('"***"', line)
     return line.strip() or f"the driver gave no message while {step} ({type(e).__name__})"
 
 

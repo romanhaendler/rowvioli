@@ -20,3 +20,7 @@ Spec: `.scratch/schema-changes/spec.md`; ticket 08 and its comments.
 - [ ] The existing tests pass or are changed to the new behaviour.
 
 ## Comments
+
+- Item 1 also stops a column dropped from the change log by hand while the mirror keeps it (it is not told from a person's): `test_columns.py` now takes the drop as its way out. A rename is no way past the stop: the renamed column stops as any of a person's own (G1), which the test shows.
+- Item 2 left the ticket for Parquet: the run keeps no memory of an earlier pin, and Parquet's own types can flip, so a pin taken out of a Parquet column of another family still stops with the hint to pin it. CSV, Excel and JSON deliver every unpinned column as `text` or `jsonb`, so there the run can tell.
+- Item 3, found and not fixed: an ODBC driver's message (SQL Server's `Conversion failed when converting the varchar value '…' to data type int`; psqlODBC writes text after Postgres's message, which the end-of-line pattern then misses) can only be tried in `tests/odbc/run.sh`; a connector of one's own whose Arrow message holds a value. Checked and clean in the first line, which is all a reason takes: DuckDB's reader errors (CSV structure, bad UTF-8, malformed JSON), the target's unique, foreign key, check and not-null violations (the value is in DETAIL), the fit test's casts (22003 names no value).
