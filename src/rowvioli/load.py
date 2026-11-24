@@ -939,25 +939,24 @@ def record_columns(conn, t, delivered, mirror, log_columns, changes):
         rows.append(row)
     if not rows:
         return
+    # whether another reader than the last successful run's gave these columns, perhaps, and not the source
+    [(differs, note)] = sql(conn, """
+        SELECT (l.program_version, l.driver_version) IS DISTINCT FROM (c.program_version, c.driver_version),
+               format('program %s to %s, driver %s to %s', coalesce(l.program_version, 'none'),
+                      coalesce(c.program_version, 'none'), coalesce(l.driver_version, 'none'),
+                      coalesce(c.driver_version, 'none'))
+          FROM _rowvioli.runs c LEFT JOIN LATERAL (SELECT program_version, driver_version FROM _rowvioli.runs
+                WHERE "table" = c."table" AND status = 'ok' AND run < c.run ORDER BY run DESC LIMIT 1) l ON true
+         WHERE c.run = $1""", [t["run"]])
     pinned = t["pinned"]  # a type the definition gives (decision 54)
-    for r in rows:
+    for r in rows:  # the cause: what the plan says, else the definition where it gives the column, else the reader
         if (r["target_schema"], r["target_table"]) == (t["schema"], t["table"]):
             r.update(changes.get(r["column"], {}))
             # REST's columns are all the definition's, also one taken out of it; a retired one is by its name's cause
             if r["by"] == "source" and (t["catalog"] == "definition" or r["column"] in pinned or r["was"] in pinned):
                 r["by"] = "definition"
-    if any(r["by"] == "source" for r in rows):  # another reader gave these columns, perhaps, not the source
-        [(differs, note)] = sql(conn, """
-            SELECT (l.program_version, l.driver_version) IS DISTINCT FROM (c.program_version, c.driver_version),
-                   format('program %s to %s, driver %s to %s', coalesce(l.program_version, 'none'),
-                          coalesce(c.program_version, 'none'), coalesce(l.driver_version, 'none'),
-                          coalesce(c.driver_version, 'none'))
-              FROM _rowvioli.runs c LEFT JOIN LATERAL (SELECT program_version, driver_version FROM _rowvioli.runs
-                    WHERE "table" = c."table" AND status = 'ok' AND run < c.run ORDER BY run DESC LIMIT 1) l ON true
-             WHERE c.run = $1""", [t["run"]])
-        for r in rows:
-            if differs and r["by"] == "source":
-                r.update({"by": "reader", "note": "; ".join(filter(None, [note, r["note"]]))})
+        if r["by"] == "source" and differs:
+            r.update({"by": "reader", "note": "; ".join(filter(None, [note, r["note"]]))})
     x = """jsonb_to_recordset($1::jsonb) AS x(op text, target_schema text, target_table text, "column" text,
                 type text, source_type text, "key" int, mirror boolean, was text, "by" text, note text)"""
     payload = json.dumps(rows)
