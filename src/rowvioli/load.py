@@ -539,7 +539,7 @@ def diff(conn, t, staged, mirror, plan):
     return {"inserted": counts.get("I", 0), "updated": counts.get("U", 0), "deleted": counts.get("D", 0)}
 
 
-def publish(conn, t, staged, delivered, mirror, log, rows_read, counts, plan):
+def publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, plan):
     """Step 6, one transaction in the order of decision 54: the plan, new columns, mirror, change log and its view,
     the columns table, loaded_at, attempts and the run's row. Raises, so nothing is published, when the table's row
     no longer gives it this target name."""
@@ -588,8 +588,8 @@ def publish(conn, t, staged, delivered, mirror, log, rows_read, counts, plan):
     if t["key"] and plan["key"]:  # once the old rows are gone, which may hold the new key twice
         sql(conn, f"ALTER TABLE {t['mirror']} ADD PRIMARY KEY ({', '.join(quote(k) for k in t['key'])})")
     if t["key"] and t["log"]:  # the change log's columns under the names the plan gave them
-        write_log(conn, t, staged, [(moved.get(n, n), type) for n, type in log], logged)
-    record_columns(conn, t, delivered, mirror, log, changes)
+        write_log(conn, t, staged, [(moved.get(n, n), type) for n, type in log_columns], logged)
+    record_columns(conn, t, delivered, mirror, log_columns, changes)
     # the table lock guards the table, not its name, which an apply may have given to another table meanwhile
     # (decision 53). Last, so the row lock that holds off an apply until COMMIT is taken after every wait on a mirror
     if not sql(conn, """UPDATE _rowvioli.tables SET loaded_at = now(), attempts = 0
@@ -839,13 +839,13 @@ def alter(conn, t, why, statement, table, columns=(), constraint=None, drop=True
     return done
 
 
-def write_log(conn, t, staged, log, names):
+def write_log(conn, t, staged, log_columns, names):
     """After the mirror is published, in the same transaction: a log that exists gets the diff, a new one begins
     with the whole mirror, so that replaying a log from the last change of key always gives the mirror. The history
     view is created when missing and replaced when the log got a column; otherwise it is not touched, so takes no
     lock."""
-    if log:
-        widened = widen(conn, t["log_table"], staged, log)
+    if log_columns:
+        widened = widen(conn, t["log_table"], staged, log_columns)
         rows = f"SELECT _op, {names} FROM _diff"
     else:
         sql(conn, f"CREATE TABLE {t['log_table']} (_run bigint, _op text, _loaded_at timestamptz, LIKE {t['mirror']})")
@@ -855,7 +855,7 @@ def write_log(conn, t, staged, log, names):
     # now() is the transaction's moment, the one that goes into tables.loaded_at
     sql(conn, f"INSERT INTO {t['log_table']} (_run, _loaded_at, _op, {names}) SELECT $1, now(), * FROM ({rows}) r",
         [t["run"]])
-    if log and not widened and sql(conn, "SELECT to_regclass($1) IS NOT NULL", [t["history"]])[0][0]:
+    if log_columns and not widened and sql(conn, "SELECT to_regclass($1) IS NOT NULL", [t["history"]])[0][0]:
         return
     columns = ", ".join(quote(c) for c, _ in sql(conn, COLUMNS, [t["log_table"]])
                         if c not in ("_run", "_op", "_loaded_at"))
@@ -895,16 +895,17 @@ def write_log(conn, t, staged, log, names):
             sql(conn, "RESET ROLE")
 
 
-def record_columns(conn, t, delivered, mirror, log, changes):
+def record_columns(conn, t, delivered, mirror, log_columns, changes):
     """Decision 54, last in publishing, in its transaction: what the columns of mirror and change log are now
-    against what `_rowvioli.columns` says, as rows of `columns__log` with this transaction's moment. `mirror` and `log`
-    are the columns as the run found them, so that what differs from the record without this run is by hand.
+    against what `_rowvioli.columns` says, as rows of `columns__log` with this transaction's moment. `mirror` and
+    `log_columns` are the columns as the run found them, so that what differs from the record without this run is by
+    hand.
     `changes` gives fields of the plan by column name (`was`, `note`, `by`). Notifies on `rowvioli_schema` when
     anything but a first fill was recorded."""
-    def state(mirror, log):
-        return {**{n: (type, False) for n, type in log if n not in ("_run", "_op", "_loaded_at")},
+    def state(mirror, log_columns):
+        return {**{n: (type, False) for n, type in log_columns if n not in ("_run", "_op", "_loaded_at")},
                 **{n: (type, True) for n, type in mirror}}
-    found = state(mirror, log)
+    found = state(mirror, log_columns)
     now = state(sql(conn, COLUMNS, [t["mirror"]]), sql(conn, COLUMNS, [t["log_table"]]))
     # the primary key's order, not the definition's: the same columns in another order are the same key (story 20)
     key = {k: i + 1 for i, (k,) in enumerate(sql(conn, PRIMARY_KEY, [t["mirror"]]))}
