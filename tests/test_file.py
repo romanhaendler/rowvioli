@@ -600,6 +600,19 @@ def test_an_unsigned_integer_of_a_parquet_file_arrives_whole(files):
         (2**64 - 1, 2**32 - 1, 2**16 - 1, 255), (2**63, 0, 0, 0)]
 
 
+@pytest.mark.parametrize("type, value, reason", [
+    ("hugeint", 2**127 - 1, "column h has a value its type in the target, numeric(38,0), cannot hold (SQLSTATE 22003); "
+                            "cast it in a view of the source or change it there"),
+    ("UHUGEINT", 2**128 - 1, "column h as uhugeint would arrive wrapped above 2^127 - 1; use hugeint, or text for "
+                             "more than 38 digits")])
+def test_an_integer_of_39_digits_under_columns_fails_naming_the_column(files, type, value, reason):
+    """DuckDB hands both to Arrow as a decimal of 38 digits; its uhugeint above 2**127 - 1 arrived as -1, run ok."""
+    (files.dir / "files" / "h.csv").write_text(f"id;h\n1;{value}\n2;1\n")
+    code, answer = load(files, f'"h.csv" = {{ key = ["id"], sep = ";", columns = {{ h = "{type}" }} }}\n')
+    assert code == 1, files.target("select h from raw_files.h")
+    assert answer["raw_files.h"]["reason"] == f"h.csv: {reason}"
+
+
 def test_a_parquet_decimal_of_more_than_38_digits_fails_naming_the_column(files):
     """DuckDB reads it as a double: 10**39 + 1 arrived as 1e39 with the run ok."""
     pq.write_table(pa.table({"id": [1], "ok": pa.array([Decimal(1)], pa.decimal128(38, 2)),

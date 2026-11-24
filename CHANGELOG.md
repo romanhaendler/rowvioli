@@ -61,6 +61,7 @@ Fixed:
 - A target or a `postgres` source whose database is not UTF8 keeps the text as it is: the sessions ask for UTF8, and a text the target's encoding has no character for fails the run with `SQLSTATE 22P05`. Before, a `LATIN1` target stored `Müller` as `MÃ¼ller` with the run `ok`, a schema name with `ü` there ended `rowvioli status` in a traceback and every run before its claim, and a `LATIN1` source failed the run (in 0.4.1 too).
 - A `uint64`, of a Parquet file or any connector, arrives as `numeric(20,0)` and whole. Before, the driver wrote it as `bigint` and `18446744073709551615` arrived as `-1`, with the run `ok` (in 0.4.1 too).
 - A Parquet decimal of more than 38 digits fails the run and names the column. Before, DuckDB read it as a double and `10^39 + 1` arrived rounded, with the run `ok` (in 0.4.1 too).
+- `uhugeint` under `columns` is refused and names the column, with `hugeint` or `text` as the way out. Before, DuckDB handed a value above 2^127 − 1 over wrapped, and 2^128 − 1 arrived as `-1`, with the run `ok`.
 - A shipped connector whose extra is not installed says which to install, in `run`, `work` and `list`: `connector "file" cannot be loaded: No module named 'duckdb'; pip install "rowvioli[file]" installs it`.
 
 ## 0.4.1 (2026-11-23)

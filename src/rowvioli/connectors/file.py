@@ -69,9 +69,12 @@ def read(connection, table, options):
     for name in options:
         if not name.isidentifier():
             raise Exception(f"{table}: {name} is not an option of DuckDB's {reader}")
-    for type in columns.values():
+    for column, type in columns.items():
         if not TYPE.fullmatch(type):
             raise Exception(f"{table}: {type} is not a column type")
+        if type.strip().lower() in ("uhugeint", "uint128"):  # DuckDB hands it to Arrow as a signed decimal, wrapped
+            raise Exception(f"{table}: column {column} as uhugeint would arrive wrapped above 2^127 - 1; use "
+                            "hugeint, or text for more than 38 digits")
 
     def text(c, t):
         """What a column under `columns` is cast from. A JSON value's text, as in a CSV: "Anna" without the quotes. An
