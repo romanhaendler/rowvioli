@@ -345,6 +345,15 @@ def test_two_inits_at_once_both_end_as_on_a_ready_target(rv):
     assert [code for _, _, code in out] == [0, 0], out
     assert rv.target("select schema_version from _rowvioli.meta") == [(4,)]
 
+
+def test_three_inits_at_once_on_an_empty_target_all_end_as_on_a_ready_target(rv):
+    """Without the lock two of three failed on CREATE SCHEMA (`pg_namespace_nspname_index`), 10 rounds of 10."""
+    inits = [rv.start("init") for _ in range(3)]
+    out = [p.communicate(timeout=30) + (p.returncode,) for p in inits]
+    assert [code for _, _, code in out] == [0, 0, 0], out
+    assert rv.target("select schema_version from _rowvioli.meta") == [(4,)]
+
+
 def as_role(rv, role):
     return {"ROWVIOLI_TARGET_URL": rv.target_url.replace("postgres:x@", f"{role}:secret_o@")}
 
