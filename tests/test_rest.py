@@ -225,37 +225,69 @@ def test_a_type_mismatch_names_table_column_and_type_but_not_the_value(api):
     assert "abc" not in reason(api) + r.stdout + r.stderr
 
 
-def test_F1_a_column_absent_from_every_row_of_an_answer_or_left_out_of_columns_is_empty_and_stays(api):
+LAST = ('select _op, "column", mirror, was, "by" from _rowvioli.columns__log where _run = (select max(run) from '
+        '_rowvioli.runs) order by "column"')
+
+
+def test_F1_a_column_left_out_of_columns_leaves_the_mirror_and_one_absent_from_every_row_is_empty(api):
     load(api, 'a = { key = ["station"], path = "/readings", columns = { station = "text", n = "int8" } }')
+    api.target("update _rowvioli.tables set requested_at = now()")
+    r, _ = load(api, 'a = { key = ["station"], path = "/readings", columns = { station = "text" } }')
+    assert r.returncode == 0, r.stdout
+    # the definition is the catalog: n leaves the mirror as a column a database drops, its values stay in the log
+    assert columns(api, "raw_weather.a") == ["station"]
+    assert api.target("select n from raw_weather.a__history where station = 'a' order by _valid_from") == [
+        (1,), (None,)]
+    assert api.target(LAST) == [("U", "n", False, None, "definition")]
+    log_replays(api, "raw_weather.a")
     api.target("update _rowvioli.tables set requested_at = now()")
     r, _ = load(api, 'a = { key = ["station"], path = "/renamed", columns = { station = "text", n = "int8" } }')
     assert r.returncode == 0, r.stdout
     assert api.target("select station, n from raw_weather.a order by 1") == [("a", None), ("b", None)]
-    api.target("update _rowvioli.tables set requested_at = now()")
-    r, _ = load(api, 'a = { key = ["station"], path = "/renamed", columns = { station = "text" } }')
-    assert r.returncode == 0, r.stdout
-    assert columns(api, "raw_weather.a") == ["station", "n"]
     log_replays(api, "raw_weather.a")
 
 
-def test_F4_a_type_under_columns_changed_to_another_family_stops_and_says_how_to_drop_the_column(api):
+def test_a_column_a_person_added_to_the_mirror_is_not_taken_for_one_left_out_of_columns_and_stops_the_run(api):
+    load(api, 'a = { key = ["station"], path = "/readings", columns = { station = "text" } }')  # story 8, G1
+    api.target("alter table raw_weather.a add column memo text")
+    api.target("update raw_weather.a set memo = 'mine'")
+    api.target("update _rowvioli.tables set requested_at = now()")
+    r, _ = load(api, 'a = { key = ["station"], path = "/readings", columns = { station = "text" } }')
+    assert r.returncode == 1
+    assert reason(api).startswith("column memo of the mirror is not in the change log")
+    assert api.target("select memo from raw_weather.a") == [("mine",)]
+
+
+def test_F4_B11_a_type_under_columns_changed_to_another_family_goes_and_comes_by_definition(api):
     table = 'a = {{ key = ["station"], path = "/readings", columns = {{ station = "text", day = "{}" }} }}'
     load(api, table.format("date"))
-    api.target("update _rowvioli.tables set requested_at = now()")
-    r, _ = load(api, table.format("text"))
-    assert r.returncode == 1
-    # pinning it again changes nothing: the way out is the drop (the harness's password is x, which a reason hides)
-    assert reason(api).startswith("column day has changed its type from date to text under columns in the table's "
-                                  "definition; a source without a catalog takes no column into another family")
-    assert reason(api).endswith('ALTER TABLE "raw_weather"."a" DROP COLUMN "day"')
-    api.target('ALTER TABLE "raw_weather"."a" DROP COLUMN "day"')
     api.target("update _rowvioli.tables set requested_at = now()")
     r, _ = load(api, table.format("text"))
     assert r.returncode == 0, r.stdout
     assert api.target("select station, day from raw_weather.a") == [("a", "2026-01-01")]
     run = api.target("select max(run) from _rowvioli.runs")[0][0]
     assert columns(api, "raw_weather.a__log")[-2:] == [f"day__{run}", "day"]  # the old values stay in the log
+    assert api.target(LAST) == [("U", "day", True, None, "definition"), ("I", f"day__{run}", False, "day", "definition")]
     log_replays(api, "raw_weather.a")
+
+
+@pytest.mark.parametrize("columns, why", [
+    ('{ station = "text", day = "text" }', "column day has changed its type from date to text; without a change log "
+                                           "its values are nowhere else, so a person drops it and the next run adds "
+                                           'it anew: ALTER TABLE "raw_weather"."a" DROP COLUMN "day"'),
+    ('{ station = "text" }', "column day is missing in the source; without a change log its values are nowhere else, "
+                             'so a person drops it: ALTER TABLE "raw_weather"."a" DROP COLUMN "day"')])
+def test_without_a_change_log_a_column_whose_type_or_presence_columns_changes_stops_and_says_how_to_drop_it(
+        api, columns, why):
+    load(api, 'a = { key = ["station"], log = false, path = "/readings", columns = { station = "text", day = "date" } }')
+    api.target("update _rowvioli.tables set requested_at = now()")
+    r, _ = load(api, f'a = {{ key = ["station"], log = false, path = "/readings", columns = {columns} }}')
+    assert r.returncode == 1
+    assert reason(api) == why
+    api.target('ALTER TABLE "raw_weather"."a" DROP COLUMN "day"')  # the way out
+    api.target("update _rowvioli.tables set requested_at = now()")
+    r, _ = load(api, f'a = {{ key = ["station"], log = false, path = "/readings", columns = {columns} }}')
+    assert r.returncode == 0, r.stdout
 
 
 def test_a_column_present_as_null_stays_null(api):

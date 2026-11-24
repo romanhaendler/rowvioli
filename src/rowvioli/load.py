@@ -83,14 +83,15 @@ def load(conn, t):
     delivered = staged = sql(conn, COLUMNS, ["pg_temp._stage"])
     mirror = sql(conn, COLUMNS, [t["mirror"]])  # empty before the first run
     log_columns = sql(conn, COLUMNS, [t["log_table"]])
-    # decision 3: a source without a catalog has no column that goes; one its data lack this run is empty. One a
-    # change log lacks, or every one without a change log, is not known to be from the source, and check() stops it
-    # rather than empty a person's column. One the definition says is renamed to a column the data have is renamed
-    # (decision 10)
+    # decision 3: a file has no column that goes; one its data lack this run is empty. One a change log lacks, or
+    # every one without a change log, is not known to be from the source, and check() stops it rather than empty a
+    # person's column. One the definition says is renamed to a column the data have is renamed (decision 10). REST
+    # delivers every column under `columns`, even one no row has: the definition is its catalog, and a column taken
+    # out of it goes as one a database drops
     stated = {old for new, old in (t["options"].get("renamed") or {}).items()
               if new in dict(staged) and new not in dict(mirror)}
-    if t["type"] in ("file", "rest") and (missing := [(n, type) for n, type in mirror if n not in dict(staged)
-                                                      and n not in stated and n in dict(log_columns)]):
+    if t["type"] == "file" and (missing := [(n, type) for n, type in mirror if n not in dict(staged)
+                                            and n not in stated and n in dict(log_columns)]):
         sql(conn, "ALTER TABLE _stage " + ", ".join(f"ADD {quote(n)} {type}" for n, type in missing))
         staged = sql(conn, COLUMNS, ["pg_temp._stage"])
     plan = check(conn, t, staged, mirror, log_columns)
@@ -152,10 +153,8 @@ def check(conn, t, staged, mirror, log_columns):
             changed = f"column {name} has changed its type from {type} to {types[name]}"
             drop = ("so a person drops it and the next run adds it anew: "
                     f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
-            if t["type"] in ("file", "rest") and name in dict(t["options"].get("columns") or {}):  # pinned already
-                raise Exception(f"{changed} under columns in the table's definition; a source without a catalog takes "
-                                f"no column into another family by itself, {drop}")
-            if t["type"] in ("file", "rest"):
+            # where the definition names the columns it is the catalog; a file guesses the type of every other one
+            if t["type"] == "file" and name not in dict(t["options"].get("columns") or {}):
                 raise Exception(f"{changed}; a source without a catalog guesses its types, so pin it under columns "
                                 "in the table's definition")
             if name in (t["key"] or []):
@@ -718,7 +717,8 @@ def record_columns(conn, t, delivered, mirror, log, changes):
     for r in rows:
         if (r["target_schema"], r["target_table"]) == (t["schema"], t["table"]):
             r.update(changes.get(r["column"], {}))
-            if r["by"] == "source" and r["column"] in pinned:
+            # REST's columns are all the definition's, also one taken out of it; a retired one is by its name's cause
+            if r["by"] == "source" and (t["type"] == "rest" or r["column"] in pinned or r["was"] in pinned):
                 r["by"] = "definition"
     if any(r["by"] == "source" for r in rows):  # another reader gave these columns, perhaps, not the source
         [(differs, note)] = sql(conn, """

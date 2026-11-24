@@ -230,6 +230,36 @@ def test_B11_a_cast_under_columns_that_changes_goes_by_the_same_rules_and_is_rec
     log_replays(files, "raw_files.counts")
 
 
+def test_B11_a_first_type_under_columns_for_a_csv_column_loaded_as_text_goes_and_comes_by_definition(files):
+    (files.dir / "files" / "counts.csv").write_text("id;n\n1;42\n2;\n3;7\n")
+    table = '"counts.csv" = {{ key = ["id"], sep = ";"{} }}\n'
+    assert load(files, table.format(""))[0] == 0
+    code, answer = load(files, table.format(', columns = { n = "integer" }'))
+    assert code == 0, answer
+    run = max_run(files)
+    assert types(files, "n", "raw_files.counts") == ["integer", "integer"]
+    # a U for each row with a value; the old values end with it and stay in the log under n__<run>
+    assert files.target(f"select id, n__{run}, n from raw_files.counts__log where _run = {run} order by id") == [
+        ("1", None, 42), ("3", None, 7)]
+    assert files.target(f"select n__{run} from raw_files.counts__history where id = '1' order by _valid_from") == [
+        ("42",), (None,)]
+    assert files.target('select _op, "column", mirror, was, "by" from _rowvioli.columns__log where _run = %s '
+                        'order by "column"', [run]) == [("U", "n", True, None, "definition"),
+                                                       ("I", f"n__{run}", False, "n", "definition")]
+    log_replays(files, "raw_files.counts")
+
+
+def test_without_a_change_log_a_type_under_columns_of_another_family_stops_and_says_how_to_drop_it(files):
+    (files.dir / "files" / "counts.csv").write_text("id;n\n1;42\n")
+    table = '"counts.csv" = {{ key = ["id"], log = false, sep = ";"{} }}\n'
+    assert load(files, table.format(""))[0] == 0
+    code, answer = load(files, table.format(', columns = { n = "integer" }'))
+    assert code == 1
+    assert answer["raw_files.counts"]["reason"] == (
+        "column n has changed its type from text to integer; without a change log its values are nowhere else, so a "
+        'person drops it and the next run adds it anew: ALTER TABLE "raw_files"."counts" DROP COLUMN "n"')
+
+
 def test_a_retired_or_gone_column_keeps_in_the_record_the_type_the_source_last_delivered(erp):  # story 34
     erp.source("create table amounts (id int primary key, a bigint, b bigint)")
     erp.source("insert into amounts values (1, 12, 13)")
