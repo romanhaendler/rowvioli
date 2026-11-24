@@ -207,7 +207,12 @@ def check(conn, t, staged, mirror, log_columns):
         if set(primary_key) != set(key):  # the same columns in another order are the same key (story 20)
             # decision 54: the key the last run recorded is the definition's, so a person changed the primary key
             recorded = sql(conn, 'SELECT "column", "key" FROM _rowvioli.columns WHERE id = $1', [t["id"]])
-            hand = bool(recorded) and {moved.get(c, c) for c, k in recorded if k is not None} == set(key)
+            # without a record (a program that kept none), the comment on _op names the key the change log was
+            # written under, which is the definition's where a person changed the primary key
+            keys = None if recorded or not log_columns else stretches(conn, t)
+            hand = {moved.get(c, c) for c, k in recorded if k is not None} == set(key) if recorded else \
+                {moved.get(c, c) for c in keys[-1]["key"]} == set(key) if keys else \
+                before_the_record(conn, t, primary_key, key, log_columns, renamed)
             plan["key"] = {"was": primary_key, "by": "hand" if hand else "definition", "log": bool(log_columns)}
     # a change log that exists is complete: a run that would leave it behind its mirror, or lay a new mirror's
     # history over it, fails
@@ -236,6 +241,36 @@ def check(conn, t, staged, mirror, log_columns):
         if sql(conn, f"SELECT 1 FROM _stage GROUP BY {names} HAVING count(*) > 1 LIMIT 1"):
             raise Exception(f"a key combination of ({names}) occurs twice")
     return plan
+
+
+def before_the_record(conn, t, primary_key, key, log_columns, renamed):
+    """Decision 54: whether a person changed the primary key of a mirror the record does not know (a target of 0.4.1,
+    which refused every run under a primary key other than the definition's). The table's last successful run loaded
+    under the definition's key then, so the same definition now says a person changed it. Otherwise the change log,
+    written under one of the two keys, says which: under the other a key value has two rows at one moment, an I while
+    it lives or a U or D while it does not. Stops where neither tells: the program never guesses what identifies a
+    row (story 22)."""
+    [(same,)] = sql(conn, """SELECT definition = (SELECT definition FROM _rowvioli.runs WHERE "table" = r."table"
+                                                     AND status = 'ok' ORDER BY run DESC LIMIT 1)
+                               FROM _rowvioli.runs r WHERE run = $1""", [t["run"]])
+    if same:
+        return True
+    if not log_columns:  # replaced as a whole and under the definition's key either way, with no history to get wrong
+        return False
+    defined, primary = ([renamed.get(c, c) for c in k] for k in (key, primary_key))  # the change log's names
+    fits = [bool(k) and set(k) <= dict(log_columns).keys() and not sql(conn, f"""
+        SELECT 1 FROM (SELECT _op, _loaded_at, lag(_op) OVER w AS before, lag(_loaded_at) OVER w AS at
+                       FROM {t['log_table']} WINDOW w AS (PARTITION BY {', '.join(quote(c) for c in k)}
+                                                          ORDER BY _loaded_at)) l
+         WHERE at = _loaded_at OR (_op = 'I') <> (before IS NULL OR before = 'D') LIMIT 1""") for k in (defined, primary)]
+    if fits[0] != fits[1]:
+        return fits[0]
+    comment = f"COMMENT ON COLUMN {t['log_table']}._op IS " + "{}"
+    raise Exception(f"the primary key of {t['name']} is ({', '.join(primary_key)}), the definition's key is "
+                    f"({', '.join(key)}), and nothing in the target tells which of them the change log {t['name']}__log "
+                    f"was written under: say it, {comment.format(literal(json.dumps([{'key': defined}])))} where a "
+                    "person changed the primary key, which the next run puts back, or "
+                    f"{comment.format(literal(json.dumps([{'key': primary}])))} where the definition changed the key")
 
 
 # decision 54: what a proof of a rename needs, strict on purpose, since a false one points a consumer's view at another

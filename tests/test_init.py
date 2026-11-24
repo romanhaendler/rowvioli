@@ -4,7 +4,11 @@ import re
 import psycopg
 import pytest
 
-from test_run import erp  # noqa: F401 (a fixture)
+from test_checks import failed
+from test_columns_go_and_come import log_replays
+from test_history import LOADED_AT, MIRROR, again, at
+from test_keys import primary_key
+from test_run import apply, definition, erp, ok, rows  # noqa: F401 (erp is a fixture)
 
 SHAPE = """
 select table_name, column_name, data_type from information_schema.columns
@@ -107,6 +111,80 @@ def test_the_first_run_after_the_upgrade_records_what_it_changed_by_its_cause_an
     assert [json.loads(n.payload) for n in listener.notifies(timeout=1, stop_after=1)] == [
         {"schema": "raw_erp", "table": "customers", "run": run}]
     listener.close()
+
+
+def released(rv):
+    """The upgrade of a target as the released version leaves it: no columns table, no comment on _op."""
+    rv.target("comment on column raw_erp.customers__log._op is null")
+    version_3(rv)
+    assert rv.run("init").returncode == 0
+
+
+HAND = "alter table raw_erp.customers drop constraint customers_pkey, add primary key (customer_no, name)"
+def elsewhere(rv):
+    """The definition with the same key, changed elsewhere: it differs from that of the last successful run."""
+    return definition(rv).replace('max_age = "1h"', 'max_age = "2h"')
+
+
+KEY_LOG ='select _op, "column", "key", "by" from _rowvioli.columns__log where _run = (select max(run) from _rowvioli.runs)'
+
+
+@pytest.mark.parametrize("cause", ["hand", "definition"])
+def test_a_key_changed_before_the_upgrade_is_told_by_the_change_log_and_keeps_the_history(erp, cause):  # story 45
+    ok(erp)
+    moments = [(erp.target(LOADED_AT)[0][0], rows(erp.target, MIRROR))]
+    erp.source("update customers set name = 'Anna2' where customer_no = 1")  # a U the other key never saw
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    if cause == "hand":
+        erp.target(HAND)
+        apply(erp, elsewhere(erp))
+    else:
+        apply(erp, definition(erp, '"public.customers" = { key = ["customer_no", "name"] }\n'))
+    released(erp)
+    erp.source("update customers set city = 'Köln' where customer_no = 2")
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    assert primary_key(erp) == (["customer_no"] if cause == "hand" else ["customer_no", "name"])
+    changed = erp.target("select _op, customer_no from raw_erp.customers__log where _run = "
+                         "(select max(run) from _rowvioli.runs) order by 1, 2")
+    assert changed == ([("U", 2)] if cause == "hand" else [("D", 1), ("D", 2), ("D", 3), ("I", 1), ("I", 2), ("I", 3)])
+    for moment, mirror in moments:
+        assert at(erp, moment) == mirror, moment
+    log_replays(erp)
+    assert erp.target(KEY_LOG + ' and "column" in (\'customer_no\', \'name\') order by 2') == [
+        ("I", "customer_no", 1, cause), ("I", "name", None if cause == "hand" else 2, cause)]
+
+
+def test_a_key_changed_by_hand_before_the_upgrade_is_told_by_the_definition_of_the_last_successful_run(erp):
+    ok(erp)  # a change log of first rows only, which either key could have written
+    erp.target(HAND)
+    released(erp)
+    again(erp)
+    assert primary_key(erp) == ["customer_no"]
+    assert erp.target(KEY_LOG + " and \"column\" = 'customer_no'") == [("I", "customer_no", 1, "hand")]
+    log_replays(erp)
+
+
+def test_a_key_changed_before_the_upgrade_that_nothing_in_the_target_tells_stops_with_the_statement_that_does(erp):
+    ok(erp)
+    erp.target(HAND)
+    apply(erp, elsewhere(erp))
+    released(erp)
+    before = rows(erp.target, MIRROR), erp.target("select count(*) from raw_erp.customers__log")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp).replace("***", "x")  # the source's password is x, and the reason hides it
+    statement = """COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '[{"key": ["customer_no"]}]'"""
+    assert reason == (
+        "the primary key of raw_erp.customers is (customer_no, name), the definition's key is (customer_no), and "
+        "nothing in the target tells which of them the change log raw_erp.customers__log was written under: say it, "
+        f"{statement} where a person changed the primary key, which the next run puts back, or "
+        """COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '[{"key": ["customer_no", "name"]}]' where the """
+        "definition changed the key")
+    assert (rows(erp.target, MIRROR), erp.target("select count(*) from raw_erp.customers__log")) == before
+    erp.target(statement)
+    again(erp)
+    assert primary_key(erp) == ["customer_no"]
+    assert erp.target(KEY_LOG + " and \"column\" = 'customer_no'") == [("I", "customer_no", 1, "hand")]
+    log_replays(erp)
 
 
 def test_init_on_an_empty_target_prints_only_that_it_is_ready(rv):
