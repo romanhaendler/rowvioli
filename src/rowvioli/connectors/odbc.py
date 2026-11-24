@@ -1,5 +1,6 @@
 """The odbc connector: expects `string`, an ODBC connection string, and knows no option; reads the whole table through arrow-odbc as a
 stream of batches whose schema follows the driver's column descriptions. The driver is installed by the operator."""
+import importlib.metadata
 import re
 
 try:
@@ -8,6 +9,10 @@ except OSError as e:  # no driver manager: arrow-odbc's own message is a dlopen 
     raise ImportError("the ODBC driver manager is missing; install unixodbc (libodbc)") from e
 
 from ..contract import known_options
+
+# the reader's version, so that columns another one delivers are recorded as by = reader (decision 11); the ODBC
+# driver the operator installed is not in it
+driver_version = f"arrow-odbc {importlib.metadata.version('arrow-odbc')}"
 
 # not quoted, since quoting differs between sources, and a plain name needs none on any of them
 PLAIN = re.compile(r"\w+(\.\w+)*")

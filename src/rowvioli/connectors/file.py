@@ -10,6 +10,7 @@ connector. A CSV skips no line before its header unless `skip` says so, and one 
 fails unless `sep` is given: that is how DuckDB reads lines with different numbers of fields. An empty file fails."""
 import functools
 import glob
+import importlib.metadata
 import itertools
 import re
 from pathlib import Path
@@ -18,6 +19,9 @@ import duckdb
 import pyarrow as pa
 
 from ..target import quote
+
+# the reader's version, so that columns another one delivers are recorded as by = reader (decision 11)
+driver_version = f"duckdb {importlib.metadata.version('duckdb')}"
 
 READERS = {".csv": "read_csv", ".xlsx": "read_xlsx", ".parquet": "read_parquet", ".json": "read_json",
            ".jsonl": "read_json", ".ndjson": "read_json"}

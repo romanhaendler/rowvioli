@@ -1,4 +1,5 @@
 """The `file` connector: CSV, Excel, Parquet and JSON files and patterns from a directory (spec test 15)."""
+import importlib.metadata
 import json
 from datetime import date, datetime
 from decimal import Decimal
@@ -65,6 +66,8 @@ def test_a_csv_an_excel_and_a_parquet_file_are_mirrored(files):
     assert files.target("select * from raw_files.customers_csv order by 1") == as_text
     assert files.target("select * from raw_files.customers_xlsx order by 1") == as_text
     assert files.target("select * from raw_files.customers_parquet order by 1") == CUSTOMERS
+    assert files.target("select distinct driver_version from _rowvioli.runs") == [
+        (f"duckdb {importlib.metadata.version('duckdb')}",)]  # story 38
 
 
 def test_csv_and_excel_arrive_as_text_and_parquet_keeps_its_types(files):

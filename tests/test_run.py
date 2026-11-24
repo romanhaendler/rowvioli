@@ -1,4 +1,5 @@
 """`rowvioli run`: one table from the source to its mirror (spec tests 4 rest, 5, 6, 7, 8, 21)."""
+import importlib.metadata
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -97,10 +98,11 @@ def test_runs_has_one_row_per_run_with_worker_times_status_and_counts(erp):
     assert erp.target("select status, attempts from _rowvioli.status") == [("ok", 0)]
 
 
-def test_runs_record_the_version_of_the_program_and_none_for_a_driver_that_says_nothing(erp):
+def test_runs_record_the_version_of_the_program_and_of_the_driver_the_connector_reads_with(erp):  # story 38
     ok(erp)
     version = erp.run("--version").stdout.split()[-1]
-    assert erp.target("select program_version, driver_version from _rowvioli.runs") == [(version, None)]
+    assert erp.target("select program_version, driver_version from _rowvioli.runs") == [
+        (version, f"adbc-driver-postgresql {importlib.metadata.version('adbc-driver-postgresql')}")]
 
 
 def test_a_column_name_longer_than_63_bytes_arrives_cut_and_a_key_naming_it_fails(erp):  # cases A20, as it is today

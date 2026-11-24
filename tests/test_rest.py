@@ -1,4 +1,5 @@
 """The `rest` connector: flat JSON objects over HTTP, page by page (spec tests 5 to 10)."""
+import importlib.metadata
 import json
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -102,6 +103,8 @@ def test_a_paged_endpoint_is_mirrored_completely_and_a_table_without_page_is_one
     assert {t: a["inserted"] for t, a in answer.items()} == {"raw_weather.readings": 3, "raw_weather.single": 1}
     assert sorted(q["page"] for p, q, _ in api.requests if "page" in q) == ["1", "2", "3", "4"]
     assert [q for p, q, _ in api.requests].count({}) == 1
+    assert api.target("select distinct driver_version from _rowvioli.runs") == [
+        (f"httpx {importlib.metadata.version('httpx')}",)]  # story 38
 
 
 def test_named_types_arrive_unnamed_fields_are_dropped_and_missing_ones_are_null(api):

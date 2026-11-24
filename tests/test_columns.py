@@ -1,4 +1,5 @@
 """The columns of every mirror, kept like rows: `_rowvioli.columns`, its log and its history (spec tests, stage 1)."""
+import importlib.metadata
 import json
 
 import psycopg
@@ -131,15 +132,16 @@ def test_a_name_left_behind_by_one_table_and_taken_by_another_is_recorded_once_u
     replays(erp)
 
 
-@pytest.mark.parametrize("before, was", [("'0.0.1', '9'", "program 0.0.1 to {}, driver 9 to none"),
-                                         ("null, null", "program none to {}, driver none to none")])
+@pytest.mark.parametrize("before, was", [("'0.0.1', '9'", "program 0.0.1 to {}, driver 9 to {}"),
+                                         ("null, null", "program none to {}, driver none to {}")])
 def test_another_program_or_driver_version_or_none_marks_what_the_source_changed_as_reader_with_both(erp, before, was):
     ok(erp)
     erp.target(f"update _rowvioli.runs set (program_version, driver_version) = ({before})")
     erp.source("alter table customers add column phone text")
     again(erp)
     version = erp.run("--version").stdout.split()[-1]
-    assert erp.target(LAST) == [("I", "phone", True, "reader", was.format(version))]
+    driver = f"adbc-driver-postgresql {importlib.metadata.version('adbc-driver-postgresql')}"
+    assert erp.target(LAST) == [("I", "phone", True, "reader", was.format(version, driver))]
 
 
 def listen(rv):

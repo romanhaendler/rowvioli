@@ -1,9 +1,14 @@
 """The postgres connector: expects `url` and knows no option; reads the whole table through ADBC as a stream of batches."""
+import importlib.metadata
+
 import adbc_driver_postgresql.dbapi as adbc
 import pyarrow as pa
 
 from ..contract import known_options
 from ..target import quote
+
+# the reader's version, so that columns another one delivers are recorded as by = reader (decision 11)
+driver_version = f"adbc-driver-postgresql {importlib.metadata.version('adbc-driver-postgresql')}"
 
 
 def read(connection, table, options):
