@@ -1,9 +1,12 @@
 """Types: the target keeps its type while the values fit, is widened when one does not, and a type of another family
 is a column that goes and comes (spec tests, stage 3; the numbers are those of `.scratch/schema-changes/cases.md`)."""
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from test_checks import failed
 from test_columns_go_and_come import log_replays
+from test_file import files, load  # noqa: F401 (files is a fixture)
 from test_history import again
 from test_run import apply, definition, erp, ok  # noqa: F401 (erp is a fixture)
 
@@ -150,6 +153,50 @@ def test_a_table_stuck_on_a_changed_type_resolves_with_the_first_run(erp):  # st
         == [("ok", 0, None)]
     assert types(erp, "a") == ["text", "text"]
     log_replays(erp, "raw_erp.amounts")
+
+
+def parquet(rv, values, type):
+    pq.write_table(pa.table({"id": pa.array([1, 2], pa.int32()), "n": pa.array(values, type)}),
+                   rv.dir / "files" / "counts.parquet")
+
+
+COUNTS = '"counts.parquet" = { key = ["id"] }\n'
+
+
+def test_F4_a_guessed_type_that_flips_to_another_family_stops_with_the_hint_to_pin_it(files):
+    parquet(files, [42, 43], pa.int64())
+    assert load(files, COUNTS)[0] == 0
+    parquet(files, ["42", "N/A"], pa.string())
+    code, answer = load(files, COUNTS)
+    assert code == 1
+    assert answer["raw_files.counts"]["reason"] == (
+        "column n has changed its type from bigint to text; a source without a catalog guesses its types, so pin it "
+        "under columns in the table's definition")
+    assert files.target("select n from raw_files.counts order by id") == [(42,), (43,)]
+
+
+def test_F5_a_guessed_type_that_widens_within_its_family_widens_the_target(files):
+    parquet(files, [42, 43], pa.int32())
+    assert load(files, COUNTS)[0] == 0
+    parquet(files, [42, 3000000000], pa.int64())
+    assert load(files, COUNTS)[0] == 0
+    assert types(files, "n", "raw_files.counts") == ["bigint", "bigint"]
+    assert files.target("select n from raw_files.counts order by id") == [(42,), (3000000000,)]
+    log_replays(files, "raw_files.counts")
+
+
+def test_B11_a_cast_under_columns_that_changes_goes_by_the_same_rules_and_is_recorded_as_by_definition(files):
+    (files.dir / "files" / "counts.csv").write_text("id;n\n1;42\n2;3000000000\n")
+    table = '"counts.csv" = {{ key = ["id"], sep = ";", columns = {{ n = "{}" }} }}\n'
+    code, answer = load(files, table.format("decimal(12,0)"))
+    assert code == 0, answer
+    code, answer = load(files, table.format("decimal(14,2)"))  # the values fit: nothing to widen
+    assert code == 0, answer
+    (files.dir / "files" / "counts.csv").write_text("id;n\n1;42.5\n2;3000000000\n")
+    assert load(files, table.format("decimal(14,2)"))[0] == 0
+    assert types(files, "n", "raw_files.counts") == ["numeric(14,2)", "numeric(14,2)"]
+    assert files.target(RECORD, ["n"]) == [("numeric(14,2)", "numeric(14,2)", "definition")]
+    log_replays(files, "raw_files.counts")
 
 
 def test_a_retired_or_gone_column_keeps_in_the_record_the_type_the_source_last_delivered(erp):  # story 34

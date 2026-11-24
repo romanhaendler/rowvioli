@@ -566,9 +566,12 @@ def record_columns(conn, t, delivered, mirror, log, changes):
         rows.append(row)
     if not rows:
         return
+    pinned = dict(t["options"].get("columns") or {})  # a type the definition gives (decision 19), stored as pairs
     for r in rows:
         if (r["target_schema"], r["target_table"]) == (t["schema"], t["table"]):
             r.update(changes.get(r["column"], {}))
+            if r["by"] == "source" and r["column"] in pinned:
+                r["by"] = "definition"
     if any(r["by"] == "source" for r in rows):  # another reader gave these columns, perhaps, not the source
         [(differs, note)] = sql(conn, """
             SELECT (l.program_version, l.driver_version) IS DISTINCT FROM (c.program_version, c.driver_version),
