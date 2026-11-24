@@ -624,7 +624,7 @@ def publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, 
                         f"the table left the definition while this run loaded {t['name']}; nothing was published")
     # decision 54: a rename stated since the claim of a column this run lets go could act no more after it
     if lost := [f"{old} to {new}" for new, old in json.loads(claimed[0][0] or "{}").items()
-                if old in plan["gone"] and (t["options"].get("renamed") or {}).get(new) != old]:
+                if old in plan["gone"] and new in dict(staged) and (t["options"].get("renamed") or {}).get(new) != old]:
         raise Exception(f"the definition renames column {' and '.join(lost)} since this run claimed {t['name']}; "
                         "nothing was published, the next run renames it")
     sql(conn, """UPDATE _rowvioli.runs SET status = 'ok', finished_at = clock_timestamp(), rows_read = $2,
