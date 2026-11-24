@@ -585,6 +585,15 @@ def test_a_time_finer_than_microseconds_fails_naming_the_column_and_a_type_under
          "01:00:00")]
 
 
+def test_a_csv_not_in_utf8_fails_without_its_text_and_loads_with_its_encoding(files):
+    (files.dir / "files" / "l1.csv").write_bytes("id;name\n1;Müller\n".encode("latin-1"))
+    code, answer = load(files, '"l1.csv" = { sep = ";" }\n')
+    assert answer["raw_files.l1"]["reason"] == "Invalid Input Error: CSV Error on Line: 2"
+    code, answer = load(files, '"l1.csv" = { sep = ";", encoding = "latin-1" }\n')
+    assert code == 0, answer
+    assert files.target("select name from raw_files.l1") == [("Müller",)]
+
+
 def test_an_unsigned_integer_of_a_parquet_file_arrives_whole(files):
     """The driver wrote a uint64 as bigint, 2**64 - 1 as -1 with the run ok; the smaller ones it widens itself."""
     pq.write_table(pa.table({"id": [1, 2], "u64": pa.array([2**64 - 1, 2**63], pa.uint64()),
