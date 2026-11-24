@@ -466,7 +466,7 @@ def test_a_retired_column_whose_comment_a_person_removed_stops_with_the_text_to_
                                   "the old values of city")
 
 
-@pytest.mark.parametrize("catalog", [None, "data"])
+@pytest.mark.parametrize("catalog", [None, "data", "definition"])
 def test_a_connector_of_ones_own_that_says_it_has_no_catalog_leaves_a_column_it_stops_delivering_empty(erp, catalog):
     env = {"ROWVIOLI_TEST_CATALOG": catalog} if catalog else {}
     lab(erp, 'records = [{ n = 1, city = "Bonn" }, { n = 2, city = "Ulm" }]')
@@ -474,11 +474,24 @@ def test_a_connector_of_ones_own_that_says_it_has_no_catalog_leaves_a_column_it_
     lab(erp, "records = [{ n = 1 }, { n = 2 }]")  # one run of the source leaves the column out
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert erp.run("run", env=env).returncode == 0
-    # without a word the connector has a catalog, as a database source: the column went
-    assert ("city" in columns(erp, "raw_lab.numbers")) == bool(catalog)
+    # without a word the connector has a catalog, as a database source: the column went; with "definition" it was
+    # taken out of the definition's columns, which the connector delivers
+    assert ("city" in columns(erp, "raw_lab.numbers")) == (catalog == "data")
     assert erp.target("select n, city from raw_lab.numbers__history where _valid_to is null order by n") == [
         (1, None), (2, None)]
+    if catalog != "data":
+        assert erp.target('select "by" from _rowvioli.columns__log where "column" = \'city\' and target_table = '
+                          "'numbers' order by _run desc limit 1") == [(catalog or "source",)]
     log_replays(erp, "raw_lab.numbers")
+
+
+def test_a_connector_of_ones_own_that_says_another_catalog_fails_naming_it(erp):
+    lab(erp, 'records = [{ n = 1, city = "Bonn" }]')
+    assert erp.run("run", env={"ROWVIOLI_TEST_CATALOG": "none"}).returncode == 1
+    assert erp.target("select reason from _rowvioli.runs where status = 'failed'") == [(
+        'connector "testing" says catalog = \'none\', which is neither "data" nor "definition"; without the entry '
+        "the source has a catalog of its own",)]
+    assert erp.target("select to_regclass('raw_lab.numbers')") == [(None,)]
 
 
 def follow(rv, reason):

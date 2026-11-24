@@ -419,6 +419,9 @@ def stage(conn, t):
     number of rows read."""
     connector = contract.connector(t["type"], f" on worker {t['worker']}")
     t["catalog"] = getattr(connector, "catalog", None)  # the source's own, unless the connector says otherwise
+    if t["catalog"] not in (None, "data", "definition"):  # else a rule would take it for neither and act by halves
+        raise Exception(f'connector "{t["type"]}" says catalog = {t["catalog"]!r}, which is neither "data" nor '
+                        '"definition"; without the entry the source has a catalog of its own')
     sql(conn, "UPDATE _rowvioli.runs SET driver_version = $2 WHERE run = $1",
         [t["run"], getattr(connector, "driver_version", None)])
     try:
