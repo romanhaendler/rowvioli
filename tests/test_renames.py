@@ -307,6 +307,17 @@ def test_F2_a_renamed_header_of_a_file_is_a_new_column_unless_renamed_says_it_is
     log_replays(files, "raw_files.people")
 
 
+def test_a_renamed_header_of_a_file_without_a_change_log_is_renamed_where_a_missing_column_stops(files):
+    csv = files.dir / "files" / "people.csv"
+    csv.write_text("id;name;city\n1;Anna;Bonn\n2;Ben;Essen\n")
+    table = '"people.csv" = {{ key = ["id"], log = false, sep = ";"{} }}\n'
+    assert load_file(files, table.format(""))[0] == 0
+    csv.write_text("id;name;town\n1;Anna;Bonn\n2;Ben;Essen\n")
+    assert load_file(files, table.format(', renamed = { town = "city" }'))[0] == 0
+    assert files.target("select * from raw_files.people order by id") == [("1", "Anna", "Bonn"), ("2", "Ben", "Essen")]
+    assert columns(files, "raw_files.people") == ["id", "name", "town"]
+
+
 def test_renamed_to_a_name_the_change_log_has_stops_and_says_what_to_rename(erp):
     people(erp)
     erp.source("alter table people add column town text")
