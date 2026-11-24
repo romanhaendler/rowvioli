@@ -285,8 +285,10 @@ def check(conn, t, staged, mirror, log_columns, renamed):
     if key:
         names = ", ".join(quote(k) for k in key)
         if sql(conn, f"SELECT 1 FROM _stage WHERE {' OR '.join(quote(k) + ' IS NULL' for k in key)} LIMIT 1"):
-            raise Exception(f"a key column of ({names}) is null in a row of the source: give it a value there, or give "
-                            "the table a key whose columns always have one")
+            # a source without a catalog delivers a field its data lack, or name otherwise, as null
+            missing = " or missing from its data, where it may be named otherwise, also in case" if t["catalog"] else ""
+            raise Exception(f"a key column of ({names}) is null in a row of the source{missing}: give it a value there, "
+                            "or give the table a key whose columns always have one")
         if sql(conn, f"SELECT 1 FROM _stage GROUP BY {names} HAVING count(*) > 1 LIMIT 1"):
             raise Exception(f"a key combination of ({names}) occurs twice in the source: make it unique there, or give "
                             "the table a key that identifies a row")

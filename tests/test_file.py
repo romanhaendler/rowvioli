@@ -289,7 +289,10 @@ def test_a_key_column_named_under_columns_that_no_file_has_stops_the_run_as_null
     orders(files, 1, 2)
     code, answer = load(files, '"orders_*.csv" = { key = ["order_id"], sep = ";", target_table = "orders", '
                                'columns = { order_id = "integer" } }\n')
-    assert (code, answer["raw_files.orders"]["reason"]) == (1, 'a key column of ("order_id") is null')
+    assert (code, answer["raw_files.orders"]["reason"]) == (1, 'a key column of ("order_id") is null in a row of the '
+                                                            "source or missing from its data, where it may be named "
+                                                            "otherwise, also in case: give it a value there, or give "
+                                                            "the table a key whose columns always have one")
     assert files.target("select to_regclass('raw_files.orders')") == [(None,)]
 
 
