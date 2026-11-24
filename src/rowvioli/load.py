@@ -655,7 +655,7 @@ def carry_out(conn, t, plan):
     the columns table says beyond the catalogue (decision 54)."""
     renamed = {old: new for new, old in plan["renamed"].items()}
     t["grants"] = [(p, renamed.get(c, c), *rest) for p, c, *rest in sql(conn, GRANTS, [t["history"]])]
-    alter(conn, t, f"the columns of {t['name']} change", f"DROP VIEW IF EXISTS {t['history']}")
+    alter(conn, t, f"the columns of {t['name']} change", f"DROP VIEW IF EXISTS {t['history']}", t["history"])
     changes = {}
     logged = dict(sql(conn, COLUMNS, [t["log_table"]]))
     keys = stretches(conn, t) if logged else None  # while the columns it names have those names
@@ -684,7 +684,8 @@ def carry_out(conn, t, plan):
             [(name,)] = sql(conn, "SELECT conname FROM pg_constraint WHERE conrelid = $1::regclass AND contype = 'p'",
                             [t["mirror"]])
             dropped = alter(conn, t, f"the key of {t['name']} would change from ({', '.join(was)}) to "
-                                     f"({', '.join(key)})", f"ALTER TABLE {t['mirror']} DROP CONSTRAINT {quote(name)}")
+                                     f"({', '.join(key)})", f"ALTER TABLE {t['mirror']} DROP CONSTRAINT {quote(name)}",
+                            t["mirror"], constraint=name)
         # Postgres leaves NOT NULL behind, also where LIKE copied it; a column still in a key it refuses to free
         if (loose := [c for c in was if c not in key]) and (not was or dropped):
             for table in [t["mirror"], t["log_table"]] if plan["key"]["log"] else [t["mirror"]]:
@@ -699,7 +700,7 @@ def carry_out(conn, t, plan):
         changes[name] = {"note": f"{note} went with it" if note else None}
         alter(conn, t, f"column {name} " + ("has another type in the source" if name in plan["retired"]
                                          else "is gone from the source") + f" and would leave the mirror {t['name']}",
-              f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
+              f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}", t["mirror"], [name])
     for name in plan["unpinned"]:  # decision 54: a type the definition gave, and took back
         changes[name]["by"] = changes[plan["retired"][name]]["by"] = "definition"
     for table in (t["mirror"], t["log_table"]):  # decision 54, one ALTER per table, so it is rewritten at most once
@@ -711,7 +712,7 @@ def carry_out(conn, t, plan):
                                                  ("to follow the mirror, which a person widened", hand)] if some)
             alter(conn, t, f"{table} would be widened {why}, {columns}",
                   f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(n)} TYPE {type}" for n, type in widened),
-                  table, [n for n, _ in widened])
+                  table, [n for n, _ in widened], drop=False)
     if t.get("blocked"):
         raise Exception("; and ".join(t["blocked"]) + ": change or drop that, and the next run goes on")
     return changes
@@ -761,24 +762,33 @@ def keys_of_log(conn, t, keys):
     return text
 
 
-# what Postgres refuses a change of type of columns $2 (a JSON list) of table $1 for, which its detail names one of: the
-# views and materialized views, rules, triggers, policies, publications and generated columns on them, and the views on
-# those views, layer by layer, as the detail of a DROP says them. The last field: the history view $3, whose drop the plan
-# makes and names what is in its way
+# what Postgres refuses a change of table $1 for: of its columns $2 (a JSON list), of all of it for none, or of its
+# constraint $4; with $5 a drop, else a change of type. A drop is refused for every object that depends on what it drops
+# or on what goes with it (the index of a constraint or of a column), a change of type for the views and materialized
+# views, rules, triggers, policies, publications and generated columns on the columns, and both for the views on those
+# views, layer by layer, as the detail of a DROP says them. Read from the catalogue, which takes no lock on them. The last
+# field: the history view $3, whose drop the plan makes and names what is in its way
 IN_THE_WAY = """
-    WITH RECURSIVE on_it(rel, describe, what) AS (
+    WITH RECURSIVE it(classid, objid, objsubid) AS (
+        SELECT 'pg_class'::regclass, attrelid, attnum::int FROM pg_attribute
+         WHERE attrelid = $1::regclass AND attname IN (SELECT json_array_elements_text($2::json))
+        UNION SELECT 'pg_class'::regclass, $1::regclass::oid, 0 WHERE $2::text = '[]' AND $4::text IS NULL
+        UNION SELECT 'pg_constraint'::regclass, oid, 0 FROM pg_constraint WHERE conrelid = $1::regclass AND conname = $4
+        UNION
+        SELECT d.classid, d.objid, 0 FROM it JOIN pg_depend d ON (d.refclassid, d.refobjid) = (it.classid, it.objid)
+           AND it.objsubid IN (0, d.refobjsubid) AND d.deptype IN ('a', 'i') AND $5),
+    on_it(rel, describe, what) AS (
         SELECT CASE WHEN r.rulename = '_RETURN' THEN r.ev_class END,
                CASE WHEN r.rulename = '_RETURN' THEN pg_describe_object('pg_class'::regclass, r.ev_class, 0)
                     WHEN g.oid IS NOT NULL THEN pg_describe_object('pg_class'::regclass, g.adrelid, g.adnum)
                     ELSE pg_describe_object(d.classid, d.objid, 0) END,
-               pg_describe_object(d.refclassid, d.refobjid, d.refobjsubid)
-          FROM pg_depend d JOIN pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
+               pg_describe_object(it.classid, it.objid, it.objsubid)
+          FROM it JOIN pg_depend d ON (d.refclassid, d.refobjid) = (it.classid, it.objid)
+           AND it.objsubid IN (0, d.refobjsubid) AND d.deptype = 'n'
           LEFT JOIN pg_rewrite r ON d.classid = 'pg_rewrite'::regclass AND r.oid = d.objid
           LEFT JOIN pg_attrdef g ON d.classid = 'pg_attrdef'::regclass AND g.oid = d.objid
-         WHERE d.refclassid = 'pg_class'::regclass AND d.refobjid = $1::regclass AND d.deptype = 'n'
-           AND d.classid IN ('pg_rewrite'::regclass, 'pg_trigger'::regclass, 'pg_policy'::regclass,
-                             'pg_publication_rel'::regclass, 'pg_attrdef'::regclass)
-           AND a.attname IN (SELECT json_array_elements_text($2::json))
+         WHERE $5 OR d.classid IN ('pg_rewrite'::regclass, 'pg_trigger'::regclass, 'pg_policy'::regclass,
+                                   'pg_publication_rel'::regclass, 'pg_attrdef'::regclass)
         UNION
         SELECT CASE WHEN r.rulename = '_RETURN' THEN r.ev_class END,
                CASE WHEN r.rulename = '_RETURN' THEN pg_describe_object('pg_class'::regclass, r.ev_class, 0)
@@ -790,17 +800,21 @@ IN_THE_WAY = """
     SELECT describe, what, coalesce(rel = to_regclass($3), false) FROM on_it ORDER BY describe, what"""
 
 
-def alter(conn, t, why, statement, table=None, columns=()):
+def alter(conn, t, why, statement, table, columns=(), constraint=None, drop=True):
     """A change Postgres refuses while a consumer's object depends on it: the reason says what would have changed,
     then Postgres's detail, which names the object (decision 54). Kept in `t["blocked"]` while carry_out goes on, so
-    that the stop names every object in the way and one round of work clears it. For a type changed on `columns` of
-    `table` Postgres names one object, and the catalogue gives all. Says whether the change was made.
+    that the stop names every object in the way and one round of work clears it. The change is of `columns` of `table`,
+    of all of it for none, or of its `constraint`: a drop, else a change of type, for which Postgres names one object,
+    and the catalogue gives all (IN_THE_WAY). Says whether the change was made.
     A drop locks what depends on what it drops before it refuses: a consumer who reads such a view while the run holds
-    the mirror waits for the run, so the run does not wait for the view, which would be a deadlock (story 43)."""
+    the mirror waits for the run, so the run does not wait for the view, which would be a deadlock (story 43); the
+    catalogue names it then. Every object is named with its schema, also one on the search path."""
+    sql(conn, "SET LOCAL search_path = ''")  # before the savepoint, whose rollback would undo it
     sql(conn, "SAVEPOINT alter")
     sql(conn, "SET LOCAL lock_timeout = '50ms'")  # far below the second after which Postgres looks for a deadlock
     try:
         sql(conn, statement)
+        done = True
     except Exception as e:
         details = {k.decode(): v.decode() for k, v in getattr(e, "details", None) or []}
         state = details.get("PG_DIAG_SQLSTATE")
@@ -808,20 +822,20 @@ def alter(conn, t, why, statement, table=None, columns=()):
         if state not in ("2BP01", "0A000", "55P03") or state != "55P03" and "PG_DIAG_MESSAGE_DETAIL" not in details:
             raise
         sql(conn, "ROLLBACK TO SAVEPOINT alter")
+        done = False
+        found = sql(conn, IN_THE_WAY, [table, json.dumps(columns), t["history"], constraint, drop]) \
+            if state == "55P03" or not drop else []
+        named = "; ".join(f"{d} depends on {w}" for d, w, history in found if not history)
         if state == "55P03":
-            t.setdefault("blocked", []).append(f"{why}, but an object that depends on it was in use, so Postgres did "
-                                               "not name it; the next run does")
-            return False
-        detail = details["PG_DIAG_MESSAGE_DETAIL"].replace("\n", "; ")
-        if state == "0A000" and columns:
-            found = sql(conn, IN_THE_WAY, [table, json.dumps(columns), t["history"]])
-            if not (named := "; ".join(f"{d} depends on {w}" for d, w, history in found if not history)) and found:
-                return False  # only the history view, whose drop is stopped already with what is in its way
-            detail = named or detail
-        t.setdefault("blocked", []).append(f"{why}, but {detail}")
-        return False
+            t.setdefault("blocked", []).append(f"{why}, but {named}, in use, so the run did not wait for it" if named
+                                               else f"{why}, but an object that depends on it was in use, so "
+                                                    "Postgres did not name it; the next run does")
+        elif named or not found:  # else only the history view, whose drop is stopped already with what is in its way
+            detail = named or details["PG_DIAG_MESSAGE_DETAIL"].replace("\n", "; ")
+            t.setdefault("blocked", []).append(f"{why}, but {detail}")
     sql(conn, "SET LOCAL lock_timeout TO DEFAULT")
-    return True
+    sql(conn, "SET LOCAL search_path TO DEFAULT")
+    return done
 
 
 def write_log(conn, t, staged, log, names):

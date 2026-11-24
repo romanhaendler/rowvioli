@@ -86,8 +86,8 @@ def test_a_view_on_the_mirror_lets_values_that_fit_load_and_stops_the_widening_o
     erp.source("insert into prices values (3, 1.2345)")
     reason = failed(erp, "erp")
     assert reason.startswith('"raw_erp"."prices" would be widened for values of the source, column price to '
-                             'numeric(14,4), but view priced depends on column price of table raw_erp.prices: change or '
-                             "drop that, and the ne"), reason  # the harness's password is x, which the reason hides
+                             'numeric(14,4), but view public.priced depends on column price of table raw_erp.prices: '
+                             "change or drop that, and the ne"), reason  # the harness's password is x, which the reason hides
     assert erp.target("select id, price::text from public.priced order by id") == [(1, "137.00"), (2, "1.50")]
     erp.target("drop view public.priced")  # the way out
     assert run(erp, "erp")[1]["tables"]["raw_erp.prices"] == {**UNCHANGED, "inserted": 1}
@@ -105,9 +105,10 @@ def test_a_widening_names_every_view_on_the_column_and_on_those_views_where_post
     erp.source("insert into prices values (2, 1.2345)")
     reason = failed(erp, "erp")
     assert reason.endswith("would be widened for values of the source, column price to numeric(14,4), but materialized "
-                           "view m depends on column price of table raw_erp.prices; view w1 depends on column price of "
-                           "table raw_erp.prices; view w2 depends on column price of table raw_erp.prices; view w3 "
-                           "depends on view w1: change or drop that, and the ne***t run goes on"), reason
+                           "view public.m depends on column price of table raw_erp.prices; view public.w1 depends on "
+                           "column price of table raw_erp.prices; view public.w2 depends on column price of table "
+                           "raw_erp.prices; view public.w3 depends on view public.w1: change or drop that, and the "
+                           "ne***t run goes on"), reason
     erp.target("drop view public.w3, public.w2, public.w1; drop materialized view public.m")  # one round
     assert run(erp, "erp")[1]["tables"]["raw_erp.prices"] == {**UNCHANGED, "inserted": 1}
     log_replays(erp, "raw_erp.prices")
@@ -128,7 +129,7 @@ def test_a_widening_names_a_policy_a_rule_or_a_trigger_on_the_column_beside_a_vi
     erp.source("insert into prices values (2, 1.2345, 1.2345)")
     assert failed(erp, "erp").endswith(
         "would be widened for values of the source, column price to numeric(14,4), column cost to numeric(14,4), but "
-        f"{named} depends on column price of table raw_erp.prices; view w depends on column cost of table "
+        f"{named} depends on column price of table raw_erp.prices; view public.w depends on column cost of table "
         "raw_erp.prices: change or drop that, and the ne***t run goes on")
 
 

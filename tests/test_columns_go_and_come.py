@@ -151,7 +151,7 @@ def test_D6_a_view_on_the_history_view_stops_a_change_of_any_column_and_is_named
     erp.source("alter table customers drop column city")  # a column the view does not read
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
-    assert reason.startswith("the columns of raw_erp.customers change, but view names depends on view "
+    assert reason.startswith("the columns of raw_erp.customers change, but view public.names depends on view "
                              "raw_erp.customers__history: change or drop that"), reason
     assert columns(erp) == ["customer_no", "name", "city"]
     erp.target("drop view public.names")  # the way out
@@ -168,11 +168,12 @@ def test_a_stop_names_every_object_in_the_way_through_the_layers_so_one_round_of
     erp.source("alter table customers drop column city")
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
-    assert reason == ("the columns of raw_erp.customers change, but view v1 depends on view "
-                      "raw_erp.customers__history; view v2 depends on view v1; view v3 depends on view v2; and column "
-                      "city is gone from the source and would leave the mirror raw_erp.customers, but materialized "
-                      "view m depends on column city of table raw_erp.customers; view w depends on column city of "
-                      "table raw_erp.customers: change or drop that, and the ne***t run goes on"), reason
+    assert reason == ("the columns of raw_erp.customers change, but view public.v1 depends on view "
+                      "raw_erp.customers__history; view public.v2 depends on view public.v1; view public.v3 depends "
+                      "on view public.v2; and column city is gone from the source and would leave the mirror "
+                      "raw_erp.customers, but materialized view public.m depends on column city of table "
+                      "raw_erp.customers; view public.w depends on column city of table raw_erp.customers: change or "
+                      "drop that, and the ne***t run goes on"), reason
     assert columns(erp) == ["customer_no", "name", "city"]
     erp.target("drop view public.v3, public.v2, public.v1, public.w; drop materialized view public.m")  # one round
     again(erp)
