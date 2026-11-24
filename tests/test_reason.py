@@ -102,14 +102,17 @@ ODBC = "ODBC emitted an error calling 'SQLFetch': State: {}, Native error: 1, Me
     ("P0001", "ERROR: bad row Secret;\nError while executing the query", None),
     # a table that is not there: of class 42 only a missing right is shown, and the reason names the table
     ("42S02", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Invalid object name 'dbo.orders'.", None),
-    # names alone: a refused login, a missing right, the driver manager's own
+    # names alone: a refused login, a missing right
     ("28000", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Login failed for user 'reader'.", True),
     ("42501", "ERROR: permission denied for table orders", True),
-    ("IM002", "[unixODBC][Driver Manager]Data source name not found and no default driver specified", True)])
+    # whatever its SQLSTATE, a failure to connect, before any row: the driver manager's own (ticket 15, D2)
+    ("IM002", "[unixODBC][Driver Manager]Data source name not found and no default driver specified", "connect"),
+    ("01000", "[unixODBC][Driver Manager]Can't open lib 'NoSuchDriver' : file not found", "connect")])
 def test_an_odbc_drivers_message_is_shown_by_its_sqlstate_alone(state, message, shown):  # decision 54, item 8
-    said = reason_line([], RuntimeError(ODBC.format(state) + message), "reading the source", "dbo.orders")
+    odbc = ODBC.replace("SQLFetch", "SQLDriverConnect") if shown == "connect" else ODBC
+    said = reason_line([], RuntimeError(odbc.format(state) + message), "reading the source", "dbo.orders")
     if shown:
-        assert said == ODBC.format(state) + message
+        assert said == odbc.format(state) + message
     else:
         assert said == (f"a{' function' if state == 'P0001' else ' statement'} raised an error"
                         f"{f' (SQLSTATE {state})' if state.isalnum() else ''} in the source, reading dbo.orders; its "

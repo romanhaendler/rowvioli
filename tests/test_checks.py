@@ -315,7 +315,12 @@ def test_a_table_without_a_key_is_emptied_the_same_way(erp):
     # syntax error at or near "4711", improper relation name (too many dotted names): a.b.c.secret.e, invalid name
     # syntax; of class 42 only a missing right is shown
     ("my secret 4711", "to_tsquery(n)", "42601"), ("secret 3000000000", "n::regtype::text", "42601"),
-    ("a.b.c.secret.e", "n::regclass", "42601"), ('"secret 3000000000', "n::regclass", "42602")])
+    ("a.b.c.secret.e", "n::regclass", "42601"), ('"secret 3000000000', "n::regclass", "42602"),
+    # and in other classes: invalid configuration parameter name "…", could not open file "…", cross-database
+    # references are not implemented: …; so a message is shown by an allowlist of codes, not of classes
+    ("secret.3000000000", "set_config(n, 'x', true)", "42602"), ("secret 3000000000", "pg_read_file(n)", "58P01"),
+    ("a.secret.3000000000", "n::regclass", "0A000"),
+    ("my secret\n4711", "to_tsquery(n)", "42601")])  # a line break inside the value
 def test_a_value_in_the_sources_message_is_withheld_by_its_sqlstate(erp, value, column, state):  # decision 54, item 8
     erp.source("create table texts (k int, n text)")
     erp.source("insert into texts values (1, %s)", [value])

@@ -1097,8 +1097,9 @@ WRAPPER = re.compile(r"^(?:[A-Z_]+: )?(?:\[libpq\] )?(?:Execution error \[PGRES_
 VALUE = re.compile(r'(?<=: )"[^\n]*"$|(?:^|(?<=\s))"[^\n]*"(?= is out of range)')
 # the SQLSTATE in arrow-odbc's text of a driver's diagnostic record, the ODBC standard's for every driver
 # (`ODBC emitted an error calling 'SQLExecDirect': State: 22P02, Native error: 1, Message: ...`); a driver that sets
-# none leaves five NULs there
-ODBC_STATE = re.compile(r"\bState: ([^,]{5}), Native error: -?\d+, Message: ")
+# none leaves five NULs there. Before it the ODBC call that failed: a failure to connect (SQLDriverConnect) comes before
+# any row and is shown, whatever its SQLSTATE (the driver manager's `Can't open lib` is a 01000)
+ODBC_STATE = re.compile(r"(?:\bcalling '(\w+)':\s*)?\bState: ([^,]{5}), Native error: -?\d+, Message: ")
 OWN = os.path.dirname(os.path.abspath(__file__)) + os.sep  # the program's code, its shipped connectors among it
 
 
@@ -1148,32 +1149,41 @@ CONSTRAINT = re.compile(r'duplicate key value violates unique constraint "[^"]*"
                         r'|could not create (?:unique index|exclusion constraint) "[^"]*"')
 
 
-# the classes of SQLSTATE whose messages hold names and no value of a row, and which an operator needs: a lost
-# connection, a feature, a transaction's state, a refused login, a dependent object, a deadlock, resources such as a
-# full disk, a limit, an object in use, a cancel, a system error, and ODBC's driver manager (a data source not found).
-# A constraint's message (class 23) is known by its words (CONSTRAINT)
-NAMES = {"08", "0A", "25", "28", "2B", "40", "53", "54", "55", "57", "58", "IM"}
-# of class 42 only the codes whose message cannot hold a row's value: a cast of one makes a name (`relation "Anna" does
-# not exist` of ::regclass) or a syntax error (`syntax error in tsquery: "…"`). A missing right names a real object
-SHOWN = {"42501"}
+# the SQLSTATEs whose messages name objects, users or limits and never a value of a row, and which an operator needs.
+# Codes, not classes: in a class, some code's message quotes what a cast or a function was given (`relation "Anna" does
+# not exist` 42P01, `syntax error in tsquery: "…"` 42601, `could not open file "…"` 58P01, `cross-database references
+# are not implemented: …` 0A000). A code comes in only with the reason why its message holds no value. A constraint's
+# message (class 23) is known by its words (CONSTRAINT); an ODBC driver's failure to connect is the connector's own
+SHOWN = {"08000", "08001", "08003", "08004", "08006", "08P01", "08S01",  # a connection lost or refused: a host
+         "28000", "28P01",  # a refused login: the user
+         "25006",  # a read-only transaction, as on a standby: the statement's kind
+         "2BP01",  # objects that depend on one to be dropped: the objects
+         "40001", "40P01",  # a serialization failure, a deadlock: fixed words
+         "42501",  # a missing right: an object that exists
+         "53000", "53100", "53200", "53300", "53400",  # resources, a full disk: a file, a size, a role
+         "55006", "55P03",  # an object in use: the object
+         "57014", "57P01", "57P02", "57P03", "57P04", "57P05"}  # a cancel, a timeout, a shutdown: fixed words
 
 
 def withheld(e, step, source):
     """Decision 54, item 8, the one rule for a database's message, of the source or the target, through ADBC or ODBC:
-    it reaches a reason only where the SQLSTATE the driver gives says that it holds names alone (NAMES, SHOWN),
+    it reaches a reason only where the SQLSTATE the driver gives says that it holds names alone (SHOWN),
     or as Postgres's own message of a violated constraint, and never from under a consumer's function. Every other is
     withheld: a value's (class 22), a consumer's RAISE or ASSERT (P0001, P0004) or a function in C (it names no frame),
-    a class the program does not know, a driver's HY000 or none. Returns the reason, which names what the program
+    a code the program does not know, a driver's HY000 or none. Returns the reason, which names what the program
     knows: the function its frame names in the context the driver gives, in whatever language (`PL/pgSQL function
     guard() line 3 at RAISE`, `SQL function "f" statement 1`, `PL/Python function "guard"`), the SQLSTATE, the source
     table or the target. None for a message to show, and for one without a SQLSTATE: the program's own, a connector's,
     libpq's before a server answered, which reason_line shows without a quoted value."""
     details = {k.decode(): v.decode(errors="replace") for k, v in getattr(e, "details", None) or []}
     text = str(e)
-    state = details.get("PG_DIAG_SQLSTATE") or ((odbc := ODBC_STATE.search(text)) and odbc[1])
+    odbc = ODBC_STATE.search(text)
+    if not details and odbc and odbc[1] == "SQLDriverConnect":
+        return None
+    state = details.get("PG_DIAG_SQLSTATE") or (odbc and odbc[2])
     function = FRAME.search(details.get("PG_DIAG_CONTEXT") or text.partition("\nCONTEXT:  ")[2])
     message = details.get("PG_DIAG_MESSAGE_PRIMARY") or WRAPPER.sub("", text).split("\n")[0]
-    if CONSTRAINT.fullmatch(message) or not (function or state and state[:2] not in NAMES and state not in SHOWN):
+    if CONSTRAINT.fullmatch(message) or not (function or state and state not in SHOWN):
         return None
     who = f"function {function[1]}" if function else "a function" if state in ("P0001", "P0004") else "a statement"
     where = "source" if step == "reading the source" else "target"

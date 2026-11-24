@@ -81,6 +81,36 @@ reports of the wave are added below as they arrive.
 - B5 by reading: a first run that creates the schema and then fails leaves the schema (committed before the publish).
   Check; decide (document as intended, or make it part of the publish).
 
+### Shakedown P18b (Sonnet; scripts repro_newline.sh, repro_leaks.sh in scratchpad/shake/p18b)
+- X1 Leak (confirms and widens O1): a value in a shown SQLSTATE of other classes too: 42602 `invalid configuration
+  parameter name "…"` (set_config), 58P01 `could not open file "…"` (pg_read_file), 0A000 `cross-database references
+  are not implemented: …`, a line break inside a quoted value. An allowlist of SQLSTATE codes, not classes.
+- X2 a consumer's RAISE that copies the wording of a constraint's message is shown although under its function:
+  CONSTRAINT counts only with SQLSTATE class 23 and no function frame.
+- X3 the way out printed for a column whose name holds a control character does not work when pasted (written `?`):
+  write such a name so that it does, or say that it holds one and how to write it.
+- X4 = B2 side: a history view owned by another role: the reason names the view, its owner and the way out.
+- X5 a comment on `_op` of the right shape that names a wrong key is trusted silently: stop as for a damaged one.
+- X6 check only: `rowvioli run` without a table name and failing tables, against what the documents say.
+
+### Shakedown H2b (Sonnet; scripts in scratchpad/shake/h2b; the rest is ticket 16)
+- D1 a key column that changes family in an unpinned Parquet file gets the generic way out `DROP COLUMN "id"`, which
+  loses the key column for good: the key's stop (another target_table) comes first.
+- D2 a missing ODBC driver library (`Driver={NoSuchDriver}`, SQLSTATE 01000) is withheld: a failure to connect holds
+  no row's value and shows.
+- D3 with P1: a REST key field that differs in case (`ID` vs `id`): the null key's way out says the field may be
+  missing from the answer or named otherwise.
+
+### Shakedown H4b and H1b (Sonnet; scratchpad/shake/h4b, h1b; the connectors, `init` and `SESSION` are ticket 16)
+- R1 = I1 a failure before the claim never says its cause: the target restarted at the start gives Postgres's bare
+  `FATAL: terminating connection due to administrator command`; a role with `default_transaction_read_only` gives
+  `a run process ended with exit code 1 before it claimed anything` four times a second under `work`. The cause is
+  said (scrubbed, by the one rule of withheld) by `run` and `work`, and `work` does not repeat it four times a second.
+- I2 a role's `statement_timeout` ends a run with the COPY wrapper uncut and no way out: name the setting and the way
+  out (`ALTER ROLE … RESET statement_timeout`).
+- I3 only USAGE on a pre-created schema gives `permission denied for schema raw_src`: say that the worker's role needs
+  CREATE on it.
+
 ## Acceptance criteria
 
 - [ ] Every item: a test seen red first, or a sentence under Comments why none and what was done instead.
