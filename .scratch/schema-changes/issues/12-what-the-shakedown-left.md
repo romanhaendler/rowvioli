@@ -75,6 +75,17 @@ all the same. Each starts from its red as a test at the existing seam.
     reason alone match the reason again. Also: a name inside a connector's message that the driver wraps at
     a line break is not cut there (ticket 11, item 8, left untried).
 
+### The record
+
+14. **An auditor and a listener read the end of a column from `columns__history` alone** (story 37). Today a
+    column a person dropped from mirror and change log, and the old name of a mirror renamed by hand, end
+    with a `D` in `columns__log` that the view shows only as a `_valid_to`: the notification goes out, and
+    the listener's `WHERE _run = 812` reads nothing; who ended it and why (`by`, `note` of the `D`) is not
+    in the view at all. Each version in the view also says the run that ended it and that run's `by` and
+    `note` (two or three columns, named in the manner of `_valid_to`; the version 4 step is not released).
+    The queries of `docs/target.md` use them; the two limits ticket 11's review wrote into
+    `docs/open-points.md` and `docs/target.md` go.
+
 ### Documents
 
 13. A `numeric(p,s)` widened to plain `numeric` reads without trailing zeros (`3.00` reads `3`; the values
@@ -87,7 +98,7 @@ all the same. Each starts from its red as a test at the existing seam.
 
 ## Acceptance criteria
 
-- [ ] 1 to 12: a test each, seen red first, at the existing seam; a sentence here for any that cannot be
+- [ ] 1 to 12 and 14: a test each, seen red first, at the existing seam; a sentence here for any that cannot be
       tested there.
 - [ ] The whole suite passes.
 
