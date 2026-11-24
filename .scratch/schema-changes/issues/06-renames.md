@@ -2,7 +2,7 @@
 
 **Blocked by:** 04, 05
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 **Model:** Opus
 
