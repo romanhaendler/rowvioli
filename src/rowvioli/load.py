@@ -904,11 +904,15 @@ def write_log(conn, t, staged, log_columns, names):
     sql(conn, f"CREATE OR REPLACE VIEW {t['history']} AS" + "\n        UNION ALL".join(branches))
     for privilege, column, grantee, option, grantor in t.pop("grants", []):  # those carry_out found before the drop
         # decision 54: a grant a grantee passed on comes back from it, given as that role; Postgres 14 to 17 take no
-        # other grantor than the current role (GRANTED BY). Where the run's role may not act as it, or the grantor may
-        # no longer reach the view (USAGE on its schema), the grant is the run's role's own
+        # other grantor than the current role (GRANTED BY). Where the run's role may not act as it, the grantor may
+        # no longer reach the view (USAGE on its schema) or no longer holds the grant option (a column's grant outlives
+        # the table's option it was given under, and given again it would be none, with a warning), the grant is the
+        # run's role's own
         grant = (f"GRANT {privilege}{f' ({quote(column)})' if column else ''} ON {t['history']} TO {grantee}"
                  + (" WITH GRANT OPTION" if option else ""))
-        if grantor:
+        held = (f"has_column_privilege($1::regrole, $2, {literal(column)}, $3)" if column else
+                "has_table_privilege($1::regrole, $2, $3)")
+        if grantor and sql(conn, f"SELECT {held}", [grantor, t["history"], f"{privilege} WITH GRANT OPTION"])[0][0]:
             sql(conn, "SAVEPOINT grantor")
             try:
                 sql(conn, f"SET LOCAL ROLE {grantor}")
