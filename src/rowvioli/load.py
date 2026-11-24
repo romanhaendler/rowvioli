@@ -1187,6 +1187,9 @@ def reason_line(values, e, step, source=None):
     # the program's own reason is one line: a name in it may hold a control character. A plain Exception raised
     # elsewhere, by a connector of one's own, is cut as a driver's message is, since its next lines may quote a row
     if type(e) is Exception and raised and os.path.abspath(raised.tb_frame.f_code.co_filename).startswith(OWN):
+        # a name its way out quotes with one is written with Unicode escapes, so that the statement works when pasted
+        text = re.sub(r'"(?:[^"]|"")*"', lambda m: "U&" + CONTROL.sub(
+            lambda c: f"\\{ord(c[0]):04X}", m[0].replace("\\", "\\\\")) if CONTROL.search(m[0]) else m[0], text)
         text = CONTROL.sub("?", text)
     before, _, traceback = text.partition("Traceback (most recent call last)")
     before = re.sub(r"\s*Detail: Python exception:\s*$", "", before)
