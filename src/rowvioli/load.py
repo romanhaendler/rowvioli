@@ -119,7 +119,8 @@ def check(conn, t, staged, mirror, log_columns):
     mirror's primary key is not the definition's: the primary key it `was`, whether the change is `by` the definition
     or the primary key was changed by hand and is put back, and whether a change `log` exists. `renamed`, new name to
     old, the columns that keep their values and history under another name, and `proven`, the note of each one the
-    data proved. `unpinned`, the retired ones whose pin under `columns` was taken out."""
+    data proved. `unpinned`, the retired ones whose pin under `columns` was taken out. `moved`, the names the retired
+    and renamed columns have after the run, old name to new."""
     types, logged, had = dict(staged), dict(log_columns), dict(mirror)
     key = t["key"] or []
     if key:  # first: the change log's own columns are never what a way out below renames
@@ -143,8 +144,8 @@ def check(conn, t, staged, mirror, log_columns):
         if new in logged:
             raise Exception(f"{stated}, but the change log has a column {new} already: " + way.format(quote(new)))
     # the key after the renames: Postgres renames a column inside the primary key by itself (decision 54)
-    moved = {old: new for new, old in renamed.items()}
-    primary_key = [moved.get(k, k) for (k,) in sql(conn, PRIMARY_KEY, [t["mirror"]])] if mirror else []
+    renamed_to = {old: new for new, old in renamed.items()}
+    primary_key = [renamed_to.get(k, k) for (k,) in sql(conn, PRIMARY_KEY, [t["mirror"]])] if mirror else []
     plan = {"renamed": renamed, "proven": {}, "gone": [], "retired": {}, "key": {}, "unpinned": []}
     # nothing is proven without a catalog, a key or a change log, nor joined by a key of another family, which stops below
     if t["key"] and t["log"] and log_columns and not t["catalog"] \
@@ -231,8 +232,8 @@ def check(conn, t, staged, mirror, log_columns):
             # without a record (a program that kept none), the comment on _op names the key the change log was
             # written under, which is the definition's where a person changed the primary key
             keys = None if recorded or not log_columns else stretches(conn, t)
-            hand = {moved.get(c, c) for c, k in recorded if k is not None} == set(key) if recorded else \
-                {moved.get(c, c) for c in keys[-1]["key"]} == set(key) if keys else \
+            hand = {renamed_to.get(c, c) for c, k in recorded if k is not None} == set(key) if recorded else \
+                {renamed_to.get(c, c) for c in keys[-1]["key"]} == set(key) if keys else \
                 before_the_record(conn, t, primary_key, key, log_columns, renamed)
             plan["key"] = {"was": primary_key, "by": "hand" if hand else "definition", "log": bool(log_columns)}
     # a change log that exists is complete: a run that would leave it behind its mirror, or lay a new mirror's
@@ -264,6 +265,7 @@ def check(conn, t, staged, mirror, log_columns):
             raise Exception(f"a key column of ({names}) is null")
         if sql(conn, f"SELECT 1 FROM _stage GROUP BY {names} HAVING count(*) > 1 LIMIT 1"):
             raise Exception(f"a key combination of ({names}) occurs twice")
+    plan["moved"] = plan["retired"] | {old: new for new, old in renamed.items()}  # the names carry_out gives
     return plan
 
 
@@ -312,8 +314,8 @@ def proven(conn, t, mirror, staged, log_columns, renamed):
     pairs = [(old, new) for old in gone for new in come if family(had[old]) == family(types[new])]
     if not pairs:
         return {}
-    moved = {old: new for new, old in renamed.items()}
-    on = " AND ".join(f"s.{quote(k)} = m.{quote(moved.get(k, k))}" for k in t["key"])
+    renamed_to = {old: new for new, old in renamed.items()}
+    on = " AND ".join(f"s.{quote(k)} = m.{quote(renamed_to.get(k, k))}" for k in t["key"])
     other = [n for n in types if n in had and family(had[n]) == family(types[n])]
     unchanged = ("WHERE ROW({}) IS NOT DISTINCT FROM ROW({})".format(
         *(", ".join(f"{a}.{quote(n)}" for n in other) for a in "ms")) if other else "")
@@ -366,10 +368,10 @@ def fit(conn, t, staged, mirror, log_columns, renamed):
     they are checked and published in, the widenings as (table, column under its new name, type), and the change
     log's columns among them that follow a type a person widened in the mirror, under the plan's lock."""
     types, had = dict(staged), dict(mirror)
-    moved = {old: new for new, old in renamed.items()}
+    renamed_to = {old: new for new, old in renamed.items()}
     # not one the source retires: that log column takes another name in this run
     followed = {n: into for n, type in log_columns if (into := had.get(n)) and into != type
-                and family(into) == family(type) == family(types.get(moved.get(n, n), into))
+                and family(into) == family(type) == family(types.get(renamed_to.get(n, n), into))
                 and wider(type, into) == into}
     log_columns = [(n, followed.get(n, type)) for n, type in log_columns]
     pairs = [(table, name, into) for table, columns in ((t["mirror"], mirror), (t["log_table"], log_columns))
@@ -378,8 +380,8 @@ def fit(conn, t, staged, mirror, log_columns, renamed):
     # only a target that does not hold the staged type already needs the scan
     widened = [(table, name, wider(into, types[name]))
                for table, name, into in misfits(conn, [p for p in pairs if wider(p[2], types[p[1]]) != p[2]])]
-    follow = [(t["log_table"], moved.get(n, n), into) for n, into in followed.items()
-              if (t["log_table"], moved.get(n, n)) not in {w[:2] for w in widened}]
+    follow = [(t["log_table"], renamed_to.get(n, n), into) for n, into in followed.items()
+              if (t["log_table"], renamed_to.get(n, n)) not in {w[:2] for w in widened}]
     widened += follow
     # the staging table is not altered: the target's type applies on insert, where it now changes no value. A column
     # back in its family takes the change log's type (cases A12)
@@ -545,7 +547,7 @@ def publish(conn, t, staged, delivered, mirror, log, rows_read, counts, plan):
     names = ", ".join(quote(c) for c, _ in staged)
     logged = ", ".join(quote(c) for c in [*dict(staged), *(plan["retired"].get(c, c) for c in plan["gone"])])
     new = not mirror
-    moved = plan["retired"] | {o: n for n, o in plan["renamed"].items()}  # the names carry_out gives
+    moved = plan["moved"]
     if new:
         # in a transaction of its own under a lock on its name, because two first runs of a source race on
         # IF NOT EXISTS; the one-number lock never counts as a table lock
@@ -653,8 +655,8 @@ def carry_out(conn, t, plan):
     """Decision 54, under the lock: the history view goes, since Postgres alters no column a view reads (write_log
     creates it again and gives its grants again, a renamed column's under its new name), then the plan. Returns what
     the columns table says beyond the catalogue (decision 54)."""
-    renamed = {old: new for new, old in plan["renamed"].items()}
-    t["grants"] = [(p, renamed.get(c, c), *rest) for p, c, *rest in sql(conn, GRANTS, [t["history"]])]
+    renamed_to = {old: new for new, old in plan["renamed"].items()}
+    t["grants"] = [(p, renamed_to.get(c, c), *rest) for p, c, *rest in sql(conn, GRANTS, [t["history"]])]
     alter(conn, t, f"the columns of {t['name']} change", f"DROP VIEW IF EXISTS {t['history']}", t["history"])
     changes = {}
     logged = dict(sql(conn, COLUMNS, [t["log_table"]]))
@@ -670,7 +672,7 @@ def carry_out(conn, t, plan):
         sql(conn, f"COMMENT ON COLUMN {t['log_table']}.{quote(new)} IS {literal(text)}")
         changes[new] = {"was": old, "note": RETIRED_NOTE + text}
     # decision 54: the comment on _op names the key columns of every stretch, renamed and retired ones by their new names
-    moved = plan["retired"] | {o: n for n, o in plan["renamed"].items()}
+    moved = plan["moved"]
     if moved and keys:
         if (named := [{**k, "key": [moved.get(c, c) for c in k["key"]]} for k in keys]) != keys:
             note = KEYS_NOTE + keys_of_log(conn, t, named)
