@@ -978,6 +978,9 @@ WRAPPER = re.compile(r"^(?:[A-Z_]+: )?(?:\[libpq\] )?(?:Execution error \[PGRES_
 # a row's value Postgres quotes in a message: last, after a colon (`invalid input syntax for type integer: "abc"`), or
 # before `is out of range` (`value "…"` for an integer, bare for a float). Names are quoted too, but never there
 VALUE = re.compile(r'(?<=: )"[^\n]*"$|(?:^|(?<=\s))"[^\n]*"(?= is out of range)')
+# the SQLSTATE in arrow-odbc's text of a driver's error, the ODBC standard's for every driver:
+# `ODBC emitted an error calling 'SQLExecDirect': State: 22P02, Native error: 1, Message: ...`
+ODBC_STATE = re.compile(r"\bState: (\w{5}), Native error: -?\d+, Message: ")
 OWN = os.path.dirname(os.path.abspath(__file__)) + os.sep  # the program's code, its shipped connectors among it
 
 
@@ -990,6 +993,11 @@ def reason_line(values, e, step):
     message. A message raised under a consumer's code is withheld (raised_by_a_consumer)."""
     if withheld := raised_by_a_consumer(e, step):
         return scrub(values, CONTROL.sub("?", withheld))
+    # an ODBC driver's data exception quotes the value as the driver words it (psqlODBC after Postgres's message,
+    # SQL Server in single quotes), so no pattern finds it: the class of the SQLSTATE says it, whatever the driver
+    if (odbc := ODBC_STATE.search(str(e))) and odbc[1].startswith("22"):
+        return (f"the ODBC driver raised a data exception (SQLSTATE {odbc[1]}) while {step}; its message may hold a "
+                "row's values, so it is left out here")
     # first only a value with a line break or another control character, which the cut and the ? would break up
     text = scrub([v for v in values if v and CONTROL.search(v)], str(e)).strip()
     raised = e.__traceback__
@@ -1031,8 +1039,8 @@ def raised_by_a_consumer(e, step):
     text for a source's rows, whatever the function's language, and by the SQLSTATE only RAISE and ASSERT give;
     Postgres's own messages of a violated constraint keep their names."""
     details = {k.decode(): v.decode(errors="replace") for k, v in getattr(e, "details", None) or []}
-    state = details.get("PG_DIAG_SQLSTATE")
     text = str(e)
+    state = details.get("PG_DIAG_SQLSTATE") or ((odbc := ODBC_STATE.search(text)) and odbc[1])
     function = FRAME.search(details.get("PG_DIAG_CONTEXT") or text.partition("\nCONTEXT:  ")[2])
     message = details.get("PG_DIAG_MESSAGE_PRIMARY") or WRAPPER.sub("", text).split("\n")[0]
     if not function and state not in ("P0001", "P0004") or CONSTRAINT.fullmatch(message):  # raise_exception, assert

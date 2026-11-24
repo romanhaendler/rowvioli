@@ -143,3 +143,64 @@ def test_a_text_value_longer_than_the_driver_reports_fails_the_run_and_one_withi
     ready.source("update notes set body = repeat('y', 2000000)")
     assert ready.run("run", "erp").returncode == 1
     assert ready.target("select length(body) from raw_erp.notes") == [(100000,)]
+
+
+def again(rv):
+    rv.target("update _rowvioli.tables set requested_at = now()")
+    r = rv.run("run", "erp", env=ENV)
+    assert r.returncode == 0, r.stdout
+
+
+@needs_driver
+def test_a_column_goes_and_comes_widens_changes_family_is_renamed_and_the_key_changes_through_odbc(ready):
+    """Decision 54 through a driver that describes the columns itself: every change of shape, the log replays."""
+    from test_columns_go_and_come import columns, log_replays
+    ready.source("create table t (id int primary key, alt int not null, v int, city text);"
+                 "insert into t select g, g + 100, g, 'c' || (g % 7) from generate_series(1, 30) g")
+    erp(ready, '"public.t" = { key = ["id"] }')
+    again(ready)
+    log, last = "raw_erp.t__log", 'select _op, "column", "by" from _rowvioli.columns__log where _run = (select ' \
+                                  'max(run) from _rowvioli.runs) order by 2, 1'
+    ready.source("alter table t drop column city")  # gone
+    again(ready)
+    assert columns(ready, "raw_erp.t") == ["id", "alt", "v"] and "city" in columns(ready, log)
+    ready.source("alter table t add column city text; update t set city = 'c' || (id % 7)")  # back, its family
+    again(ready)
+    ready.source("alter table t alter v type bigint; update t set v = 10000000000 where id = 1")  # widened
+    again(ready)
+    assert ready.target("select format_type(atttypid, atttypmod) from pg_attribute where attname = 'v' and attrelid "
+                        "in ('raw_erp.t'::regclass, 'raw_erp.t__log'::regclass)") == [("bigint",), ("bigint",)]
+    ready.source("alter table t alter v type text using v::text || 'x'")  # another family
+    again(ready)
+    [(run,)] = ready.target("select max(run) from _rowvioli.runs")
+    assert f"v__{run}" in columns(ready, log)
+    ready.source("alter table t rename city to town")  # proven by 30 rows, 7 values
+    again(ready)
+    assert ready.target(last) == [("D", "city", "source"), ("I", "town", "source")]
+    erp(ready, '"public.t" = { key = ["alt"] }')  # another key
+    again(ready)
+    assert ready.target("select count(*) filter (where _op = 'D'), count(*) filter (where _op = 'I') from "
+                        f"{log} where _run = (select max(run) from _rowvioli.runs)") == [(30, 30)]
+    log_replays(ready, "raw_erp.t")
+
+
+@needs_driver
+@pytest.mark.parametrize("column, said", [
+    ("body::int", "a data exception (SQLSTATE 22P02)"), ("body::date", "a data exception (SQLSTATE 22007)"),
+    ("(body || '1e40')::float8::numeric(40, 0)", "a data exception (SQLSTATE 22003)"),
+    ("guard(body)", "a function raised an error (SQLSTATE P0001) in the source"),
+    # arrow-odbc's own, for a numeric beyond the 28 digits psqlODBC describes: it names no value
+    ("(body || '1e40')::numeric", "A value (at least one) is too large to be written into the allocated buffer")])
+def test_a_value_the_source_or_the_driver_cannot_convert_stays_out_of_the_reason(ready, column, said):
+    """Decision 54, item 8, through a driver whose message words the value its own way (psqlODBC appends a ;)."""
+    ready.source("create function guard(b text) returns text language plpgsql as $$ begin if b <> '' then "
+                 "raise exception 'bad row %', b; end if; return b; end $$")
+    ready.source(f"create table t (id int primary key, body text); insert into t values (1, '');"
+                 f"create view v as select id, {column} as n from t")
+    erp(ready, '"public.v" = { key = ["id"] }')
+    ready.source("update t set body = '4711'" if "1e40" in column else "update t set body = 'Secret4711'")
+    r = ready.run("run", "erp", env=ENV)
+    assert r.returncode == 1
+    assert said in ready.target("select reason from _rowvioli.runs")[0][0]
+    for value in ("Secret4711", "4711"):
+        assert leaks(ready, value, r) == [], value
