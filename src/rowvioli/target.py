@@ -6,7 +6,7 @@ from importlib.resources import files
 import adbc_driver_postgresql.dbapi as adbc
 
 SCHEMA_VERSION = 4
-# schema.sql is version 3; the step at index i brings version 3 + i to 3 + i + 1 (decision 24)
+# schema.sql is version 3; the step at index i brings version 3 + i to 3 + i + 1 (decision 54)
 MIGRATIONS = ["sql/migrate_3_4.sql"]
 # what a worker's role needs on the objects each step creates; the program grants nothing, so init prints it
 GRANTS = ["GRANT SELECT, INSERT, UPDATE, DELETE ON _rowvioli.columns TO worker;\n"

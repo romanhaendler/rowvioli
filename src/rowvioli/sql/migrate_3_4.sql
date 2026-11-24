@@ -1,8 +1,8 @@
--- Version 3 to 4: runs record the version of the program and of the driver (decision 11).
+-- Version 3 to 4: runs record the version of the program and of the driver (decision 54).
 ALTER TABLE _rowvioli.runs ADD COLUMN program_version text, ADD COLUMN driver_version text;
 UPDATE _rowvioli.meta SET schema_version = 4;
 
--- The columns of every mirror and its change log (decisions 17 to 19): a table, and its log and history view as for a
+-- The columns of every mirror and its change log (decision 54): a table, and its log and history view as for a
 -- mirror (load.write_log). Written by the publishing transaction only.
 CREATE TABLE _rowvioli.columns (
     target_schema text NOT NULL,

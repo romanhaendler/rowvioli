@@ -86,7 +86,7 @@ def read(directory, env=None, only=None):
                     raise SystemExit(f"{spot}: key must be a list of column names")
                 for c in key or []:
                     clean(spot, "key", c)
-                renamed = t.get("renamed", {})  # new name = "old name" (decision 10)
+                renamed = t.get("renamed", {})  # new name = "old name" (decision 54)
                 if not all(isinstance(old, str) and old and new for new, old in renamed.items()) \
                         or len(set(renamed.values())) < len(renamed):
                     raise SystemExit(f'{spot}: renamed must be a table of new = "old" column names, each old one once')

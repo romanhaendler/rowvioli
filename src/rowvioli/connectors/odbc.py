@@ -9,7 +9,7 @@ except OSError as e:  # no driver manager: arrow-odbc's own message is a dlopen 
 
 from ..contract import known_options, version
 
-# the reader's version, so that columns another one delivers are recorded as by = reader (decision 11); the ODBC
+# the reader's version, so that columns another one delivers are recorded as by = reader (decision 54); the ODBC
 # driver the operator installed is not in it
 driver_version = version("arrow-odbc")
 

@@ -190,7 +190,7 @@ def listen(runs, answers, ended, seconds, lines):
             if "claimed" in said:  # the clock for max_seconds starts here
                 runs[p] = said | {"deadline": time.monotonic() + said["max_seconds"], "started": time.monotonic()}
                 say_run(runs[p], "started", f"run {said['run']}")
-            elif "widening" in said:  # a step that may outlast max_seconds (decision 15)
+            elif "widening" in said:  # a step that may outlast max_seconds (decision 54)
                 runs[p]["widening"] = said["widening"]
             elif "answer" not in runs[p]:  # a run killed after max_seconds may still have answered
                 answers[said.pop("table")] = runs[p]["answer"] = said
