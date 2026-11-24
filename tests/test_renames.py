@@ -53,6 +53,7 @@ def gone_and_come(rv, old, new):
     assert old not in columns(rv, PEOPLE) and new in columns(rv, PEOPLE)
     assert old in columns(rv, f"{PEOPLE}__log")
     assert ("U", old, None, "source", None) in rv.target(RECORD)
+    assert [r for r in rv.target(RECORD) if r[2]] == []  # no column has a was: nothing renamed
     assert rv.target(f"select count(*) > 0 from {PEOPLE}__log {THIS_RUN}") == [(True,)]
     log_replays(rv, PEOPLE)
 
@@ -67,6 +68,9 @@ def gone_and_come(rv, old, new):
     (30, ["alter table people add column town text; update people set town = city",
           "alter table people drop column town", "alter table people rename column city to town"],
      "city", "town"),  # the new name is in the change log
+    (30, ["alter table people add column place text; update people set place = city",
+          "alter table people drop column place; alter table people rename column city to town"],
+     "city", "town"),  # two gone columns for one new
 ])
 def test_a_rename_is_not_assumed_where_the_data_do_not_prove_it(erp, n, steps, old, new):  # story 27
     people(erp, n)
@@ -74,6 +78,19 @@ def test_a_rename_is_not_assumed_where_the_data_do_not_prove_it(erp, n, steps, o
         erp.source(step)
         again(erp)
     gone_and_come(erp, old, new)
+
+
+def test_A24_twenty_rows_and_five_values_are_enough_for_a_proof(erp):
+    people(erp, 20)
+    erp.source("alter table people add column grade int; update people set grade = id % 5")
+    again(erp)
+    erp.source("alter table people rename column grade to level")
+    again(erp)
+    assert erp.target(RECORD) == [
+        ("D", "grade", None, "source", None),
+        ("I", "level", "grade", "source", "proven by the data: 20 rows unchanged otherwise, 20 of them equal, "
+                                          "5 distinct values")]
+    log_replays(erp, PEOPLE)
 
 
 def test_A25_rows_changed_otherwise_in_the_same_interval_are_left_out_of_the_proof(erp):
@@ -249,6 +266,16 @@ def test_renamed_left_in_the_definition_does_nothing_while_the_old_column_is_del
             assert erp.target(view) == before
             assert erp.target(f"select count(*) from _rowvioli.columns__log {THIS_RUN}") == [(0,)]
     assert columns(erp, PEOPLE) == ["id", "name", "town", "member"]
+    log_replays(erp, PEOPLE)
+
+
+def test_renamed_left_in_the_definition_does_nothing_while_the_source_delivers_both_columns(erp):  # story 29
+    people(erp, table='{ key = ["id"], renamed = { town = "city" } }')
+    erp.source("alter table people add column town text; update people set town = upper(city)")
+    again(erp)
+    assert columns(erp, PEOPLE) == ["id", "name", "city", "member", "town"]
+    assert erp.target(RECORD) == [("I", "town", None, "source", None)]
+    assert rows(erp.target, f"select * from {PEOPLE}") == rows(erp.source, "select * from people")
     log_replays(erp, PEOPLE)
 
 

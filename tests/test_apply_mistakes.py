@@ -10,6 +10,7 @@ from test_apply import CRM, ENV, ERP, NO_TARGET, check
     ('parallel = 4', 'parallel = 4\ntimzone = "UTC"', "timezone"),
     ('"dbo.Notes"     = {}', '"dbo.Notes"     = { targt_table = "n" }', "target_table"),
     ('"dbo.Notes"     = {}', '"dbo.Notes"     = { max_agee = "5m" }', "max_age"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { rename = { a = "b" } }', "renamed"),
 ])
 def test_a_setting_one_or_two_edits_off_fails_apply_check_and_names_the_setting(rv, old, new, setting):
     r = check(rv, {"erp.toml": ERP.replace(old, new)})
