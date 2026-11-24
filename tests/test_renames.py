@@ -188,6 +188,18 @@ def test_renamed_in_the_definition_makes_a_renamed_flag_a_rename(erp):  # story 
     log_replays(erp, PEOPLE)
 
 
+def test_a_renamed_column_that_comes_back_in_another_family_is_no_rename_any_more(erp):  # ticket 15, C4
+    people(erp)
+    erp.source("alter table people rename column city to town")
+    apply(erp, definition(erp, '"public.people" = { key = ["id"], renamed = { town = "city" } }\n'))
+    again(erp)
+    erp.source("alter table people alter town type int using length(town)")
+    again(erp)
+    [(run,)] = erp.target("select max(run) from _rowvioli.runs")
+    assert erp.target('select "column", was from _rowvioli.columns where "column" like %s order by 1',
+                      ["town%"]) == [("town", None), (f"town__{run}", "town")]
+
+
 def test_A25_renamed_in_the_definition_is_a_rename_where_rows_differ_and_they_are_a_U(erp):
     people(erp)
     erp.source("alter table people rename column city to town; update people set town = 'Bad' where id = 1")

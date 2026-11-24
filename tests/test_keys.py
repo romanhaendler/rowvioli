@@ -171,6 +171,22 @@ def test_C12_a_consumers_foreign_key_or_view_on_the_primary_key_stops_another_ke
     assert primary_key(erp) == ["customer_no"]
 
 
+def test_a_publication_of_the_mirrors_deletes_stops_another_key_and_says_how_to_go_on(erp):  # ticket 15, C2
+    ok(erp)
+    erp.target("create publication feed for table raw_erp.customers")
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no", "name"] }\n'))
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp).replace("***", "x") == (
+        "the key of raw_erp.customers would change from (customer_no) to (customer_no, name), but publication feed "
+        "publishes its updates and deletes, for which the primary key is its replica identity: give it another for "
+        'the change, ALTER TABLE "raw_erp"."customers" REPLICA IDENTITY FULL: change or drop that, and the next run '
+        "goes on")
+    assert primary_key(erp) == ["customer_no"]
+    erp.target('ALTER TABLE "raw_erp"."customers" REPLICA IDENTITY FULL')  # the way out
+    again(erp)
+    assert primary_key(erp) == ["customer_no", "name"]
+
+
 def test_C12_a_consumers_foreign_key_on_a_key_column_that_leaves_the_key_is_named_with_a_view_in_the_way(erp):
     ok(erp)
     erp.target("create schema reporting; create table reporting.orders (id int, customer_no int references "

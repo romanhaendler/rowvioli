@@ -120,7 +120,7 @@ GRANT SELECT, INSERT, UPDATE ON _rowvioli.runs TO worker;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA _rowvioli TO worker;
 GRANT SELECT, INSERT, UPDATE, DELETE ON _rowvioli.columns TO worker;     -- from version 4, which `rowvioli init` prints
 GRANT SELECT, INSERT ON _rowvioli.columns__log TO worker;
-GRANT CREATE ON DATABASE dwh TO worker;
+GRANT CREATE ON DATABASE dwh TO worker;                -- or, for a target schema created beforehand, GRANT CREATE ON SCHEMA raw_erp TO worker
 
 -- whoever may request a load (add pg_read_all_stats for progress)
 GRANT USAGE ON SCHEMA _rowvioli TO requester;

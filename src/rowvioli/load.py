@@ -669,6 +669,12 @@ def lock(conn, t):
     table's row while an apply holds it)."""
     objects = ", ".join(n for n in (t["mirror"], t["log_table"], t["history"])
                         if sql(conn, "SELECT to_regclass($1) IS NOT NULL", [n])[0][0])
+    # the history view is created again, which only its owner may; a lock of it would be refused first
+    for owner, me in sql(conn, "SELECT relowner::regrole::text, quote_ident(current_user) FROM pg_class WHERE oid = "
+                               "to_regclass($1) AND NOT pg_has_role(relowner, 'MEMBER')", [t["history"]]):
+        raise Exception(f"the history view {t['history']} is owned by {owner}, a role the worker's role is not a "
+                        "member of, so the run cannot create it again for the change of columns: give it back, "
+                        f"ALTER VIEW {t['history']} OWNER TO {me}")
     end = time.monotonic() + 10
     while True:
         sql(conn, "BEGIN")
@@ -708,12 +714,38 @@ GRANTS = """
      ORDER BY c.attnum, a.ordinality"""
 
 
+# what a person put on a view besides grants and its options (OPTIONS), as the statements that put it there again: its
+# comment, its triggers and rules; the comments on its columns are (column, text)
+KEPT = """
+    SELECT format('COMMENT ON VIEW %s IS %L', $1, obj_description(to_regclass($1), 'pg_class'))
+     WHERE obj_description(to_regclass($1), 'pg_class') IS NOT NULL
+    UNION ALL SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgrelid = to_regclass($1) AND NOT tgisinternal
+    UNION ALL SELECT pg_get_ruledef(oid) FROM pg_rewrite WHERE ev_class = to_regclass($1) AND rulename <> '_RETURN'"""
+COLUMN_COMMENTS = """SELECT attname, col_description(attrelid, attnum) FROM pg_attribute WHERE attrelid = to_regclass($1)
+                        AND attnum > 0 AND col_description(attrelid, attnum) IS NOT NULL"""
+OPTIONS = "SELECT array_to_string(reloptions, ', ') FROM pg_class WHERE oid = to_regclass($1)"
+
+
+# the publications of a table's updates or deletes that need its primary key as its replica identity
+PUBLISHED = """
+    SELECT string_agg(format('publication %I', p.pubname), ' and ' ORDER BY p.pubname)
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_publication_tables pt ON (pt.schemaname, pt.tablename) = (n.nspname, c.relname)
+      JOIN pg_publication p ON p.pubname = pt.pubname
+     WHERE c.oid = $1::regclass AND c.relreplident = 'd' AND (p.pubupdate OR p.pubdelete)"""
+
+
 def carry_out(conn, t, plan):
     """Decision 54, under the lock: the history view goes, since Postgres alters no column a view reads (write_log
-    creates it again and gives its grants again, a renamed column's under its new name), then the plan. Returns what
-    the columns table says beyond the catalogue (decision 54)."""
+    creates it again with its options, gives its grants again, a renamed column's under its new name, and puts back
+    what a person put on it), then the plan. Returns what the columns table says beyond the catalogue (decision
+    54)."""
     renamed_to = {old: new for new, old in plan["renamed"].items()}
     t["grants"] = [(p, renamed_to.get(c, c), *rest) for p, c, *rest in sql(conn, GRANTS, [t["history"]])]
+    t["kept"] = [s for (s,) in sql(conn, KEPT, [t["history"]])] + [
+        f"COMMENT ON COLUMN {t['history']}.{quote(plan['moved'].get(c, c))} IS {literal(text)}"
+        for c, text in sql(conn, COLUMN_COMMENTS, [t["history"]])]
+    t["view_options"] = sql(conn, OPTIONS, [t["history"]])
     alter(conn, t, f"the columns of {t['name']} change", f"DROP VIEW IF EXISTS {t['history']}", t["history"])
     changes = {}
     logged = dict(sql(conn, COLUMNS, [t["log_table"]]))
@@ -742,9 +774,14 @@ def carry_out(conn, t, plan):
         if was:
             [(name,)] = sql(conn, "SELECT conname FROM pg_constraint WHERE conrelid = $1::regclass AND contype = 'p'",
                             [t["mirror"]])
-            dropped = alter(conn, t, f"the key of {t['name']} would change from ({', '.join(was)}) to "
-                                     f"({', '.join(key)})", f"ALTER TABLE {t['mirror']} DROP CONSTRAINT {quote(name)}",
-                            t["mirror"], constraint=name)
+            why = f"the key of {t['name']} would change from ({', '.join(was)}) to ({', '.join(key)})"
+            dropped = alter(conn, t, why, f"ALTER TABLE {t['mirror']} DROP CONSTRAINT {quote(name)}", t["mirror"],
+                            constraint=name)
+            # without its primary key Postgres refuses the deletes of a mirror whose deletes a publication publishes
+            if published := sql(conn, PUBLISHED, [t["mirror"]])[0][0]:
+                t.setdefault("blocked", []).append(
+                    f"{why}, but {published} publishes its updates and deletes, for which the primary key is its "
+                    f"replica identity: give it another for the change, ALTER TABLE {t['mirror']} REPLICA IDENTITY FULL")
         # Postgres leaves NOT NULL behind, also where LIKE copied it; a column still in a key it refuses to free
         if (loose := [c for c in was if c not in key]) and (not was or dropped):
             for table, named in [(t["mirror"], {}), (t["log_table"], plan["retired"])][:2 if plan["key"]["log"] else 1]:
@@ -761,6 +798,8 @@ def carry_out(conn, t, plan):
     for name in plan["gone"]:
         [(note,)] = sql(conn, DROPS_WITH, [t["mirror"], name])
         changes[name] = {"note": f"{note} went with it" if note else None}
+        if name in plan["retired"]:  # it comes back anew: a rename before was of the column the change log keeps
+            changes[name]["was"] = None
         alter(conn, t, f"column {name} " + ("has another type in the source" if name in plan["retired"]
                                          else "is gone from the source") + f" and would leave the mirror {t['name']}",
               f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}", t["mirror"], [name])
@@ -937,7 +976,10 @@ def write_log(conn, t, staged, log_columns, names):
                    AS _valid_to, {columns}
               FROM ONLY {t['log_table']}{' WHERE ' + ' AND '.join(cut) if cut else ''}) h
          WHERE _op <> 'D'""")
-    sql(conn, f"CREATE OR REPLACE VIEW {t['history']} AS" + "\n        UNION ALL".join(branches))
+    # decision 54: the options a person gave it, which a view created or replaced without them loses
+    [(options,)] = t.pop("view_options", None) or sql(conn, OPTIONS, [t["history"]]) or [(None,)]
+    sql(conn, f"CREATE OR REPLACE VIEW {t['history']}{f' WITH ({options})' if options else ''} AS"
+              + "\n        UNION ALL".join(branches))
     for privilege, column, grantee, option, grantor in t.pop("grants", []):  # those carry_out found before the drop
         # decision 54: a grant a grantee passed on comes back from it, given as that role; Postgres 14 to 17 take no
         # other grantor than the current role (GRANTED BY). Where the run's role may not act as it, the grantor may
@@ -960,6 +1002,8 @@ def write_log(conn, t, staged, log_columns, names):
                     raise
                 sql(conn, "ROLLBACK TO SAVEPOINT grantor")  # the role too
         sql(conn, grant)
+    for statement in t.pop("kept", []):  # those carry_out found before the drop
+        sql(conn, statement)
 
 
 def record_columns(conn, t, delivered, mirror, log_columns, changes):
@@ -1139,6 +1183,11 @@ def reason_line(values, e, step, source=None):
     line = f"{first} {rest[0].strip()}" if first.endswith(":") and rest else first
     line = VALUE.sub('"***"', line).strip()
     if step != "reading the source":  # a source may have a table of that name
+        line = re.sub(r"must be owner of table \S+$", r"\g<0>: the worker's role must own it, or be a member of the "
+                      r"role that owns it, to change its columns with the mirror's (ALTER TABLE <it> OWNER TO <the "
+                      r"worker's role>)", line)
+        line = re.sub(r"permission denied for schema (\S+)$", r"\g<0>: the worker's role needs CREATE on it (GRANT "
+                      r"CREATE ON SCHEMA \1 TO <the worker's role>)", line)
         line = re.sub(r"permission denied for table (columns(?:__log)?)$", r"\g<0>: the worker's role lacks a right on "
                       r"_rowvioli.\1, which rowvioli init printed with the upgrade to version 4 "
                       '(docs/operation.md "The target")', line)
