@@ -422,3 +422,42 @@ def test_a_consumers_table_that_inherits_from_the_mirror_keeps_its_rows_when_the
     # the history view reads the change log, not a consumer's table that inherits from it
     assert rows(erp.target, "select customer_no from raw_erp.customers__history where _valid_to is null") == [
         (1,), (2,), (3,)]
+
+# a function that raises with a row's value, in a language whose frames Postgres names otherwise than PL/pgSQL's
+RAISES = {"plperl": ("""elog(ERROR, "bad row $_TD->{new}{name}"); return;""",
+                     """elog(ERROR, "bad name Secret$_[0]") if $_[0] eq 'Anna'; return $_[0];"""),
+          "plpython3u": ("""plpy.error("bad row " + TD["new"]["name"])""",
+                         """if n == "Anna": plpy.error("bad name Secret" + n)\nreturn n""")}
+PL = ("the test image has PL/Perl's and PL/Python's libraries but not perl and python3: start two postgres:16-alpine "
+      "containers, in both `apk add perl python3 && ln -s /usr/lib/perl5/core_perl/CORE/libperl.so /usr/lib/`, and run "
+      "with ROWVIOLI_TEST_SERVERS=<source container>,<target container>")
+
+
+def language(query, name):
+    try:
+        query(f"create extension {name}")
+    except psycopg.Error:
+        pytest.skip(PL)
+
+
+@pytest.mark.parametrize("name", RAISES)
+def test_a_message_a_consumers_trigger_in_pl_perl_or_pl_python_raises_is_withheld(erp, name):  # ticket 14, item 8
+    language(erp.target, name)
+    ok(erp)
+    erp.target(f"create function public.guard() returns trigger language {name} as $${RAISES[name][0]}$$")
+    erp.target("create trigger g before insert on raw_erp.customers for each row execute function public.guard()")
+    erp.source("update customers set name = 'Anna2' where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    state = {"plperl": "38000", "plpython3u": "XX000"}[name]  # external_routine_exception, internal_error
+    assert withheld(erp) == (f'function "guard" raised an error (SQLSTATE {state}) in the target; its message may '
+                             "hold a row's values, so it is left out here: the target's server log has it")
+
+
+@pytest.mark.parametrize("name", RAISES)
+def test_a_message_a_function_in_pl_perl_or_pl_python_in_a_source_view_raises_is_withheld(erp, name):
+    language(erp.source, name)
+    erp.source(f"create function check_name(n text) returns text language {name} as $${RAISES[name][1]}$$")
+    erp.source("create view checked as select customer_no, check_name(name) as name from customers")
+    apply(erp, definition(erp, '"public.checked" = { key = ["customer_no"] }\n'))
+    assert withheld(erp) == ('function "check_name" raised an error in the source; its message may hold a row\'s '
+                             "values, so it is left out here: the source's server log has it")
