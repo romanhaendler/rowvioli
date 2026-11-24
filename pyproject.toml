@@ -47,8 +47,9 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# four processes: measured fastest-safe on 8 shared cores; -n 0 runs serially
-addopts = "-n 4"
+# four processes: measured fastest-safe on 8 shared cores; -n 0 runs serially. -rs names every skipped test with its
+# reason at the end (the pooler's tests without its image, the ODBC tests outside their container)
+addopts = "-n 4 -rs"
 
 [project.entry-points."rowvioli.connectors"]
 postgres = "rowvioli.connectors.postgres"

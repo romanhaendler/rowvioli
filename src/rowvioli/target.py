@@ -65,8 +65,13 @@ def connect(init=False, versioned=True, pooler=True):
             # hands one to whichever client asks next: an idle one hands this connection's to the next client too, a
             # busy one moves this connection between two transactions (decision 55)
             [(pid,)] = sql(conn, "SELECT pg_backend_pid()")  # one transaction each (autocommit)
-            with adbc.connect(url, autocommit=True) as other:
-                pooled = sql(other, "SELECT pg_backend_pid()") == [(pid,)]
+            try:
+                other = adbc.connect(url, autocommit=True)
+            except adbc.Error:  # a server or pooler with no connection to spare, which one command needs: not asked
+                other = None
+            if other:
+                with other:
+                    pooled = sql(other, "SELECT pg_backend_pid()") == [(pid,)]
             pooled = pooled or sql(conn, "SELECT pg_backend_pid()") != [(pid,)]
     except adbc.Error as e:  # a very busy one gives the driver's statement to another client's transaction
         if not pooler or e.sqlstate not in ("26000", "08P01"):  # invalid_sql_statement_name, protocol_violation

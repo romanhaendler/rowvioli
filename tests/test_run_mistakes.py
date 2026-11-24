@@ -159,8 +159,10 @@ def pooler(erp, servers, request):
     ip = subprocess.run(["docker", "inspect", "-f", "{{.NetworkSettings.Networks.bridge.IPAddress}}", servers["target"]],
                         check=True, capture_output=True, text=True).stdout.strip()
     name = f"{servers['target']}-pooler-{db}"
+    mode, _, clients = request.param.partition(" with ")  # "session with 1": a pooler that takes one client
     subprocess.run(["docker", "run", "-d", "--name", name, "--label", "rowvioli-test", "-e", "AUTH_TYPE=scram-sha-256",
-                    "-e", f"DATABASE_URL=postgres://postgres:x@{ip}:5432/{db}", "-e", f"POOL_MODE={request.param}",
+                    "-e", f"DATABASE_URL=postgres://postgres:x@{ip}:5432/{db}", "-e", f"POOL_MODE={mode}",
+                    *(["-e", f"MAX_CLIENT_CONN={clients}"] if clients else []),
                     "-p", "127.0.0.1::5432", POOLER], check=True, capture_output=True)
     request.addfinalizer(lambda: subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True))
     port = subprocess.run(["docker", "port", name, "5432/tcp"], check=True, capture_output=True,
@@ -183,6 +185,13 @@ def test_a_pooler_in_transaction_mode_is_refused_before_anything_is_claimed_and_
         r.stderr + r.stdout
     assert erp.target("select count(*) from _rowvioli.runs") == [(0,)]
     assert erp.run("status", env=through).returncode == 1
+
+
+@pytest.mark.parametrize("pooler", ["session with 1"], indirect=True)
+def test_a_command_that_finds_no_second_connection_to_spare_is_not_refused_for_it(erp, pooler):
+    # the check's second connection is refused, as by a full max_connections; the command needs one
+    r = erp.run("status", env={"ROWVIOLI_TARGET_URL": pooler})
+    assert r.returncode == 0, r.stderr
 
 
 def test_a_worker_without_create_on_the_database_loads_into_a_precreated_schema(erp):
