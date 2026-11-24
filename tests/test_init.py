@@ -4,7 +4,11 @@ import re
 import psycopg
 import pytest
 
-from test_run import erp  # noqa: F401 (a fixture)
+from test_checks import failed
+from test_columns_go_and_come import log_replays
+from test_history import LOADED_AT, MIRROR, again, at
+from test_keys import primary_key
+from test_run import apply, definition, erp, ok, rows  # noqa: F401 (erp is a fixture)
 
 SHAPE = """
 select table_name, column_name, data_type from information_schema.columns
@@ -85,6 +89,30 @@ def test_init_from_version_3_prints_the_grants_a_worker_needs_and_they_are_enoug
     assert erp.target("select mirror from _rowvioli.columns where \"column\" = 'city'") == [(False,)]
 
 
+@pytest.mark.parametrize("given, lacking", [(0, "columns"), (1, "columns__log")])
+def test_a_worker_without_the_grants_init_printed_is_told_where_they_are(erp, given, lacking):
+    version_3(erp)
+    grants = [line for line in erp.run("init").stdout.splitlines() if line.startswith("GRANT")]
+    role, db = f"worker_{erp.target_url.rsplit('/', 1)[1]}", erp.target_url.rsplit("/", 1)[1]
+    try:
+        for statement in [f"CREATE ROLE {role} LOGIN PASSWORD 'w'", f"GRANT USAGE ON SCHEMA _rowvioli TO {role}",
+                          f"GRANT SELECT ON _rowvioli.sources, _rowvioli.tables, _rowvioli.meta, _rowvioli.status "
+                          f"TO {role}", f"GRANT UPDATE ON _rowvioli.tables TO {role}",
+                          f"GRANT SELECT, INSERT, UPDATE ON _rowvioli.runs TO {role}",
+                          f"GRANT USAGE ON ALL SEQUENCES IN SCHEMA _rowvioli TO {role}",
+                          f"GRANT CREATE ON DATABASE {db} TO {role}",
+                          *(g.replace(" TO worker;", f" TO {role}") for g in grants[:given])]:
+            erp.target(statement)
+        url = {"ROWVIOLI_TARGET_URL": erp.target_url.replace("postgres:x@", f"{role}:w@")}
+        reason = json.loads(erp.run("run", env=url).stdout)["tables"]["raw_erp.customers"]["reason"]
+        assert reason.endswith(f"permission denied for table {lacking}: the worker's role lacks a right on "
+                          f"_rowvioli.{lacking}, which rowvioli init printed with the upgrade to version 4 "
+                          '(docs/operation.md "The target")'), reason
+    finally:
+        erp.target(f"drop owned by {role}")
+        erp.target(f"drop role {role}")
+
+
 @pytest.mark.parametrize("change", ["drop column city", "alter column city type integer using length(city)"])
 def test_the_first_run_after_the_upgrade_records_what_it_changed_by_its_cause_and_notifies(erp, change):  # story 45
     assert erp.run("run").returncode == 0
@@ -107,6 +135,80 @@ def test_the_first_run_after_the_upgrade_records_what_it_changed_by_its_cause_an
     assert [json.loads(n.payload) for n in listener.notifies(timeout=1, stop_after=1)] == [
         {"schema": "raw_erp", "table": "customers", "run": run}]
     listener.close()
+
+
+def released(rv):
+    """The upgrade of a target as the released version leaves it: no columns table, no comment on _op."""
+    rv.target("comment on column raw_erp.customers__log._op is null")
+    version_3(rv)
+    assert rv.run("init").returncode == 0
+
+
+HAND = "alter table raw_erp.customers drop constraint customers_pkey, add primary key (customer_no, name)"
+def elsewhere(rv):
+    """The definition with the same key, changed elsewhere: it differs from that of the last successful run."""
+    return definition(rv).replace('max_age = "1h"', 'max_age = "2h"')
+
+
+KEY_LOG ='select _op, "column", "key", "by" from _rowvioli.columns__log where _run = (select max(run) from _rowvioli.runs)'
+
+
+@pytest.mark.parametrize("cause", ["hand", "definition"])
+def test_a_key_changed_before_the_upgrade_is_told_by_the_change_log_and_keeps_the_history(erp, cause):  # story 45
+    ok(erp)
+    moments = [(erp.target(LOADED_AT)[0][0], rows(erp.target, MIRROR))]
+    erp.source("update customers set name = 'Anna2' where customer_no = 1")  # a U the other key never saw
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    if cause == "hand":
+        erp.target(HAND)
+        apply(erp, elsewhere(erp))
+    else:
+        apply(erp, definition(erp, '"public.customers" = { key = ["customer_no", "name"] }\n'))
+    released(erp)
+    erp.source("update customers set city = 'Köln' where customer_no = 2")
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    assert primary_key(erp) == (["customer_no"] if cause == "hand" else ["customer_no", "name"])
+    changed = erp.target("select _op, customer_no from raw_erp.customers__log where _run = "
+                         "(select max(run) from _rowvioli.runs) order by 1, 2")
+    assert changed == ([("U", 2)] if cause == "hand" else [("D", 1), ("D", 2), ("D", 3), ("I", 1), ("I", 2), ("I", 3)])
+    for moment, mirror in moments:
+        assert at(erp, moment) == mirror, moment
+    log_replays(erp)
+    assert erp.target(KEY_LOG + ' and "column" in (\'customer_no\', \'name\') order by 2') == [
+        ("I", "customer_no", 1, cause), ("I", "name", None if cause == "hand" else 2, cause)]
+
+
+def test_a_key_changed_by_hand_before_the_upgrade_is_told_by_the_definition_of_the_last_successful_run(erp):
+    ok(erp)  # a change log of first rows only, which either key could have written
+    erp.target(HAND)
+    released(erp)
+    again(erp)
+    assert primary_key(erp) == ["customer_no"]
+    assert erp.target(KEY_LOG + " and \"column\" = 'customer_no'") == [("I", "customer_no", 1, "hand")]
+    log_replays(erp)
+
+
+def test_a_key_changed_before_the_upgrade_that_nothing_in_the_target_tells_stops_with_the_statement_that_does(erp):
+    ok(erp)
+    erp.target(HAND)
+    apply(erp, elsewhere(erp))
+    released(erp)
+    before = rows(erp.target, MIRROR), erp.target("select count(*) from raw_erp.customers__log")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp).replace("***", "x")  # the source's password is x, and the reason hides it
+    statement = """COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '[{"key": ["customer_no"]}]'"""
+    assert reason == (
+        "the primary key of raw_erp.customers is (customer_no, name), the definition's key is (customer_no), and "
+        "nothing in the target tells which of them the change log raw_erp.customers__log was written under: say it, "
+        f"{statement} where a person changed the primary key, which the next run puts back, or "
+        """COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '[{"key": ["customer_no", "name"]}]' where the """
+        "definition changed the key")
+    assert (rows(erp.target, MIRROR), erp.target("select count(*) from raw_erp.customers__log")) == before
+    erp.target(statement)
+    again(erp)
+    assert primary_key(erp) == ["customer_no"]
+    assert erp.target(KEY_LOG + " and \"column\" = 'customer_no'") == [("I", "customer_no", 1, "hand")]
+    log_replays(erp)
 
 
 def test_init_on_an_empty_target_prints_only_that_it_is_ready(rv):
@@ -137,6 +239,7 @@ def test_every_command_using_the_target_refuses_another_schema_version_naming_bo
     r = rv.run(*command, timeout=20)
     assert r.returncode != 0
     assert re.search(r"\b99\b", r.stderr) and re.search(r"\b4\b", r.stderr), r.stderr
+    assert "init brings" not in r.stderr  # only an older target is brought up
     assert rv.target(SHAPE) == shape
     assert rv.target("select count(*) from _rowvioli.sources") == [(0,)]
 
@@ -148,7 +251,8 @@ def test_a_version_3_target_is_refused_by_every_command_but_init_naming_both_ver
     version_3(rv)
     r = rv.run(*command, timeout=20)
     assert r.returncode != 0
-    assert re.search(r"\b3\b", r.stderr) and re.search(r"\b4\b", r.stderr), r.stderr
+    assert "the target has schema version 3, this program works with version 4; rowvioli init brings it to 4" \
+        in r.stderr, r.stderr
 
 
 def test_the_control_connection_asks_postgres_to_notice_a_dead_worker_within_a_minute(rv, monkeypatch):

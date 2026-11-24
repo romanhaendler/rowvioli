@@ -9,14 +9,18 @@ from test_run import apply, definition, erp, ok, run  # noqa: F401 (erp is a fix
 
 # whatever Arrow's message: `The string 'nan' is not a valid decimal256 number`, `Decimal value does not fit in
 # precision 76`
-@pytest.mark.parametrize("value, shown", [("NaN", "'nan'"), ("1e39", "1" + "0" * 39)])
-def test_a_numeric_the_target_cannot_hold_fails_with_the_cause_and_no_path(erp, value, shown):
+@pytest.mark.parametrize("value, shown, has", [
+    ("NaN", "'nan'", "NaN or Infinity, which no decimal holds"),
+    ("-Infinity", "'-infinity'", "NaN or Infinity, which no decimal holds"),
+    ("1e39", "1" + "0" * 39, "a value of more than 38 digits before or after the point, the most a numeric without "
+                             "precision holds here")])
+def test_a_numeric_the_target_cannot_hold_fails_with_the_cause_and_no_path(erp, value, shown, has):
     erp.source("create table nn (id int primary key, v numeric)")
     erp.source(f"insert into nn values (1, '{value}')")
     apply(erp, definition(erp, '"public.nn" = { key = ["id"] }\n'))
     why = failed(erp)
-    assert "public.nn: column v has a value no decimal holds, such as NaN or Infinity; cast it in a view of the " \
-           "source" in why and shown not in why.lower() and "Traceback" not in why and ".py" not in why, why
+    assert f"public.nn: column v has {has}; cast it in a view of the source" in why \
+        and shown not in why.lower() and "Traceback" not in why and ".py" not in why, why
 
 
 @pytest.mark.parametrize("value, type, says", [
@@ -198,3 +202,13 @@ def test_run_with_a_table_where_the_source_belongs_says_so_and_names_the_source_
     assert "did you mean `rowvioli run erp customers`" in r.stderr, r.stderr
     r = erp.run("run", "nothing")
     assert r.returncode == 1 and "nothing is no source" in r.stderr and "did you mean" not in r.stderr
+
+
+def test_a_line_break_in_a_column_name_is_written_as_a_question_mark_and_the_reason_goes_on(erp):
+    erp.source('alter table customers add column "a\nb" text')
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], log = false }\n'))
+    ok(erp)
+    erp.source('alter table customers drop column "a\nb"')
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == ("column a?b is missing in the source; without a change log its values are nowhere else, "
+                           'so a person drops it: ALTER TABLE "raw_erp"."customers" DROP COLUMN "a?b"')

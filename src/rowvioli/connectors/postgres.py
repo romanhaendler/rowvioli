@@ -1,6 +1,7 @@
 """The postgres connector: expects `url` and knows no option; reads the whole table through ADBC as a stream of batches."""
 import adbc_driver_postgresql.dbapi as adbc
 import pyarrow as pa
+import pyarrow.compute as pc
 
 from ..contract import known_options, version
 from ..target import quote
@@ -38,8 +39,10 @@ def _cast(table, column, field):
     try:
         return column.storage.cast(field.type)
     except pa.ArrowInvalid:
-        raise Exception(f"{table}: column {field.name} has a value no decimal holds, such as NaN or Infinity; cast it "
-                        "in a view of the source") from None
+        odd = pc.any(pc.match_substring_regex(column.storage, "nan|inf", ignore_case=True)).as_py()
+        has = ("NaN or Infinity, which no decimal holds" if odd else "a value of more than 38 digits before or after "
+               "the point, the most a numeric without precision holds here")
+        raise Exception(f"{table}: column {field.name} has {has}; cast it in a view of the source") from None
 
 
 def tables(connection):

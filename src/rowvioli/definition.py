@@ -14,6 +14,8 @@ TABLE_SETTINGS = {"max_age": str, "log": bool, "max_delete_share": (int, float),
                   "timezone": str, "target_schema": str}
 # settings of a table only, not of the source and not a connector option; `renamed` travels with the options
 TABLE_ONLY = {"key": list, "target_table": str, "renamed": dict}
+# the columns a change log and its history view carry beside the table's (decision 54)
+RESERVED = ["_op", "_run", "_loaded_at", "_valid_from", "_valid_to"]
 DEFAULTS = {"log": True, "max_delete_share": 0.5, "max_seconds": 3600}
 SOURCE_SETTINGS = {"type": str, "connection": dict, "tables": dict, "parallel": int,
                    **TABLE_SETTINGS}
@@ -92,6 +94,9 @@ def read(directory, env=None, only=None):
                     raise SystemExit(f'{spot}: renamed must be a table of new = "old" column names, each old one once')
                 for c in [*renamed, *renamed.values()]:
                     clean(spot, "renamed", c)
+                if reserved := [n for n in renamed if n in RESERVED]:
+                    raise SystemExit(f"{spot}: renamed {reserved[0]}: the program keeps this name for the change log "
+                                     "and the history view")
                 # a file's extension is not a name part: `customers.csv` becomes `customers`
                 target = t["target_table"] if "target_table" in t else (
                     Path(table).stem if s["type"] == "file" else table.rsplit(".", 1)[-1]).lower()

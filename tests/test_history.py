@@ -95,6 +95,43 @@ def test_the_view_is_read_by_a_role_with_rights_on_the_tables_schema_and_none_on
             c.execute("select * from _rowvioli.runs")
 
 
+GRANTS = """select a.privilege_type, case a.grantee when 0 then 'public' else a.grantee::regrole::text end,
+                  a.is_grantable, null::name from pg_class r, aclexplode(r.relacl) a
+             where r.oid = 'raw_erp.customers__history'::regclass and a.grantee <> r.relowner
+            union all
+            select a.privilege_type, case a.grantee when 0 then 'public' else a.grantee::regrole::text end,
+                   a.is_grantable, c.attname from pg_attribute c, aclexplode(c.attacl) a
+             where c.attrelid = 'raw_erp.customers__history'::regclass order by 4 nulls first, 2"""
+
+
+def test_a_history_view_built_anew_keeps_the_grants_given_on_it_by_name(erp):
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], renamed = { town = "city" } }\n'))
+    ok(erp)
+    role = "reader_" + erp.target("select current_database()")[0][0]
+    erp.target(f"create role {role}")
+    try:
+        erp.target(f"grant usage on schema raw_erp to {role}")
+        erp.target(f"grant select on raw_erp.customers__history to {role} with grant option")
+        erp.target("grant select (city) on raw_erp.customers__history to public")
+        for change in ["alter table customers rename column city to town", "alter table customers drop column name",
+                       '"public.customers" = { key = ["customer_no", "town"] }\n']:
+            if change.startswith("alter"):
+                erp.source(change)
+            else:
+                erp.source("update customers set town = 'Ulm' where town is null")  # a key column holds no null
+                apply(erp, definition(erp, change))
+            again(erp)
+            # the column granted follows its rename
+            assert erp.target(GRANTS) == [("SELECT", role, True, None), ("SELECT", "public", False, "town")], change
+            with psycopg.connect(erp.target_url, autocommit=True) as c:
+                c.execute(f"set role {role}")
+                assert c.execute("select count(*) from raw_erp.customers__history").fetchone() == \
+                    erp.target("select count(*) from raw_erp.customers__history")[0], change
+    finally:
+        erp.target(f"drop owned by {role}")
+        erp.target(f"drop role {role}")
+
+
 LOG_FALSE = '"public.customers" = { key = ["customer_no"], log = false }\n'
 
 
@@ -151,6 +188,23 @@ def test_C2_a_key_taken_away_fails_naming_the_log_until_log_view_and_mirror_are_
     again(erp)
 
 
+@pytest.mark.parametrize("name", ["_op", "_run", "_loaded_at"])
+@pytest.mark.parametrize("how", ["renamed", "another family"])
+def test_a_name_of_the_change_log_the_source_brings_is_never_answered_by_renaming_the_change_logs_column(erp, name, how):
+    ok(erp)
+    if how == "renamed":  # as a program that did not refuse it applied it
+        erp.target(f"""update _rowvioli.tables set options = '{{"renamed": {{"{name}": "city"}}}}'""")
+        erp.source(f"alter table customers rename column city to {name}")
+    else:
+        erp.source(f"alter table customers add column {name} {'integer' if name == '_op' else 'text'}")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    assert f"column {name} is a name of the change log or the history view" in reason, reason
+    assert "RENAME" not in reason
+
+
 def test_the_name_op_is_said_not_to_be_free_to_take(erp):
     erp.source("alter table customers add column _op text")
-    assert "_op cannot be freed" in failed(erp)
+    assert failed(erp) == ("column _op is a name of the change log or the history view, so a table with a key cannot "
+                           "have it; _op cannot be freed: read the source through a view of it that names that column "
+                           "otherwise")

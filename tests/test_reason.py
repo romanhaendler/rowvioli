@@ -9,7 +9,8 @@ GET_NEXT = ("IO: nanoarrow call failed: ArrowArrayStreamGetNext(&bind.value, &cu
 
 
 def reason(message, values=()):
-    return reason_line(list(values), Exception(message), "reading the source")
+    # a driver's own type, as ADBC's errors are: a plain Exception is the program's own reason
+    return reason_line(list(values), RuntimeError(message), "reading the source")
 
 
 def test_a_cut_message_with_a_traceback_gives_the_cause_before_it():
@@ -41,3 +42,14 @@ def test_the_wrapper_of_a_failed_statement_goes_whatever_its_sql_holds():
         == "duplicate key value"
     assert reason("IO: [libpq] Failed to execute prepared statement: PGRES_FATAL_ERROR ERROR:  value too long\n") \
         == "value too long"
+
+
+def test_a_plain_exception_of_a_connector_of_ones_own_gives_its_first_line_as_a_drivers_does():
+    try:  # raised outside the program, as a connector of one's own raises it; the next line may quote a row
+        raise Exception("cannot read customers: duplicate key value\nDETAIL:  Key (id)=(42) already exists.")
+    except Exception as e:
+        assert reason_line([], e, "reading the source") == "cannot read customers: duplicate key value"
+
+
+def test_a_source_table_named_columns_that_may_not_be_read_is_not_said_to_be_the_columns_table():
+    assert reason("ERROR:  permission denied for table columns") == "permission denied for table columns"

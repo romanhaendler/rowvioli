@@ -77,7 +77,8 @@ def connect(init=False, versioned=True):
     if version is None:
         raise SystemExit(NO_SCHEMA)
     if version != SCHEMA_VERSION:
-        raise SystemExit(f"the target has schema version {version}, this program works with version {SCHEMA_VERSION}")
+        raise SystemExit(f"the target has schema version {version}, this program works with version {SCHEMA_VERSION}"
+                         + (f"; rowvioli init brings it to {SCHEMA_VERSION}" if 3 <= version < SCHEMA_VERSION else ""))
     return conn
 
 

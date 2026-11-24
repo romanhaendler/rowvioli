@@ -31,12 +31,12 @@ GRANT SELECT ON _rowvioli.status TO consumer;
 
 `SELECT target_table, status, age, reason FROM _rowvioli.status` then shows `failed` with the reason (for example `customers.csv: no such file in data`), or `ok` with the age of the last load.
 
-**A view of the consumer's own over a mirror keeps its columns.** `CREATE VIEW mine AS SELECT * FROM raw_erp.customers` is expanded when it is created, since Postgres fixes the columns of a view then. When the source gains a column, the mirror gets it with the next run and `mine` does not: replace the view (`CREATE OR REPLACE VIEW`, which may add columns at the end) or drop it and create it again. A prepared `SELECT *` on a mirror fails once after a new column (`cached plan must not change result type`) and works again on its next preparation.
+**A view of the consumer's own over a mirror keeps its columns.** `CREATE VIEW mine AS SELECT * FROM raw_erp.customers` is expanded when it is created, since Postgres fixes the columns of a view then. When the source gains a column, the mirror gets it with the next run and `mine` does not: replace the view (`CREATE OR REPLACE VIEW`, which may add columns at the end) or drop it and create it again. A statement prepared on a mirror, such as `SELECT *`, fails after its columns change, by a new one, one that goes or a widened type (`cached plan must not change result type`), and it fails on every call until it is prepared again; a pool that keeps its prepared statements has to drop them. A reader that lists a mirror's columns (from `information_schema.columns`, say) and then selects them by name gets `column ... does not exist` when a run took one away in between, and reads the list again.
 
 **A consumer's view or foreign key stops a change and is named.** A run changes the columns of a mirror by itself ([Columns](loading.md#columns)): a column the source drops leaves it, a type is widened, a key changes. Where an object of a consumer depends on what would change, Postgres refuses, the run fails with a reason that says which column would have changed and names the object, and nothing is published. The consumer changes or drops the object, and the next run goes on. So whoever wants to be asked before a column changes builds a view on it. Two things follow:
 
 - A view on a mirror stops what happens to a column it reads: a widening and the column's going. It does not stop a type that is kept while every value fits, nor a change of key, unless it depends on the primary key (one that groups by the key and reads other columns); a foreign key to the mirror stops a change of key.
-- A view on a **history view** stops changes to any column of that history view, because a run drops the history view and creates it again whenever it carries out more than the adding of columns: a column that goes, a type widened, a column renamed or retired, a change of key. A new column replaces it in place and does not stop.
+- A view on a **history view** stops changes to any column of that history view, because a run drops the history view and creates it again whenever it carries out more than the adding of columns: a column that goes, a type widened, a column renamed or retired, a change of key. A new column replaces it in place and does not stop. The grants on the history view stay: the run reads them before it drops the view and gives them again after it has created it, in the same transaction, each with its grant option, and a grant on a renamed column under the column's new name. The view's owner is the worker's role, as before.
 
 A column that is renamed in the source and proven so by the data ([Columns](loading.md#columns)) is renamed in mirror and change log, and a view on it keeps working under its own column name.
 
@@ -101,7 +101,7 @@ SELECT * FROM raw_erp.customers__history
 
 This returns customers 7 (Bonn) and 9 (Essen). A moment before the first load returns nothing: there was no mirror yet. The view exists whenever the change log does, and a column the source adds later appears in it, empty for the versions before. Both exist only for a table with a key and without `log = false`.
 
-**Columns that go, come and change.** A column the source drops leaves the mirror and stays in the change log and the history view. The change log gets a `U` for every row that had a value in it, so the version that had the value ends at the moment the column went and the next one has it empty. A column that comes back continues its old column in the change log, empty for the versions in between. Where a column comes back with a type of another family, the change log's old column is renamed `<name>__<run>` (a retired column, here `city__812` for run 812), keeps its values, and a new column takes the name; the history view shows both. A type of the same family that is widened is widened in the change log too. The columns table says when each of this happened ([below](#the-columns-table)).
+**Columns that go, come and change.** A column the source drops leaves the mirror and stays in the change log and the history view. The change log gets a `U` for every row that had a value in it, so the version that had the value ends at the moment the column went and the next one has it empty. A column that comes back continues its old column in the change log, empty for the versions in between. Where a column comes back with a type of another family, the change log's old column is renamed `<name>__<run>` (a retired column, here `city__812` for run 812), keeps its values, and a new column takes the name; the history view shows both. A type of the same family that is widened is widened in the change log too. A renamed column is renamed in the change log, so the history view shows it under its new name at every moment, also before the rename; the columns table keeps the old name for the moments before, and its row of the new name says the old one in `was`, which joins the two. The columns table says when each of this happened ([below](#the-columns-table)).
 
 **A changed key.** The mirror is replaced as a whole under the new key, and the change log gets a `D` for every old row and an `I` for every new one, with the moment of the run. The history view then has one branch per key, joined with `UNION ALL`, each over its own stretch of the change log and partitioned by its own key: the stretch of the old key reaches up to the moment of the change and its `D` rows, the next begins with its `I` rows. The keys and the moments they changed are the comment on the change log's column `_op`, and the view is built from that comment and from nothing in `_rowvioli`:
 
@@ -111,7 +111,7 @@ SELECT col_description('raw_erp.customers__log'::regclass, (SELECT attnum FROM p
 -- [{"key": ["customer_no"]}, {"from": "2026-11-24T09:15:02.113845+00:00", "key": ["customer_no", "name"]}]
 ```
 
-Every change log the program begins has the comment with its one key; one without it is from before this version (one key) or lost it. A person who drops or renames the comment makes the next run fail after a change of key, and the reason holds the text to put back (`COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '...'`): it is the latest note `the change log's keys: ...` in `columns__log`. A run that renames or retires a column of a key rewrites the comment in the same transaction.
+Every change log the program begins has the comment with its one key; one without it is from before this version (one key) or lost it. A person who drops or changes the comment makes the next run fail after a change of key, and the reason holds the text to put back (`COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '...'`): it is the latest note `the change log's keys: ...` in `columns__log`. A comment that is not what the program wrote, a key that is no list, a `from` that is no moment or a column the change log does not have, counts as lost. A run that renames or retires a column of a key rewrites the comment in the same transaction. A change log from before this version may need the comment once: where the first run after the upgrade cannot tell whether a person or the definition changed the key ([A key](loading.md#columns)), its reason gives both comments, and the one a person puts there says the key the change log was written under.
 
 A changed key costs two log rows per row, and the history before the change is read by the old key. Nothing before it is lost.
 
@@ -135,7 +135,7 @@ SELECT customer_no, city
 
 ## The columns table
 
-Which columns and types a mirror had at a moment, and what caused each change, is kept the way rows are: `_rowvioli.columns` is to the columns of the mirrors what a mirror is to its rows, `_rowvioli.columns__log` its change log and `_rowvioli.columns__history` its history view, with `_op`, `_run`, `_loaded_at`, `_valid_from` and `_valid_to` as for any change log. `_loaded_at` is that of the rows published in the same transaction, so a column's change and the rows loaded with it carry the same moment. The three are written by the publishing transaction only, for every table, with or without a key.
+Which columns and types a mirror had at a moment, and what caused each change, is kept the way rows are: `_rowvioli.columns` is to the columns of the mirrors what a mirror is to its rows, `_rowvioli.columns__log` its change log and `_rowvioli.columns__history` its history view, with `_op`, `_run`, `_loaded_at`, `_valid_from` and `_valid_to` as for any change log; the history view carries `_run` and `_op` as well, so that who may read only it reads what changed and in which run. `_loaded_at` is that of the rows published in the same transaction, so a column's change and the rows loaded with it carry the same moment. The three are written by the publishing transaction only, for every table, with or without a key.
 
 ```
 columns   target_schema, target_table, column     the key
@@ -165,17 +165,19 @@ SELECT "column", type, "key" FROM _rowvioli.columns__history
  ORDER BY "column";
 ```
 
-What changed in a table since a moment, by whom, and what the note says:
+What changed in a table since a moment, in which run, by whom, and what the note says:
 
 ```sql
-SELECT _loaded_at, _op, "column", type, mirror, was, "by", note FROM _rowvioli.columns__log
- WHERE target_schema = 'raw_erp' AND target_table = 'customers' AND _loaded_at > '2026-03-01 00:00:00+00'
- ORDER BY _loaded_at, "column";
+SELECT _valid_from, _run, _op, "column", type, mirror, was, "by", note FROM _rowvioli.columns__history
+ WHERE target_schema = 'raw_erp' AND target_table = 'customers' AND _valid_from > '2026-03-01 00:00:00+00'
+ ORDER BY _valid_from, "column";
 ```
 
-The reader of `columns__history` needs `SELECT` on that view and nothing else in `_rowvioli`, as for the history of a mirror ([Rights](operation.md#the-target)).
+`_op` is `I` for a column the record did not have and `U` for a change. A column a person dropped from mirror and change log, and every column of a mirror renamed by hand under its old name, is closed instead: its last version ends then (`_valid_to`) and none follows, so the query above does not list it; `columns__log` has it as a `D` row.
 
-**The notification.** A run that records a change of columns, a key or a name notifies the channel `rowvioli_schema` in the transaction that publishes it, once per run, so a listener hears it at the COMMIT and never for a run that was rolled back. The payload is small and fixed: `{"schema" : "raw_erp", "table" : "customers", "run" : 812}`, as Postgres writes a JSON object. A listener reads what changed from `columns__log`, `WHERE _run = 812`. It is not sent for a first fill where every column is `found`: a table's first fill is no change of columns. A first fill that changed a column, such as the first run after the upgrade on a table whose source dropped one, sends it. A change `by = hand` or `by = reader` is sent as well.
+The reader of `columns__history` needs `SELECT` on that view and nothing else in `_rowvioli`, as for the history of a mirror ([Rights](operation.md#the-target)). With it the reader sees the columns of every table of the target, in every schema, and in the notes the names of the indexes and constraints that went with a column and of the roles that had a grant on it.
+
+**The notification.** A run that records a change of columns, a key or a name notifies the channel `rowvioli_schema` in the transaction that publishes it, once per run, so a listener hears it at the COMMIT and never for a run that was rolled back. The payload is small and fixed: `{"schema" : "raw_erp", "table" : "customers", "run" : 812}`, as Postgres writes a JSON object. A listener reads what changed from the history view, `SELECT _op, "column", type, mirror, was, "by", note FROM _rowvioli.columns__history WHERE _run = 812`, which needs no right on `columns__log`. A column closed in that run, as above, is not among those rows; a listener that must hear of it reads `columns__log` with the same condition, which needs `SELECT` on it. It is not sent for a first fill where every column is `found`: a table's first fill is no change of columns. A first fill that changed a column, such as the first run after the upgrade on a table whose source dropped one, sends it. A change `by = hand` or `by = reader` is sent as well.
 
 ```sql
 LISTEN rowvioli_schema;
