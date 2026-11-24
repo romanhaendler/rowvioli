@@ -10,7 +10,7 @@ Tests never import the program. They use the `rv` fixture:
   rv.start(*args)            like rv.run, in the background: a Popen (stdout/stderr piped), killed at test end
   rv.kill_runs(p)            kill -9 the run processes started by the worker process p
   until(check)               polls check() until it is truthy (10 s), returns its value
-Each test gets a fresh database in each container, so tests and worktrees do not collide.
+Each test gets a fresh database in each container, so tests and worktrees do not collide; it is dropped after the test.
 """
 import contextlib
 import os
@@ -148,6 +148,9 @@ def rv(servers, tmp_path):
         rv.kill_runs(p)
         p.kill()
         p.wait()
+    # each database costs about 10 MB of the Docker disk with its WAL; kept, the suite fills it and Postgres PANICs
+    for name in servers.values():
+        _query(_url(name), f"DROP DATABASE {db} WITH (FORCE)")
 
 
 def until(check, timeout=10):

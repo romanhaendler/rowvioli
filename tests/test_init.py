@@ -17,7 +17,7 @@ def test_init_twice_leaves_the_same_schema_and_meta(rv):
     second = rv.run("init")
     assert second.returncode == 0, second.stderr
     assert rv.target(SHAPE) == shape
-    assert rv.target("select schema_version, max_running from _rowvioli.meta") == [(3, 20)]
+    assert rv.target("select schema_version, max_running from _rowvioli.meta") == [(4, 20)]
 
 
 def test_init_keeps_what_is_there(rv):
@@ -27,6 +27,36 @@ def test_init_keeps_what_is_there(rv):
     assert rv.run("init").returncode == 0
     assert rv.target("select max_running from _rowvioli.meta") == [(7,)]
     assert rv.target("select name from _rowvioli.sources") == [("erp",)]
+
+
+def version_3(rv):
+    """A target as version 3 left it: without the version columns of runs."""
+    rv.target("alter table _rowvioli.runs drop column program_version, drop column driver_version")
+    rv.target("update _rowvioli.meta set schema_version = 3")
+
+
+def test_init_brings_a_version_3_target_to_4_and_changes_nothing_else(rv):
+    rv.run("init")
+    shape = rv.target(SHAPE)
+    rv.target("insert into _rowvioli.sources (name, type) values ('erp', 'postgres')")
+    version_3(rv)
+    assert rv.target(SHAPE) != shape
+    assert rv.run("init").returncode == 0
+    assert rv.target(SHAPE) == shape
+    assert rv.target("select schema_version from _rowvioli.meta") == [(4,)]
+    assert rv.target("select name from _rowvioli.sources") == [("erp",)]
+
+
+def test_init_refuses_a_target_older_than_version_3_and_leaves_it(rv):  # the steps begin at 3
+    rv.run("init")
+    version_3(rv)
+    rv.target("update _rowvioli.meta set schema_version = 2")
+    shape = rv.target(SHAPE)
+    r = rv.run("init")
+    assert r.returncode != 0
+    assert re.search(r"\b2\b", r.stderr) and re.search(r"\b4\b", r.stderr), r.stderr
+    assert rv.target(SHAPE) == shape
+    assert rv.target("select schema_version from _rowvioli.meta") == [(2,)]
 
 
 @pytest.mark.parametrize("command", [["init"], ["apply", "sources"], ["run"], ["work"]])
@@ -39,9 +69,19 @@ def test_every_command_using_the_target_refuses_another_schema_version_naming_bo
     shape = rv.target(SHAPE)
     r = rv.run(*command, timeout=20)
     assert r.returncode != 0
-    assert re.search(r"\b99\b", r.stderr) and re.search(r"\b3\b", r.stderr), r.stderr
+    assert re.search(r"\b99\b", r.stderr) and re.search(r"\b4\b", r.stderr), r.stderr
     assert rv.target(SHAPE) == shape
     assert rv.target("select count(*) from _rowvioli.sources") == [(0,)]
+
+
+@pytest.mark.parametrize("command", [["run"], ["work"]])
+def test_a_version_3_target_is_refused_by_every_command_but_init_naming_both_versions(rv, command):
+    rv.run("init")
+    rv.run("key", "new")
+    version_3(rv)
+    r = rv.run(*command, timeout=20)
+    assert r.returncode != 0
+    assert re.search(r"\b3\b", r.stderr) and re.search(r"\b4\b", r.stderr), r.stderr
 
 
 def test_the_control_connection_asks_postgres_to_notice_a_dead_worker_within_a_minute(rv, monkeypatch):

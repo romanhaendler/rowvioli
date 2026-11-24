@@ -1,6 +1,7 @@
 """The connector contract (decision 27): a module with `read(connection, table, options)` that returns an iterator of
-Arrow batches, and optionally `tables(connection)` for `rowvioli list`. Connectors register as modules in the entry
-point group `rowvioli.connectors` under their `type`; the shipped ones do the same."""
+Arrow batches, and optionally `tables(connection)` for `rowvioli list` and `driver_version`, a string recorded with
+every run. Connectors register as modules in the entry point group `rowvioli.connectors` under their `type`; the
+shipped ones do the same."""
 from importlib.metadata import entry_points
 
 

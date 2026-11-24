@@ -5,6 +5,7 @@ ends with the worker. It tells the worker on stdout,
 one JSON object per line: {"claimed": <target table>, "run", "max_seconds"} right after the claim, before reading,
 and {"table": <target table>, "status", ...counts or "reason"} at the end. It prints nothing if it claimed nothing.
 """
+import importlib.metadata
 import itertools
 import json
 import os
@@ -54,8 +55,9 @@ def claim(conn, worker, source, table):
         sql(conn, """UPDATE _rowvioli.runs SET status = 'failed', finished_at = clock_timestamp(), reason = 'worker lost'
                       WHERE run = (SELECT max(run) FROM _rowvioli.runs WHERE "table" = $1) AND status = 'running'""",
             [id])  # only its newest can be: the one row, not all of runs, under the lock all claims share
-        [(run,)] = sql(conn, """INSERT INTO _rowvioli.runs ("table", worker, definition)
-                                SELECT $1, $2, definition FROM _rowvioli.meta RETURNING run""", [id, worker])
+        [(run,)] = sql(conn, """INSERT INTO _rowvioli.runs ("table", worker, definition, program_version)
+                                SELECT $1, $2, definition, $3 FROM _rowvioli.meta RETURNING run""",
+                       [id, worker, importlib.metadata.version("rowvioli")])
         with conn.cursor() as c:
             c.execute(TABLE, [id])
             t = dict(zip([d[0] for d in c.description], c.fetchone()), run=run, worker=worker)
@@ -182,6 +184,8 @@ def stage(conn, t):
     """Opens the connection, calls the connector and fills the TEMP staging table chunk by chunk. Returns the
     number of rows read."""
     connector = contract.connector(t["type"], f" on worker {t['worker']}")
+    sql(conn, "UPDATE _rowvioli.runs SET driver_version = $2 WHERE run = $1",
+        [t["run"], getattr(connector, "driver_version", None)])
     try:
         connection = seal.unseal(os.environ["ROWVIOLI_KEY_FILE"], t["key_id"], t["source"], t["connection"])
     except Exception as e:
