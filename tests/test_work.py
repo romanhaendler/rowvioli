@@ -488,3 +488,39 @@ def test_the_target_table_of_a_run_line_is_padded_to_28_characters(monkeypatch, 
     monkeypatch.setattr(work, "colour", lambda: False)
     work.say_run({"claimed": "raw_erp.t", "started": time.monotonic()}, "started", "run 1")
     assert f"▶ {'raw_erp.t':<28} started " in capsys.readouterr().err
+
+
+def test_two_workers_and_a_run_on_a_table_whose_shape_changes_publish_each_change_once(ready):  # ticket 14, item 4
+    from test_columns import replays
+    from test_columns_go_and_come import columns, log_replays
+    ready.source("create table customers (id int primary key, v int, city text);"
+                 "insert into customers select g, g, 'c' || g from generate_series(1, 30) g")
+    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }').replace('"1h"', '"1s"'))
+    workers = [ready.start("work", "--slots", "2") for _ in range(2)]
+    shape = "select format_type(atttypid, atttypmod) from pg_attribute where attrelid = 'raw_erp.customers'::regclass" \
+            " and attname = 'v'"
+    until(lambda: ready.target("select status from _rowvioli.status") == [("ok",)], timeout=30)
+    for change, published in [
+            ("alter table customers drop column city", lambda: columns(ready) == ["id", "v"]),
+            ("alter table customers add column city text; update customers set city = 'x' || id",
+             lambda: "city" in columns(ready) and ready.target("select count(city) from raw_erp.customers") == [(30,)]),
+            ("alter table customers alter v type bigint; update customers set v = 10000000000 where id = 1",
+             lambda: ready.target(shape) == [("bigint",)]),
+            ("alter table customers alter v type text using v || 'x'", lambda: ready.target(shape) == [("text",)])]:
+        ready.source(change)
+        racing = [ready.start("run", "erp") for _ in range(2)]  # beside the workers, on the same table
+        until(published, timeout=30)
+        for r in racing:
+            assert r.wait(timeout=30) in (0, 1)
+    for w in workers:
+        w.send_signal(signal.SIGTERM)
+        assert w.wait(timeout=30) == 0
+    assert ready.target("select reason from _rowvioli.runs where status <> 'ok'") == []
+    # each change once in the columns table, in its order
+    assert [(c, op, type, mirror) for c, op, type, mirror in ready.target(
+        'select "column", _op, type, mirror from _rowvioli.columns__log where "column" in (\'city\', \'v\') '
+        'order by _loaded_at, "column"')] == [
+        ("city", "I", "text", True), ("v", "I", "integer", True), ("city", "U", "text", False),
+        ("city", "U", "text", True), ("v", "U", "bigint", True), ("v", "U", "text", True)]
+    replays(ready)
+    log_replays(ready)
