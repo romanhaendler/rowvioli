@@ -2,7 +2,7 @@
 
 **Blocked by:** 02
 
-**Status:** claimed
+**Status:** resolved
 
 **Model:** Opus
 
@@ -29,3 +29,4 @@ Leave the plan open for what tickets 04 to 06 add (types to widen, the key, rena
 - Tested only in part: A12 with values that fit the change log's type; one that does not fit fails with Postgres's own message until ticket 04 widens. A15 shares its test with A11 (same mechanics; the gap in `columns__history` is asserted). Story 10's "name that is taken" is built beside "too long" but not tested: it needs a source column named `<name>__<run>` for the very run that retires `<name>`.
 - Left the spec: a column gone from a table without a change log stops with today's reason plus the way out (story 47), `...; without a change log its values are nowhere else, so a person drops it: ALTER TABLE ... DROP COLUMN ...`. A retired log column is recognised by its name (`<name>__<digits>` beside a log column `<name>`), not by the columns table, so that the plan does not need the record.
 - The documents now differ from what a run does (`docs/loading.md` on dropped columns, `docs/connectors.md` and `docs/open-points.md` on file patterns with other columns and REST columns absent from an answer): ticket 07.
+- Resolved on branch `schema-changes`, from sc-03 (bd14f86). Review fixes: f817971, 76addf6, a6b232d, bd14f86.
