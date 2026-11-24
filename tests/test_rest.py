@@ -235,6 +235,26 @@ def test_F1_a_column_absent_from_every_row_of_an_answer_or_left_out_of_columns_i
     log_replays(api, "raw_weather.a")
 
 
+def test_F4_a_type_under_columns_changed_to_another_family_stops_and_says_how_to_drop_the_column(api):
+    table = 'a = {{ key = ["station"], path = "/readings", columns = {{ station = "text", day = "{}" }} }}'
+    load(api, table.format("date"))
+    api.target("update _rowvioli.tables set requested_at = now()")
+    r, _ = load(api, table.format("text"))
+    assert r.returncode == 1
+    # pinning it again changes nothing: the way out is the drop (the harness's password is x, which a reason hides)
+    assert reason(api).startswith("column day has changed its type from date to text under columns in the table's "
+                                  "definition; a source without a catalog takes no column into another family")
+    assert reason(api).endswith('ALTER TABLE "raw_weather"."a" DROP COLUMN "day"')
+    api.target('ALTER TABLE "raw_weather"."a" DROP COLUMN "day"')
+    api.target("update _rowvioli.tables set requested_at = now()")
+    r, _ = load(api, table.format("text"))
+    assert r.returncode == 0, r.stdout
+    assert api.target("select station, day from raw_weather.a") == [("a", "2026-01-01")]
+    run = api.target("select max(run) from _rowvioli.runs")[0][0]
+    assert columns(api, "raw_weather.a__log")[-2:] == [f"day__{run}", "day"]  # the old values stay in the log
+    log_replays(api, "raw_weather.a")
+
+
 def test_a_column_present_as_null_stays_null(api):
     r, _ = load(api, 'a = { key = ["station"], path = "/nulls", columns = { station = "text", n = "int8" } }')
     assert r.returncode == 0, r.stdout

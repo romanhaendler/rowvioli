@@ -2,7 +2,7 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 **Model:** Opus
 
@@ -22,3 +22,6 @@ One fit test for all families; widening mirror and change log to the type that h
 - [ ] The existing tests pass or are changed to the new behaviour. No documents (ticket 07).
 
 ## Comments
+
+- Tested in `tests/test_types.py`, `tests/test_numeric.py`, `tests/test_checks.py` (C8) and `tests/test_columns_go_and_come.py` (A12 now widens). B2, B3, B4, B5, B7 and F5 passed on the code B1 drove (one fit test for all families), so they were not seen red. F4 is tested with a Parquet file; for REST every type is named under `columns`, so a flip there is a change of the definition and goes the same way, untested.
+- Left the spec: without a change log a type of another family stops with today's reason plus the way out, as ticket 03 did for a gone column (story 47). A key column of another family names `target_table` as the way out. `by = definition` is given to every column named under `columns`, also one that comes (for REST that is every column). A change log narrowed by hand is widened to the type that holds its own and the source's, which can be wider than the mirror's. The widening step reaches the worker as a line `{"widening": ...}` on the run's stdout, since the worker kills the run hard.

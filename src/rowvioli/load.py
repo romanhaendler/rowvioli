@@ -3,7 +3,8 @@
 Started by the worker loop as `python -m rowvioli.load <worker> <source> <table>`, with a pipe on stdin that
 ends with the worker. It tells the worker on stdout,
 one JSON object per line: {"claimed": <target table>, "run", "max_seconds"} right after the claim, before reading,
-and {"table": <target table>, "status", ...counts or "reason"} at the end. It prints nothing if it claimed nothing.
+{"widening": <table and columns>} before a widening that may rewrite a table, and {"table": <target table>,
+"status", ...counts or "reason"} at the end. It prints nothing if it claimed nothing.
 """
 import importlib.metadata
 import itertools
@@ -88,8 +89,8 @@ def load(conn, t):
                                                       and (not log_columns or n in dict(log_columns))]):
         sql(conn, "ALTER TABLE _stage " + ", ".join(f"ADD {quote(n)} {type}" for n, type in missing))
         staged = sql(conn, COLUMNS, ["pg_temp._stage"])
-    staged = fit(conn, t, staged, mirror, log_columns)
-    plan = check(conn, t, staged, mirror, log_columns)
+    staged, widened = fit(conn, t, staged, mirror, log_columns)
+    plan = check(conn, t, staged, mirror, log_columns) | {"widen": widened}
     t["step"] = "comparing with the mirror"
     counts = diff(conn, t, staged, mirror, plan) if t["key"] else None
     if mirror:  # under another key the mirror is replaced as a whole, and only its shrinkage counts
@@ -118,13 +119,29 @@ def check(conn, t, staged, mirror, log_columns):
                                 "the source; drop it from the mirror, or add it to the change log too and the next run "
                                 "takes it out of the mirror")
             plan["gone"].append(name)
-        elif types[name] != type:
-            raise Exception(f"column {name} has changed its type from {type} to {types[name]}")
+        elif family(types[name]) != family(type):  # another family goes and comes (decision 6); fit() did the same
+            changed = f"column {name} has changed its type from {type} to {types[name]}"
+            drop = ("so a person drops it and the next run adds it anew: "
+                    f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
+            if t["type"] in ("file", "rest") and name in dict(t["options"].get("columns") or {}):  # pinned already
+                raise Exception(f"{changed} under columns in the table's definition; a source without a catalog takes "
+                                f"no column into another family by itself, {drop}")
+            if t["type"] in ("file", "rest"):
+                raise Exception(f"{changed}; a source without a catalog guesses its types, so pin it under columns "
+                                "in the table's definition")
+            if name in (t["key"] or []):
+                raise Exception(f"{changed}, a type of another family in the key, so a row before cannot be told "
+                                "from one after: give the table another target_table, which begins a new mirror")
+            if not (t["key"] and t["log"] and log_columns):
+                raise Exception(f"{changed}; without a change log its values are nowhere else, {drop}")
+            if family(logged.get(name, types[name])) != family(type):  # the mirror's type changed by hand (cases G4)
+                raise Exception(changed)
+            plan["gone"].append(name)
     had = dict(mirror)
     way = ("rename that column of the change log and drop its history view, which the next run creates again: "
            f"ALTER TABLE {t['log_table']} RENAME COLUMN {{}} TO <another name>; DROP VIEW {t['history']}")
     for name, type in staged:
-        if name in had or name not in logged:
+        if name not in logged or name in had and name not in plan["gone"]:
             continue
         if (retired := re.fullmatch(r"(.+)__\d+", name)) and retired[1] in logged:
             raise Exception(f"column {name} of the source has the name under which the change log keeps the old "
@@ -190,49 +207,57 @@ def family(type):
     return FAMILIES.get(base, base)
 
 
+def wider(a, b):
+    """Decision 5: the type of the family of `a` and `b` that holds the values of both."""
+    if a == b:
+        return a
+    if family(a) in ("float", "time"):
+        return {"float": "double precision", "time": "timestamp without time zone"}[family(a)]
+    if a in INTEGERS and b in INTEGERS:
+        return max(a, b, key=INTEGERS.get)
+
+    def digits(type):  # before and after the point, an integer as many as its largest value; none for plain numeric
+        m = re.fullmatch(r"numeric\((\d+),(\d+)\)", type)
+        return (INTEGERS[type], 0) if type in INTEGERS else (int(m[1]) - int(m[2]), int(m[2])) if m else None
+    if not (digits(a) and digits(b)):
+        return "numeric"
+    before, after = (max(x, y) for x, y in zip(digits(a), digits(b)))
+    return f"numeric({before + after},{after})" if before + after <= 1000 else "numeric"
+
+
+INTEGERS = {"smallint": 5, "integer": 10, "bigint": 19}
+
+
 def fit(conn, t, staged, mirror, log_columns):
-    """A staged column whose type differs from the target's only in its precision or scale (numeric and
-    numeric(10,2)) counts as the mirror's, so that the comparison happens in the target type, when every value
-    passes unchanged into the mirror and the change log (decision 49). Returns the staged columns with the types
-    they are checked and published in."""
-    pairs = [(table, name, into) for table, columns in ((t["name"], mirror), (t["name"] + "__log", log_columns))
-             for name, type in staged if (into := dict(columns).get(name, type)) != type]
-    if not pairs:
-        return staged
-    # in one query: which differ only in their modifier, and which target has none, so that a cast changes no value
-    kinds = sql(conn, """SELECT (v->>0)::regtype = (v->>1)::regtype, (v->>1)::regtype::text = v->>1
-                           FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY e(v, n) ORDER BY n""",
-                [json.dumps([[dict(staged)[name], into] for _, name, into in pairs])])
-    misfit(conn, [p for p, (same, plain) in zip(pairs, kinds) if same and not plain])
-    # the others are a real change, which check() catches. The staging table is not altered: numbers compare equal
-    # whatever their modifier, and the mirror's type applies on insert, where it now changes no value
-    taken = {name: into for (table, name, into), (same, _) in zip(pairs, kinds) if same and table == t["name"]}
-    # a column back in its family takes the change log's type, as one of the mirror keeps the mirror's (cases A12),
-    # and a value it would change stops the run rather than being cut
-    had, types = dict(mirror), dict(staged)
-    back = [(table, name, into) for table, name, into in pairs
-            if table != t["name"] and name not in had and family(into) == family(types[name])]
-    misfit(conn, back)
-    taken.update({name: into for _, name, into in back})
-    return [(name, taken.get(name, type)) for name, type in staged]
+    """Decision 5: a staged column of the family of the mirror's or the change log's column keeps that type while every
+    value fits it, so that the comparison happens in the target type; where one does not, that column is widened to
+    the type that holds both. Returns the staged columns with the types they are checked and published in, and the
+    widenings as (table, column, type)."""
+    types, had = dict(staged), dict(mirror)
+    pairs = [(table, name, into) for table, columns in ((t["mirror"], mirror), (t["log_table"], log_columns))
+             for name, type in staged if (into := dict(columns).get(name, type)) != type
+             and family(into) == family(type)]  # another family is a column that goes and comes, check() plans it
+    # only a target that does not hold the staged type already needs the scan
+    widened = [(table, name, wider(into, types[name]))
+               for table, name, into in misfits(conn, [p for p in pairs if wider(p[2], types[p[1]]) != p[2]])]
+    # the staging table is not altered: the target's type applies on insert, where it now changes no value. A column
+    # back in its family takes the change log's type (cases A12)
+    taken = {name: into for table, name, into in pairs + widened if table == t["mirror"] or name not in had}
+    return [(name, taken.get(name, type)) for name, type in staged], widened
 
 
-def misfit(conn, columns):
-    """Fails on the first value of the (table, column, type) `columns` that its type would change, in one scan."""
+def misfits(conn, columns):
+    """The (table, column, type) of `columns` with a staged value that the type would change, in one scan."""
     if not columns:
-        return
-    changed = [f"{quote(name)}::{type} IS DISTINCT FROM {quote(name)}" for _, name, type in columns]
-    values = ", ".join(f"CASE WHEN {c} THEN {quote(name)}::text END" for c, (_, name, _) in zip(changed, columns))
+        return []
+    changed = [f"bool_or({quote(name)}::{type} IS DISTINCT FROM {quote(name)})" for _, name, type in columns]
     try:
-        row = sql(conn, f"SELECT {values} FROM _stage WHERE {' OR '.join(changed)} LIMIT 1")
-    except Exception as e:  # a value too large for the precision raises instead; column by column finds which
-        if len(columns) > 1:
-            for column in columns:
-                misfit(conn, [column])
-        row = [[reason_line([], e, "checking the data")]]
-    for (table, name, type), value in zip(columns, row[0] if row else []):
-        if value is not None:
-            raise Exception(f"column {name} holds a value that its type {type} in {table} does not hold ({value})")
+        [row] = sql(conn, f"SELECT {', '.join(changed)} FROM _stage")
+    except Exception as e:  # a value too large for the type raises instead; column by column finds which
+        if getattr(e, "sqlstate", None) != "22003":  # numeric_value_out_of_range
+            raise
+        return columns if len(columns) == 1 else [c for column in columns for c in misfits(conn, [column])]
+    return [c for c, changes in zip(columns, row) if changes]
 
 
 def check_delete_share(conn, t, rows_read, counts):
@@ -322,11 +347,14 @@ def diff(conn, t, staged, mirror, plan):
     the target"), over the columns of staging table and mirror together, every column list by name. Returns the
     counts."""
     had, staging = dict(mirror), dict(staged)
-    columns = staged + [(c, had[c]) for c in plan["gone"]]
+    # the mirror's column each reads: one that went under the change log's name for it, a retired one under its new
+    # name and never compared with its successor
+    read = {c: c for c in had if c not in plan["gone"]} | {plan["retired"].get(c, c): c for c in plan["gone"]}
+    columns = staged + [(plan["retired"].get(c, c), had[c]) for c in plan["gone"]]
     # a new column is null in the mirror once added, and one that went is null in the source, so a row differs only
     # if the other side has a value there
     s = ", ".join(f"s.{quote(c)}" if c in staging else f"NULL::{type}" for c, type in columns)
-    m = ", ".join(f"m.{quote(c)}" if c in had else f"NULL::{type}" for c, type in columns)
+    m = ", ".join(f"m.{quote(read[c])}" if c in read else f"NULL::{type}" for c, type in columns)
     key = [quote(k) for k in t["key"]]
     on = " AND ".join(f"s.{k} = m.{k}" for k in key)
     if not mirror or plan["key"].get("by") == "definition":  # under another key: every old row goes, every new comes
@@ -349,7 +377,7 @@ def publish(conn, t, staged, delivered, mirror, log, rows_read, counts, plan):
     the columns table, loaded_at, attempts and the run's row. Raises, so nothing is published, when the table's row
     no longer gives it this target name."""
     names = ", ".join(quote(c) for c, _ in staged)
-    logged = ", ".join(quote(c) for c in [*dict(staged), *plan["gone"]])
+    logged = ", ".join(quote(c) for c in [*dict(staged), *(plan["retired"].get(c, c) for c in plan["gone"])])
     new = not mirror
     if new:
         # in a transaction of its own under a lock on its name, because two first runs of a source race on
@@ -368,7 +396,7 @@ def publish(conn, t, staged, delivered, mirror, log, rows_read, counts, plan):
         key = f", PRIMARY KEY ({', '.join(quote(k) for k in t['key'])})" if t["key"] else ""
         sql(conn, f"CREATE TABLE {t['mirror']} (LIKE _stage{key})")
     else:
-        widen(conn, t["mirror"], staged, mirror)
+        widen(conn, t["mirror"], staged, [(n, type) for n, type in mirror if n not in plan["gone"]])
     if t["key"] and plan["key"].get("by") != "definition":
         on = " AND ".join(f"d.{quote(k)} = m.{quote(k)}" for k in t["key"])
         kept = only = ""
@@ -470,8 +498,15 @@ def carry_out(conn, t, plan):
     for name in plan["gone"]:
         [(note,)] = sql(conn, DROPS_WITH, [t["mirror"], name])
         changes[name] = {"note": f"{note} went with it" if note else None}
-        alter(conn, f"column {name} is gone from the source and would leave the mirror {t['name']}",
+        alter(conn, f"column {name} " + ("has another type in the source" if name in plan["retired"]
+                                         else "is gone from the source") + f" and would leave the mirror {t['name']}",
               f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
+    for table in (t["mirror"], t["log_table"]):  # decision 5, one ALTER per table, so it is rewritten at most once
+        if widened := [(name, type) for into, name, type in plan["widen"] if into == table]:
+            columns = ", ".join(f"column {name} to {type}" for name, type in widened)
+            say(widening=f"{table}, {columns}")  # the worker names it if it ends the run meanwhile (decision 15)
+            alter(conn, f"{table} would be widened for values of the source, {columns}",
+                  f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(n)} TYPE {type}" for n, type in widened))
     return changes
 
 
@@ -509,7 +544,8 @@ def alter(conn, why, statement):
         sql(conn, statement)
     except Exception as e:
         details = {k.decode(): v.decode() for k, v in getattr(e, "details", None) or []}
-        if details.get("PG_DIAG_SQLSTATE") != "2BP01":  # dependent_objects_still_exist
+        # dependent_objects_still_exist, and feature_not_supported for a type a view's column holds
+        if details.get("PG_DIAG_SQLSTATE") not in ("2BP01", "0A000") or "PG_DIAG_MESSAGE_DETAIL" not in details:
             raise
         raise Exception(f"{why}, but {details['PG_DIAG_MESSAGE_DETAIL'].replace(chr(10), '; ')}: change or drop "
                         "that, and the next run goes on") from None
@@ -522,7 +558,7 @@ def write_log(conn, t, staged, log, names):
     lock."""
     if log:
         widened = widen(conn, t["log_table"], staged, log)
-        widened = follow(conn, t, log) or widened
+        widened = follow(conn, t) or widened
         rows = f"SELECT _op, {names} FROM _diff"
     else:
         sql(conn, f"CREATE TABLE {t['log_table']} (_run bigint, _op text, _loaded_at timestamptz, LIKE {t['mirror']})")
@@ -556,21 +592,19 @@ def write_log(conn, t, staged, log, names):
     sql(conn, f"CREATE OR REPLACE VIEW {t['history']} AS" + "\n        UNION ALL".join(branches))
 
 
-def follow(conn, t, log):
-    """Decision 20: a numeric type that a person widened in the mirror is followed in the change log, so that what the
-    mirror holds fits it. The history view reads the column, so it goes first and the caller creates it again. Says
-    whether it altered one."""
-    def digits(type):  # before and after the point; unconstrained numeric holds all
-        m = re.fullmatch(r"numeric\((\d+),(\d+)\)", type)
-        return (int(m[1]) - int(m[2]), int(m[2])) if m else (float("inf"),) * 2 if type == "numeric" else None
+def follow(conn, t):
+    """Decision 20: a type that a person widened in the mirror is followed in the change log, so that what the mirror
+    holds fits it. The history view reads the column, so it goes first and the caller creates it again. Says whether
+    it altered one."""
     mirror = dict(sql(conn, COLUMNS, [t["mirror"]]))
-    wider = [(name, into) for name, type in log if (into := mirror.get(name)) and into != type
-             and digits(type) and digits(into) and all(a >= b for a, b in zip(digits(into), digits(type)))]
-    if wider:
+    widened = [(name, into) for name, type in sql(conn, COLUMNS, [t["log_table"]])
+               if (into := mirror.get(name)) and into != type and family(into) == family(type)
+               and wider(type, into) == into]
+    if widened:
         sql(conn, "SET LOCAL lock_timeout = '10s'")
         sql(conn, f"DROP VIEW IF EXISTS {t['history']}")
-        sql(conn, f"ALTER TABLE {t['log_table']} " + ", ".join(f"ALTER {quote(n)} TYPE {into}" for n, into in wider))
-    return bool(wider)
+        sql(conn, f"ALTER TABLE {t['log_table']} " + ", ".join(f"ALTER {quote(n)} TYPE {into}" for n, into in widened))
+    return bool(widened)
 
 
 def record_columns(conn, t, delivered, mirror, log, changes):
@@ -598,8 +632,10 @@ def record_columns(conn, t, delivered, mirror, log, changes):
     rows = [{**dict(zip(names, r)), "op": "D", "by": "hand"} for r in recorded if r[10]]
     rows += [{**r, "op": "D", "by": "hand"} for name, r in old.items() if name not in now]
     for name, (type, in_mirror) in now.items():
+        # one the source did not deliver keeps the type it last did, a retired one that of the name it had (story 34)
+        last = old.get(changes.get(name, {}).get("was", name), {}).get("source_type", type)
         row = dict(target_schema=t["schema"], target_table=t["table"], column=name, type=type,
-                   source_type=delivered.get(name, type), key=key.get(name), mirror=in_mirror, was=None, note=None)
+                   source_type=delivered.get(name, last), key=key.get(name), mirror=in_mirror, was=None, note=None)
         if (before := old.get(name)) is None:
             row.update(op="I", by="found" if not old else "source" if name not in found else "hand")
         else:
@@ -612,9 +648,12 @@ def record_columns(conn, t, delivered, mirror, log, changes):
         rows.append(row)
     if not rows:
         return
+    pinned = dict(t["options"].get("columns") or {})  # a type the definition gives (decision 19), stored as pairs
     for r in rows:
         if (r["target_schema"], r["target_table"]) == (t["schema"], t["table"]):
             r.update(changes.get(r["column"], {}))
+            if r["by"] == "source" and r["column"] in pinned:
+                r["by"] = "definition"
     if any(r["by"] == "source" for r in rows):  # another reader gave these columns, perhaps, not the source
         [(differs, note)] = sql(conn, """
             SELECT (l.program_version, l.driver_version) IS DISTINCT FROM (c.program_version, c.driver_version),
