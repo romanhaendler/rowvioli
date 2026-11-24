@@ -1,4 +1,5 @@
--- The bookkeeping schema, version 3 (docs/target.md "Target schema"). Run once by `init`, in one transaction.
+-- The bookkeeping schema, version 3 (docs/target.md "Target schema"). Run once by `init` on a fresh target, followed
+-- by the steps of target.MIGRATIONS, in one transaction.
 CREATE SCHEMA _rowvioli;
 
 CREATE TABLE _rowvioli.sources (

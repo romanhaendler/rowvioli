@@ -42,6 +42,13 @@ def test_a_foreign_connector_gets_a_list_named_columns_as_written(erp):
     assert rows(erp.target, "select * from raw_lab.numbers") == [("ab",), ("cd",)]
 
 
+def test_runs_record_the_version_a_connector_says_its_driver_has(erp):
+    lab(erp)
+    r = erp.run("run", "lab", env={"ROWVIOLI_TEST_DRIVER_VERSION": "1.2.3"})
+    assert r.returncode == 0, r.stderr
+    assert erp.target("select driver_version from _rowvioli.runs") == [("1.2.3",)]
+
+
 @pytest.mark.parametrize("fail", ["at_once", "deep"])
 def test_a_connector_failing_with_connection_values_in_its_message_leaks_none_of_them(erp, fail):
     out = [lab(erp, f'fail = "{fail}"'), erp.run("run", "lab")]

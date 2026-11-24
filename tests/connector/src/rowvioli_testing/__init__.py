@@ -8,6 +8,8 @@ from urllib.parse import unquote
 
 import pyarrow as pa
 
+driver_version = os.environ.get("ROWVIOLI_TEST_DRIVER_VERSION")  # what the contract's optional `driver_version` reports
+
 
 def read(connection, table, options):
     if options.get("print"):

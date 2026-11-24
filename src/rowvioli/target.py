@@ -5,7 +5,9 @@ from importlib.resources import files
 
 import adbc_driver_postgresql.dbapi as adbc
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+# schema.sql is version 3; the step at index i brings version 3 + i to 3 + i + 1 (decision 24)
+MIGRATIONS = ["sql/migrate_3_4.sql"]
 
 # docs/target.md "Failures": a dead client or network is noticed by Postgres within seconds to a minute. The URL's
 # keepalive is libpq's, so the worker notices a dead server; SESSION is the server's, so Postgres notices a dead worker
@@ -61,8 +63,11 @@ def connect(init=False, versioned=True):
     version = None
     if sql(conn, "SELECT to_regclass('_rowvioli.meta') IS NOT NULL")[0][0]:
         version = sql(conn, "SELECT schema_version FROM _rowvioli.meta")[0][0]
-    if version is None and init:
-        transaction(conn, files(__package__).joinpath("sql/schema.sql").read_text())
+    if init and (version is None or version < SCHEMA_VERSION):
+        script = "" if version else files(__package__).joinpath("sql/schema.sql").read_text()
+        for step in MIGRATIONS[(version or 3) - 3:]:
+            script += files(__package__).joinpath(step).read_text()
+        transaction(conn, script)
         version = SCHEMA_VERSION
     if version is None:
         raise SystemExit(NO_SCHEMA)

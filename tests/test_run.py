@@ -97,6 +97,12 @@ def test_runs_has_one_row_per_run_with_worker_times_status_and_counts(erp):
     assert erp.target("select status, attempts from _rowvioli.status") == [("ok", 0)]
 
 
+def test_runs_record_the_version_of_the_program_and_none_for_a_driver_that_says_nothing(erp):
+    ok(erp)
+    version = erp.run("--version").stdout.split()[-1]
+    assert erp.target("select program_version, driver_version from _rowvioli.runs") == [(version, None)]
+
+
 NOTES = '"public.notes" = {}\n'
 
 
