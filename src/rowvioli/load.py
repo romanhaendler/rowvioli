@@ -163,9 +163,10 @@ def check(conn, t, staged, mirror, log_columns):
             if not (t["key"] and t["log"] and log_columns):
                 raise Exception(f"{changed}; without a change log its values are nowhere else, {drop}")
             if family(logged.get(name, types[name])) != family(type):  # the mirror's type changed by hand (cases G4)
-                raise Exception(f"column {name} of the mirror was changed by hand to {type}, a type of another family "
-                                f"than {types[name]}, which the source delivers; drop it from the mirror and the next "
-                                f"run brings it again: ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
+                raise Exception(f"column {name} of the mirror has the type {type}, of another family than the "
+                                f"{types[name]} the source delivers, and a run does not change it back; drop it from "
+                                f"the mirror and the next run brings it again: "
+                                f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
             plan["gone"].append(name)
     for name, type in staged:
         if name not in logged or name in had and name not in plan["gone"]:

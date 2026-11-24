@@ -171,8 +171,8 @@ def test_G4_a_type_changed_by_hand_to_another_family_stops_and_says_the_way_out_
     erp.target("alter table raw_erp.amounts alter a type text")
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert failed(erp) == (  # x is the harness's password, which a reason hides
-        "column a of the mirror was changed by hand to te***t, a type of another family than integer, which the source "
-        "delivers; drop it from the mirror and the ne***t run brings it again: "
+        "column a of the mirror has the type te***t, of another family than the integer the source delivers, and a run "
+        "does not change it back; drop it from the mirror and the ne***t run brings it again: "
         'ALTER TABLE "raw_erp"."amounts" DROP COLUMN "a"')
     erp.target('ALTER TABLE "raw_erp"."amounts" DROP COLUMN "a"')
     again(erp)

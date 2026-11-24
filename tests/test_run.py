@@ -224,9 +224,14 @@ def test_a_mirror_with_a_json_column_from_before_fails_naming_the_column_and_sta
     ok(erp)
     erp.target("alter table raw_erp.docs alter j type json")  # as an earlier build left it
     assert run(erp, "erp")[0] == 1
-    assert erp.target("select reason from _rowvioli.status") == [
-        ("column j has changed its type from json to jsonb",)]
+    assert erp.target("select reason from _rowvioli.status") == [  # x is the harness's password, which a reason hides
+        ("column j of the mirror has the type json, of another family than the jsonb the source delivers, and a run "
+         'does not change it back; drop it from the mirror and the ne***t run brings it again: ALTER TABLE "raw_erp".'
+         '"docs" DROP COLUMN "j"',)]
     assert erp.target("select j::text from raw_erp.docs") == [('{"a": 1}',)]
+    erp.target('ALTER TABLE "raw_erp"."docs" DROP COLUMN "j"')  # the way out
+    ok(erp, "erp")
+    assert erp.target("select pg_typeof(j)::text, j::text from raw_erp.docs") == [("jsonb", '{"a": 1}')]
 
 
 def test_run_exits_1_when_a_table_fails_and_names_every_table_it_touched(erp):
