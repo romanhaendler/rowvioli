@@ -323,8 +323,8 @@ def test_A12_a_column_back_in_its_family_with_a_value_the_logs_type_would_change
 
 
 @pytest.mark.parametrize("earlier", [True, False])
-def test_a_retired_name_the_source_takes_stops_and_says_what_to_rename(erp, earlier):  # story 10
-    ok(erp)
+def test_a_retired_name_the_source_takes_stops_once_and_the_next_run_retires_under_its_own_number(erp, earlier):
+    ok(erp)  # story 10; H2 of the shakedown before the merge: renaming the change log's column cut the old values off
     erp.source("alter table customers drop column city")
     again(erp)
     [(run,)] = erp.target("select max(run) + 1 + %s::int from _rowvioli.runs", [earlier])  # the run that retires
@@ -334,11 +334,15 @@ def test_a_retired_name_the_source_takes_stops_and_says_what_to_rename(erp, earl
         again(erp)
     erp.source("alter table customers add column city integer")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    reason = failed(erp)
+    reason = failed(erp).replace("***", "x")  # the source's password is x, and the reason hides it
     assert erp.target("select max(run) from _rowvioli.runs") == [(run,)]
-    assert reason.startswith(f"column city of the change log is to keep its old values under city__{run}, a name "
-                             "that is taken: rename that column of the change log"), reason
+    assert reason ==(f"column city of the change log is to keep its old values under city__{run}, a name that is "
+                      "taken: the next run keeps them under its own number, nothing is to be done"), reason
     assert erp.target("select count(*) from raw_erp.customers__log where city = 'Bonn'") == [(1,)]
+    again(erp)
+    assert erp.target(f"select count(*) from raw_erp.customers__log where city__{run + 1} = 'Bonn'") == [(1,)]
+    assert erp.target(f"select count(*) from raw_erp.customers where city__{run} = 'new'") == [(3,)]
+    assert erp.target(f"select was from _rowvioli.columns where \"column\" = 'city__{run + 1}'") == [("city",)]
     log_replays(erp)
 
 
