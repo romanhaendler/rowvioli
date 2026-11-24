@@ -223,6 +223,8 @@ UPDATE _rowvioli.runs SET status = 'ok', finished_at = now(), inserted = ..., up
 COMMIT;
 ```
 
+Where the plan holds more than added columns ([Columns](loading.md#columns)), publishing begins differently: it locks mirror, change log and history view in one statement with `LOCK TABLE ... IN ACCESS EXCLUSIVE MODE NOWAIT`, tried again for up to ten seconds, so that a run never waits for a lock while it holds another and cannot deadlock with a consumer who reads them in another order. Then it drops the history view, carries out the plan (renames, retired columns, the key, columns that go, widened types), applies the diff, creates the history view again, writes the columns table, notifies on `rowvioli_schema` and ends with the check of the target name, as above.
+
 ## How Postgres counts
 
 There is no counter that is incremented and decremented. What is counted are the locks that are actually held at this moment.
@@ -269,6 +271,7 @@ The prototype claimed this way with 6 workers of 4 slots, two sources with `para
 | A table fails again and again | the pause doubles up to `max_age`. The status shows the reason and the number of attempts. | |
 | A connector is not installed on a worker | the run fails with a reason that names the worker | right after |
 | The target fails over to another node | connections drop, running loads end without publishing, the retry catches up | with the connection |
+| An object of a consumer depends on a column, type or key that would change | the run fails and names the object, nothing is published | right after; the next run goes on once the object is changed |
 | Target Postgres is unreachable | workers wait and retry. Nothing is loaded. | |
 
 In no case does anything half-done become visible: a COMMIT needs a command from the worker, and the worker is gone by then.
