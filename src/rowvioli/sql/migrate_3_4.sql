@@ -28,7 +28,8 @@ CREATE VIEW _rowvioli.columns__history AS
 SELECT _valid_from, _valid_to, _valid_to_run, _valid_to_by, _valid_to_note, _run, _op, target_schema, target_table,
        "column", type, source_type, "key", mirror, was, "by", note, id
   FROM (SELECT _run, _op, _loaded_at AS _valid_from, lead(_loaded_at) OVER w AS _valid_to,
-               lead(_run) OVER w AS _valid_to_run, lead("by") OVER w AS _valid_to_by, lead(note) OVER w AS _valid_to_note,
+               lead(_run) OVER w AS _valid_to_run, lead("by") OVER w AS _valid_to_by,
+               lead(note) OVER w AS _valid_to_note,
                target_schema, target_table, "column", type, source_type, "key", mirror, was, "by", note, id
           FROM _rowvioli.columns__log
         WINDOW w AS (PARTITION BY target_schema, target_table, "column" ORDER BY _loaded_at)) h

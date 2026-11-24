@@ -41,8 +41,8 @@ PRIMARY_KEY = """SELECT a.attname FROM pg_index i, unnest(i.indkey) WITH ORDINAL
 
 def claim(conn, worker, source, table):
     """In one transaction under the counting lock (docs/target.md "How Postgres counts"): takes the table lock of a
-    claimable table in scope never loaded, else of the most overdue, counts the attempt and opens the run's row with the hash of the
-    definition. Returns the run's facts, as the definition says at this moment, or None."""
+    claimable table in scope never loaded, else of the most overdue, counts the attempt and opens the run's row with
+    the hash of the definition. Returns the run's facts, as the definition says at this moment, or None."""
     sql(conn, "BEGIN")
     try:
         sql(conn, "SELECT pg_advisory_xact_lock(0, 0)")
@@ -211,8 +211,8 @@ def check(conn, t, staged, mirror, log_columns):
     # from the source, and the source's comes anew (a change log's alone left the mirror's, unknown to it, P18)
     if long := {n: new for n, new in plan["retired"].items() if len(new.encode()) > 63}:
         raise Exception(f"the change log is to keep the old values of {' and '.join(long)} under "
-                        f"{' and '.join(long.values())}, names longer than 63 bytes, the most Postgres keeps of a name: "
-                        "give each the same shorter name in mirror, change log and history view, and the next run lets "
+                        f"{' and '.join(long.values())}, names longer than 63 bytes, the most Postgres keeps of a "
+                        "name: give each the same shorter name in mirror, change log and history view, and the next run lets "
                         "it go as a column gone from the source, in one step: " + "; ".join(
                             f"ALTER {kind} {table} RENAME COLUMN {quote(n)} TO <a shorter name>" for n in long
                             for kind, table in ([("TABLE", t["mirror"])] if n in had else [])
@@ -308,7 +308,8 @@ def proven(conn, t, mirror, staged, log_columns, renamed):
         *(", ".join(f"{a}.{quote(n)}" for n in other) for a in "ms")) if other else "")
     numbers = ", ".join(f"count(*) FILTER (WHERE m.{quote(old)} IS NOT DISTINCT FROM s.{quote(new)}), "
                         f"count(DISTINCT m.{quote(old)})" for old, new in pairs)
-    [(rows, *found)] = sql(conn, f"SELECT count(*), {numbers} FROM ONLY {t['mirror']} m JOIN _stage s ON {on} {unchanged}")
+    [(rows, *found)] = sql(conn, f"SELECT count(*), {numbers} FROM ONLY {t['mirror']} m JOIN _stage s ON {on} "
+                                 f"{unchanged}")
     proofs = [(old, new, equal, values) for (old, new), equal, values in zip(pairs, found[::2], found[1::2])
               if rows >= PROOF_ROWS and equal == rows and values >= PROOF_VALUES]
     return {new: (old, f"proven by the data: {rows} rows unchanged otherwise, {equal} of them equal, {values} "

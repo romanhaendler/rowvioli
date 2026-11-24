@@ -103,3 +103,33 @@ all the same. Each starts from its red as a test at the existing seam.
 - [ ] The whole suite passes.
 
 ## Comments
+
+Implementation on `sc-12` (2026-11-24), one commit per item; what is not done or not tested, each with why:
+
+- 3: told by the SQLSTATE `P0001`/`P0004` and by the driver's context (`PL/pgSQL function ... at RAISE|ASSERT`).
+  A message raised in PL/Python, PL/Perl or PL/Tcl is not told from Postgres's own and stays as it is: those
+  languages are not in the test image, and their context was not seen. A source's error that arrives while its
+  rows are read carries no SQLSTATE through the driver, so its reason has none; its context comes from the
+  driver's text, since the driver gives no fields there.
+- 5: the run carries on after a refused change, inside a savepoint, to collect every object in the way, and
+  stops at the end of the plan. A widening refused only because the history view's drop was refused before
+  it is not named twice. Not tried: a foreign key and a view on the key in the same run as a view on a column.
+- 7: no red. The way out `docs/loading.md` gave (drop the column from the mirror once a run has emptied it)
+  works and keeps the history; the test now guards it, and the page says it where a person looks.
+- 8: "never loaded" is a table without `loaded_at`, also one whose first runs failed; the test covers new
+  tables. The order among never-loaded tables is none, as before.
+- 9: tested with `edoburu/pgbouncer:v1.26.1-p0` (30 MB), pulled for the run and removed after: an idle pooler
+  in transaction mode is refused before anything is claimed, one in session mode loads. The busy cases were
+  measured by hand (`docs/measurements.md` 14: 400 checks with 0 to 16 neighbours, none missed). Without the
+  image the two tests are skipped, so the suite pulls nothing. Only PgBouncer, one pool size; a pooler that
+  hands its server connections round-robin was not tried. The run processes no longer make the check.
+- 10: the suite's target cannot restart, so the test ends every connection of the test's database with
+  `pg_terminate_backend`, which sends the same `FATAL`. `work` still writes Postgres's words in its `⚠ the
+  target is unreachable` line, which is a line of its own and not the last.
+- 12: found on the way: cutting first would leave a fragment of a password with a line break; such a value is
+  removed before the cut, every other one after. An error a connector raises while its rows are read is now
+  given as raised instead of in the driver's wrapper, and the driver's `Execution error [PGRES_FATAL_ERROR]:`
+  before a source's message is cut too.
+- 14: the columns are `_valid_to_run`, `_valid_to_by`, `_valid_to_note`.
+- 2: a history view built before this change reads a child table of the change log until a run builds it
+  anew. `LOCK TABLE` and the DDL on a mirror still reach its children, as Postgres requires.
