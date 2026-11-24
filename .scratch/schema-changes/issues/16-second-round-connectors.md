@@ -1,4 +1,4 @@
-# 16: What the second round found in the connectors
+# 16: What the second round found in the connectors and in `init`
 
 **Blocked by:** 14
 
@@ -41,9 +41,28 @@ said under Comments.
    loads as `jsonb` if that is what the JSON reader of the same connector does with nested values (one rule for
    nested values of a file). (`l3.py`, `k_struct.parquet`)
 
+### `init` (host U1, scripts under `shake/u1b/`; `src/rowvioli/target.py`)
+
+6. **Two `init` at once** (init containers on several replicas): the loser exits 1 with Postgres's bare
+   `column "program_version" of relation "runs" already exists`, or on an empty target
+   `duplicate key value violates unique constraint "pg_namespace_nspname_index"` (the version is read outside the
+   step's transaction and not again). The result was right 5 of 5 times; the loser should wait for the winner and
+   end as an `init` on a ready target does (exit 0). The smallest that is right: take a lock first (an advisory
+   lock in the transaction, or the version read again under the lock the step takes).
+7. **A superuser `init` leaves the new objects with another owner than the older ones** (`columns`,
+   `columns__log`, `columns__history` owned by postgres, the rest by the owner role): a later step run by the
+   owner would fail on them. The new objects get the owner of `_rowvioli.runs`, in the step.
+8. **`init` as a role that does not own the bookkeeping** says only `must be owner of table runs`: the reason
+   names the owner role and that `init` runs as it or as a superuser (`docs/operation.md` says it; the message
+   does not). `init` interrupted with Ctrl+C prints Postgres's bare `canceling statement due to user request`:
+   say that nothing was changed.
+9. `docs/operation.md`: a forgotten 0.4.1 worker writes "a dozen" lines a second; U1 saw about 4 this time and
+   12 before: say "several"; and an old worker in the middle of a run finishes and publishes it after `init`
+   (seen clean): say so. No way back to 0.4.1 after `init` is documented: say it (a dump before, restore).
+
 ## Acceptance criteria
 
-- [ ] 1 to 5: a test each, seen red first, at the existing seam (`tests/odbc/run.sh` for ODBC); a sentence under
+- [ ] 1 to 9: a test each, seen red first, at the existing seam (`tests/odbc/run.sh` for ODBC); a sentence under
       Comments for any that cannot be tested there.
 - [ ] `docs/connectors.md` and `CHANGELOG.md` say what changed; no new entry in `docs/open-points.md` (an
       inherent limit of a driver goes to `docs/connectors.md` and decision 55).
