@@ -226,3 +226,50 @@ def test_A12_a_column_back_in_a_wider_type_of_its_family_keeps_the_logs_type_whi
         ("integer", "bigint", True)]
     assert erp.target("select amount from raw_erp.prices order by id") == [(20,), (None,)]
     log_replays(erp, "raw_erp.prices")
+
+
+def test_A19_a_new_source_column_named_like_a_retired_one_stops_until_a_person_renames_the_log_column(erp):
+    ok(erp)
+    erp.source("alter table customers drop column city")
+    again(erp)
+    erp.source("alter table customers add column city integer")
+    again(erp)
+    [(run,)] = erp.target("select max(run) from _rowvioli.runs")
+    erp.source(f"alter table customers add column city__{run} text")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    assert reason.startswith(f"column city__{run} of the source has the name under which the change log keeps the "
+                             "old values of city: rename that column of the change log"), reason
+    erp.target(f"alter table raw_erp.customers__log rename column city__{run} to city_text")  # the way out
+    erp.target("drop view raw_erp.customers__history")
+    again(erp)
+    assert columns(erp) == ["customer_no", "name", "city", f"city__{run}"]
+    log_replays(erp)
+
+
+def test_a_retired_name_longer_than_postgres_takes_stops_and_says_what_to_rename(erp):  # story 10
+    long = "y" * 62  # not x: the source's password is x, and the reason hides it
+    erp.source(f"alter table customers add column {long} text")
+    ok(erp)
+    erp.source(f"alter table customers drop column {long}")
+    again(erp)
+    erp.source(f"alter table customers add column {long} integer")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    assert reason.startswith(f"column {long} of the change log is to keep its old values under {long}__"), reason
+    assert "a name that is longer than 63 bytes: rename that column of the change log" in reason
+    erp.target(f"alter table raw_erp.customers__log rename column {long} to y_text")
+    erp.target("drop view raw_erp.customers__history")
+    again(erp)
+    log_replays(erp)
+
+
+def test_A23_a_column_that_finds_postgres_1600_used_up_by_dropped_ones_stops_and_names_the_way_out(erp):
+    ok(erp)
+    erp.target("do $$ begin for i in 1..1597 loop alter table raw_erp.customers add column c int; "
+               "alter table raw_erp.customers drop column c; end loop; end $$")
+    erp.source("alter table customers add column phone text")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == ('column phone cannot be added to "raw_erp"."customers": Postgres counts the columns once '
+                           "dropped from a table towards its 1600; rewrite the table to free them, by dump and "
+                           "restore")

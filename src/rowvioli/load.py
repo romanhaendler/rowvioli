@@ -113,10 +113,21 @@ def check(conn, t, staged, mirror, log_columns):
         elif types[name] != type:
             raise Exception(f"column {name} has changed its type from {type} to {types[name]}")
     had = dict(mirror)
+    way = ("rename that column of the change log and drop its history view, which the next run creates again: "
+           f"ALTER TABLE {t['log_table']} RENAME COLUMN {{}} TO <another name>; DROP VIEW {t['history']}")
     for name, type in staged:
-        if name in had or name not in logged or family(logged[name]) == family(type):
+        if name in had or name not in logged:
             continue
-        plan["retired"][name] = f"{name}__{t['run']}"
+        if (retired := re.fullmatch(r"(.+)__\d+", name)) and retired[1] in logged:
+            raise Exception(f"column {name} of the source has the name under which the change log keeps the old "
+                            f"values of {retired[1]}: " + way.format(quote(name)))
+        if family(logged[name]) == family(type):
+            continue
+        new = f"{name}__{t['run']}"
+        if new in logged or len(new.encode()) > 63:
+            raise Exception(f"column {name} of the change log is to keep its old values under {new}, a name that is "
+                            + ("taken" if new in logged else "longer than 63 bytes") + ": " + way.format(quote(name)))
+        plan["retired"][name] = new
     key = t["key"] or []
     drop = (f"drop it with its history view (DROP TABLE {t['log_table']} CASCADE), or rename both"
             + (" with the mirror" if mirror else ""))
@@ -555,7 +566,14 @@ def widen(conn, table, staged, existing):
     new = [(name, type) for name, type in staged if name not in have]
     for name, type in new:
         sql(conn, "SET LOCAL lock_timeout = '10s'")
-        sql(conn, f"ALTER TABLE {table} ADD COLUMN {quote(name)} {type}")
+        try:
+            sql(conn, f"ALTER TABLE {table} ADD COLUMN {quote(name)} {type}")
+        except Exception as e:
+            if getattr(e, "sqlstate", None) != "54011":  # too_many_columns
+                raise
+            raise Exception(f"column {name} cannot be added to {table}: Postgres counts the columns once dropped "
+                            "from a table towards its 1600; rewrite the table to free them, by dump and restore") \
+                from None
     return bool(new)
 
 
