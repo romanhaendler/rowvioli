@@ -95,13 +95,15 @@ def load(conn, t):
     # check() stops it rather than empty a person's column. One the definition says is renamed to a column the data
     # have is renamed. REST delivers every column under `columns`, even one no row has: the definition is its catalog,
     # and a column taken out of it goes as one a database drops
-    stated = {old for new, old in (t["options"].get("renamed") or {}).items()
-              if new in dict(staged) and new not in dict(mirror)}
+    had, logged = dict(mirror), dict(log_columns)
+    # decision 54: a rename the definition states acts once its old column is gone and its new one has come
+    renamed = {new: old for new, old in (t["options"].get("renamed") or {}).items() if old in had
+               and old not in dict(staged) and new in dict(staged) and new not in had and (not logged or old in logged)}
     if t["catalog"] == "data" and (missing := [(n, type) for n, type in mirror if n not in dict(staged)
-                                            and n not in stated and n in dict(log_columns)]):
+                                            and n not in renamed.values() and n in logged]):
         sql(conn, "ALTER TABLE _stage " + ", ".join(f"ADD {quote(n)} {type}" for n, type in missing))
         staged = sql(conn, COLUMNS, ["pg_temp._stage"])
-    plan = check(conn, t, staged, mirror, log_columns)
+    plan = check(conn, t, staged, mirror, log_columns, renamed)
     staged, plan["widen"], plan["followed"] = fit(conn, t, staged, mirror, log_columns, plan["renamed"])
     t["step"] = "comparing with the mirror"
     counts = diff(conn, t, staged, mirror, plan) if t["key"] else None
@@ -111,14 +113,15 @@ def load(conn, t):
     return publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, plan)
 
 
-def check(conn, t, staged, mirror, log_columns):
+def check(conn, t, staged, mirror, log_columns, renamed):
     """Step 4 (docs/loading.md "Checks before publishing") and the plan (decision 54): what the run does to the columns
     besides adding the new ones, which publish adds. Every stop a rule makes is here, before anything is written. The
     plan: `gone`, the mirror's columns that leave it and stay in the change log, `retired`, the change log's columns
     that keep their values under another name as one of another family comes, old name to new, and `key` when the
     mirror's primary key is not the definition's: the primary key it `was`, whether the change is `by` the definition
     or the primary key was changed by hand and is put back, and whether a change `log` exists. `renamed`, new name to
-    old, the columns that keep their values and history under another name, and `proven`, the note of each one the
+    old, the columns that keep their values and history under another name, the stated ones given and the proven ones
+    added, and `proven`, the note of each one the
     data proved. `unpinned`, the retired ones whose pin under `columns` was taken out. `moved`, the names the retired
     and renamed columns have after the run, old name to new."""
     types, logged, had = dict(staged), dict(log_columns), dict(mirror)
@@ -133,10 +136,7 @@ def check(conn, t, staged, mirror, log_columns):
                                 f"key cannot have it{freed}")
     way =("rename that column of the change log and drop its history view, which the next run creates again: "
            f"ALTER TABLE {t['log_table']} RENAME COLUMN {{}} TO <another name>; DROP VIEW {t['history']}")
-    # decision 54: a rename the definition states acts once its old column is gone and its new one has come
-    renamed = {new: old for new, old in (t["options"].get("renamed") or {}).items() if old in had
-               and old not in types and new in types and new not in had and (not log_columns or old in logged)}
-    for new, old in renamed.items():
+    for new, old in renamed.items():  # the renames the definition states that act in this run (load)
         stated = f"column {old} is renamed {new} in the table's definition"
         if family(had[old]) != family(types[new]):
             raise Exception(f"{stated}, but {had[old]} and {types[new]} are types of two families, so their values "
