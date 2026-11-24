@@ -13,6 +13,7 @@ import re
 import signal
 import sys
 import threading
+import time
 from urllib.parse import unquote
 
 import pyarrow as pa
@@ -82,22 +83,32 @@ def load(conn, t):
     mirror = sql(conn, COLUMNS, [t["mirror"]])  # empty before the first run
     log_columns = sql(conn, COLUMNS, [t["log_table"]])
     staged = fit(conn, t, staged, mirror, log_columns)
-    check(conn, t, staged, mirror, log_columns)
+    plan = check(conn, t, staged, mirror, log_columns)
     t["step"] = "comparing with the mirror"
-    counts = diff(conn, t, staged, mirror) if t["key"] else None
+    counts = diff(conn, t, staged, mirror, plan) if t["key"] else None
     if mirror:
         check_delete_share(conn, t, rows_read, counts)
     t["step"] = "publishing"
-    return publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts)
+    return publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, plan)
 
 
 def check(conn, t, staged, mirror, log_columns):
-    """Step 4 (docs/loading.md "Checks before publishing"). A new column passes, publish adds it (decision 17)."""
-    types = dict(staged)
+    """Step 4 (docs/loading.md "Checks before publishing") and the plan (decision 12): what the run does to the columns
+    besides adding the new ones, which publish adds (decision 2). Every stop a rule makes is here, before anything is
+    written. The plan: `gone`, the mirror's columns that leave it and stay in the change log (decision 3)."""
+    types, logged = dict(staged), dict(log_columns)
+    plan = {"gone": []}
     for name, type in mirror:
         if name not in types:
-            raise Exception(f"column {name} is missing in the source")
-        if types[name] != type:
+            if not (t["key"] and t["log"] and log_columns):
+                raise Exception(f"column {name} is missing in the source; without a change log its values are nowhere "
+                                f"else, so a person drops it: ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
+            if name not in logged:
+                raise Exception(f"column {name} of the mirror is not in the change log, so it is not known to be from "
+                                "the source; drop it from the mirror, or add it to the change log too and the next run "
+                                "takes it out of the mirror")
+            plan["gone"].append(name)
+        elif types[name] != type:
             raise Exception(f"column {name} has changed its type from {type} to {types[name]}")
     key = t["key"] or []
     drop = (f"drop it with its history view (DROP TABLE {t['log_table']} CASCADE), or rename both"
@@ -131,6 +142,7 @@ def check(conn, t, staged, mirror, log_columns):
             raise Exception(f"a key column of ({names}) is null")
         if sql(conn, f"SELECT 1 FROM _stage GROUP BY {names} HAVING count(*) > 1 LIMIT 1"):
             raise Exception(f"a key combination of ({names}) occurs twice")
+    return plan
 
 
 def fit(conn, t, staged, mirror, log_columns):
@@ -253,19 +265,22 @@ def stream(batches):
     return pa.RecordBatchReader.from_batches(first.schema, itertools.chain([first], batches))
 
 
-def diff(conn, t, staged, mirror):
-    """Step 5: the rows that differ into the TEMP table _diff (docs/target.md "Comparing in the target"), every column
-    list by name. Returns the counts."""
-    had = dict(mirror)
-    s = ", ".join("s." + quote(c) for c, _ in staged)
-    # a new column is null in the mirror once added, so a row differs only if the source has a value there
-    m = ", ".join(f"m.{quote(c)}" if c in had else f"NULL::{type}" for c, type in staged)
+def diff(conn, t, staged, mirror, plan):
+    """Step 5, by the plan (decision 13): the rows that differ into the TEMP table _diff (docs/target.md "Comparing in
+    the target"), over the columns of staging table and mirror together, every column list by name. Returns the
+    counts."""
+    had, delivered = dict(mirror), dict(staged)
+    columns = staged + [(c, had[c]) for c in plan["gone"]]
+    # a new column is null in the mirror once added, and one that went is null in the source, so a row differs only
+    # if the other side has a value there
+    s = ", ".join(f"s.{quote(c)}" if c in delivered else f"NULL::{type}" for c, type in columns)
+    m = ", ".join(f"m.{quote(c)}" if c in had else f"NULL::{type}" for c, type in columns)
     key = [quote(k) for k in t["key"]]
     on = " AND ".join(f"s.{k} = m.{k}" for k in key)
     if not mirror:
         sql(conn, f"CREATE TEMP TABLE _diff AS SELECT 'I'::text AS _op, {s} FROM _stage s")
     else:
-        sql(conn, f"""CREATE TEMP TABLE _diff (_op, {', '.join(quote(c) for c, _ in staged)}) AS
+        sql(conn, f"""CREATE TEMP TABLE _diff (_op, {', '.join(quote(c) for c, _ in columns)}) AS
             SELECT 'D'::text AS _op, {m} FROM {t['mirror']} m WHERE NOT EXISTS (SELECT FROM _stage s WHERE {on})
             UNION ALL
             SELECT CASE WHEN m.{key[0]} IS NULL THEN 'I' ELSE 'U' END, {s}
@@ -275,10 +290,12 @@ def diff(conn, t, staged, mirror):
     return {"inserted": counts.get("I", 0), "updated": counts.get("U", 0), "deleted": counts.get("D", 0)}
 
 
-def publish(conn, t, staged, delivered, mirror, log, rows_read, counts):
-    """Step 6, one transaction: new columns, mirror, change log and its view, loaded_at, attempts and the run's
-    row. Raises, so nothing is published, when the table's row no longer gives it this target name."""
+def publish(conn, t, staged, delivered, mirror, log, rows_read, counts, plan):
+    """Step 6, one transaction in the order of decision 14: the plan, new columns, mirror, change log and its view,
+    the columns table, loaded_at, attempts and the run's row. Raises, so nothing is published, when the table's row
+    no longer gives it this target name."""
     names = ", ".join(quote(c) for c, _ in staged)
+    logged = ", ".join(quote(c) for c in [*dict(staged), *plan["gone"]])
     new = not mirror
     if new:
         # in a transaction of its own under a lock on its name, because two first runs of a source race on
@@ -287,7 +304,12 @@ def publish(conn, t, staged, delivered, mirror, log, rows_read, counts):
         if not sql(conn, "SELECT 1 FROM pg_namespace WHERE nspname = $1", [t["schema"]]):  # else no CREATE right needed
             sql(conn, f"CREATE SCHEMA IF NOT EXISTS {quote(t['schema'])}")
         sql(conn, "SELECT pg_advisory_unlock(hashtext($1))", [t["schema"]])
-    sql(conn, "BEGIN")
+    changes = {}
+    if any(plan.values()):  # anything but added columns
+        lock(conn, t)
+        changes = carry_out(conn, t, plan)
+    else:
+        sql(conn, "BEGIN")
     if new:  # created inside publishing, so a mirror never exists empty
         key = f", PRIMARY KEY ({', '.join(quote(k) for k in t['key'])})" if t["key"] else ""
         sql(conn, f"CREATE TABLE {t['mirror']} (LIKE _stage{key})")
@@ -295,15 +317,20 @@ def publish(conn, t, staged, delivered, mirror, log, rows_read, counts):
         widen(conn, t["mirror"], staged, mirror)
     if t["key"]:
         on = " AND ".join(f"d.{quote(k)} = m.{quote(k)}" for k in t["key"])
-        sql(conn, f"DELETE FROM {t['mirror']} m USING _diff d WHERE d._op IN ('D', 'U') AND {on}")
-        sql(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _diff WHERE _op IN ('I', 'U')")
+        kept = only = ""
+        if plan["gone"]:  # a row that differs only in a column that went keeps its place in the mirror (story 5)
+            ds, ms = (", ".join(f"{a}.{quote(c)}" for c, _ in staged) for a in "dm")
+            kept = f" AND (d._op = 'D' OR ROW({ds}) IS DISTINCT FROM ROW({ms}))"
+            only = f" AND NOT EXISTS (SELECT FROM {t['mirror']} m WHERE {on})"
+        sql(conn, f"DELETE FROM {t['mirror']} m USING _diff d WHERE d._op IN ('D', 'U') AND {on}{kept}")
+        sql(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _diff d WHERE _op IN ('I', 'U'){only}")
         if t["log"]:
-            write_log(conn, t, staged, log, names)
+            write_log(conn, t, staged, log, logged)
     else:  # without a key: replaced as a whole, no change log
         deleted = rowcount(conn, f"DELETE FROM {t['mirror']}")
         counts = {"inserted": rowcount(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _stage"),
                   "updated": 0, "deleted": deleted}
-    record_columns(conn, t, delivered, mirror, log)
+    record_columns(conn, t, delivered, mirror, log, changes)
     # the table lock guards the table, not its name, which an apply may have given to another table meanwhile
     # (decision 53). Last, so the row lock that holds off an apply until COMMIT is taken after every wait on a mirror
     if not sql(conn, """UPDATE _rowvioli.tables SET loaded_at = now(), attempts = 0
@@ -319,6 +346,64 @@ def publish(conn, t, staged, delivered, mirror, log, rows_read, counts):
         [t["run"], rows_read, counts["inserted"], counts["updated"], counts["deleted"]])
     sql(conn, "COMMIT")
     return {"status": "ok", **counts}
+
+
+def lock(conn, t):
+    """Decision 14: opens the publishing transaction holding mirror, change log and history view, taken in one
+    statement that does not wait and tried again for up to ten seconds. A run that waited for one while holding
+    another could deadlock with a consumer who reads them in another order (story 43)."""
+    objects = ", ".join(n for n in (t["mirror"], t["log_table"], t["history"])
+                        if sql(conn, "SELECT to_regclass($1) IS NOT NULL", [n])[0][0])
+    end = time.monotonic() + 10
+    while True:
+        sql(conn, "BEGIN")
+        try:
+            sql(conn, f"LOCK TABLE {objects} IN ACCESS EXCLUSIVE MODE NOWAIT")
+            return
+        except Exception as e:
+            sql(conn, "ROLLBACK")
+            if getattr(e, "sqlstate", None) != "55P03":  # lock_not_available
+                raise
+            if time.monotonic() > end:
+                raise Exception(f"{t['name']}, its change log or its history view stayed in use for 10 s, so its "
+                                "columns could not change; the next run tries again") from None
+            time.sleep(0.1)
+
+
+# what Postgres drops with a column without a word (decision 22): indexes, constraints, the grants on the column
+DROPS_WITH = """
+    SELECT concat_ws(', ', (SELECT string_agg(pg_describe_object(classid, objid, 0), ', ' ORDER BY objid) FROM pg_depend
+                             WHERE refclassid = 'pg_class'::regclass AND refobjid = a.attrelid
+                               AND refobjsubid = a.attnum AND deptype = 'a'),
+                           (SELECT string_agg(format('the grant of %s to %s', privilege_type, CASE grantee WHEN 0
+                                   THEN 'public' ELSE grantee::regrole::text END), ', ') FROM aclexplode(a.attacl)))
+      FROM pg_attribute a WHERE attrelid = $1::regclass AND attname = $2"""
+
+
+def carry_out(conn, t, plan):
+    """Decision 14, under the lock: the history view goes, since Postgres alters no column a view reads (write_log
+    creates it again), then the plan. Returns what the columns table says beyond the catalogue (decisions 19, 22)."""
+    alter(conn, f"the columns of {t['name']} change", f"DROP VIEW IF EXISTS {t['history']}")
+    changes = {}
+    for name in plan["gone"]:
+        [(note,)] = sql(conn, DROPS_WITH, [t["mirror"], name])
+        changes[name] = {"note": f"{note} went with it" if note else None}
+        alter(conn, f"column {name} is gone from the source and would leave the mirror {t['name']}",
+              f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
+    return changes
+
+
+def alter(conn, why, statement):
+    """A change Postgres refuses while a consumer's object depends on it: the reason says what would have changed,
+    then Postgres's detail, which names the object (decision 15)."""
+    try:
+        sql(conn, statement)
+    except Exception as e:
+        details = {k.decode(): v.decode() for k, v in getattr(e, "details", None) or []}
+        if details.get("PG_DIAG_SQLSTATE") != "2BP01":  # dependent_objects_still_exist
+            raise
+        raise Exception(f"{why}, but {details['PG_DIAG_MESSAGE_DETAIL'].replace(chr(10), '; ')}: change or drop "
+                        "that, and the next run goes on") from None
 
 
 def write_log(conn, t, staged, log, names):
@@ -367,11 +452,12 @@ def follow(conn, t, log):
     return bool(wider)
 
 
-def record_columns(conn, t, delivered, mirror, log):
+def record_columns(conn, t, delivered, mirror, log, changes):
     """Decisions 17 to 22, last in publishing, in its transaction: what the columns of mirror and change log are now
     against what `_rowvioli.columns` says, as rows of `columns__log` with this transaction's moment. `mirror` and `log`
-    are the columns as the run found them, so that what differs from the record without this run is by hand. Notifies
-    on `rowvioli_schema` when anything but a first fill was recorded."""
+    are the columns as the run found them, so that what differs from the record without this run is by hand.
+    `changes` gives fields of the plan by column name (`was`, `note`, `by`). Notifies on `rowvioli_schema` when
+    anything but a first fill was recorded."""
     def state(mirror, log):
         return {**{n: (type, False) for n, type in log if n not in ("_run", "_op", "_loaded_at")},
                 **{n: (type, True) for n, type in mirror}}
@@ -403,6 +489,9 @@ def record_columns(conn, t, delivered, mirror, log):
         rows.append(row)
     if not rows:
         return
+    for r in rows:
+        if (r["target_schema"], r["target_table"]) == (t["schema"], t["table"]):
+            r.update(changes.get(r["column"], {}))
     if any(r["by"] == "source" for r in rows):  # another reader gave these columns, perhaps, not the source
         [(differs, note)] = sql(conn, """
             SELECT (l.program_version, l.driver_version) IS DISTINCT FROM (c.program_version, c.driver_version),
@@ -414,7 +503,7 @@ def record_columns(conn, t, delivered, mirror, log):
              WHERE c.run = $1""", [t["run"]])
         for r in rows:
             if differs and r["by"] == "source":
-                r.update({"by": "reader", "note": note})
+                r.update({"by": "reader", "note": "; ".join(filter(None, [note, r["note"]]))})
     x = """jsonb_to_recordset($1::jsonb) AS x(op text, target_schema text, target_table text, "column" text,
                 type text, source_type text, "key" int, mirror boolean, was text, "by" text, note text)"""
     changes = json.dumps(rows)
