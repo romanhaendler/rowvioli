@@ -60,9 +60,20 @@ said under Comments.
    12 before: say "several"; and an old worker in the middle of a run finishes and publishes it after `init`
    (seen clean): say so. No way back to 0.4.1 after `init` is documented: say it (a dump before, restore).
 
+### The target's session and the extras (host H1, scripts under `shake/h1b/`)
+
+10. **A target database that is not UTF8 never stores another text than the source's.** In a LATIN1 target
+    `Müller` is stored as `MÃ¼ller` with the run `ok` (the session never sets `client_encoding`, so libpq takes the
+    database's; `SESSION` in `src/rowvioli/target.py`); with a non-ASCII schema name `rowvioli status` ends in a
+    traceback (`UnicodeDecodeError`) and every run dies before its claim. `PGCLIENTENCODING=UTF8` cured it: the
+    session sets it. A value the target's encoding has no character for then fails the run with the reason of
+    SQLSTATE 22P05 (seen, no value in it). Test with a LATIN1 database in the suite's target.
+11. **A connector whose extra is not installed says which to install**: `connector "file" cannot be loaded: No
+    module named 'duckdb'` adds `pip install "rowvioli[file]"` (`odbc`, `rest` alike), in `list`, `run` and `work`.
+
 ## Acceptance criteria
 
-- [ ] 1 to 9: a test each, seen red first, at the existing seam (`tests/odbc/run.sh` for ODBC); a sentence under
+- [ ] 1 to 11: a test each, seen red first, at the existing seam (`tests/odbc/run.sh` for ODBC); a sentence under
       Comments for any that cannot be tested there.
 - [ ] `docs/connectors.md` and `CHANGELOG.md` say what changed; no new entry in `docs/open-points.md` (an
       inherent limit of a driver goes to `docs/connectors.md` and decision 55).
