@@ -2,7 +2,7 @@
 
 **Blocked by:** 01
 
-**Status:** claimed
+**Status:** resolved
 
 **Model:** Sonnet
 
@@ -26,3 +26,4 @@ Write the recording so that tickets 03 to 06 can hand it the changes of their pl
 
 - Not tested: a column a person added to the mirror (not the change log): the run fails before publishing with `is missing in the source`, so nothing is recorded (decision 3 changes that in ticket 03). Not tested: a type widened by hand in the mirror other than `numeric(p,s)`: the run still stops at `has changed its type` until ticket 04's families; only numeric is followed in the change log.
 - Left the spec: the notification is not sent for a first fill (every row `found`), only when something else was recorded (a new column, a change by hand, a renamed mirror); a table's first fill is no change of columns.
+- Resolved on branch `schema-changes`, from sc-02 (1c99537). Review fixes: ac5c38d, 48fa3b2.
