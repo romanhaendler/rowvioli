@@ -449,7 +449,7 @@ def stage(conn, t):
     batches = stream(connector.read(connection, t["source_table"], options))
     if batches is None:
         raise Exception("the connector delivered nothing, not even the columns")
-    batches = whole(batches)
+    batches = whole(batches, t)
 
     def cut(name):  # Postgres keeps the first 63 bytes of a name, whole characters, and drops the rest (cases A20)
         return name.encode()[:63].decode(errors="ignore")
@@ -505,15 +505,34 @@ def stage(conn, t):
     return rows_read
 
 
-def whole(batches):
-    """The values as the driver writes them whole. It writes a uint64 as bigint and wraps one above 2**63 - 1 to a
-    negative number: as decimal128(20, 0) it is staged as numeric(20,0), and a mirror's bigint stays while it fits."""
-    # shortcut: top-level columns only, a uint64 in a list still wraps; upgrade when a source delivers one
-    schema = pa.schema([f.with_type(pa.decimal128(20, 0)) if pa.types.is_uint64(f.type) else f
-                        for f in batches.schema], metadata=batches.schema.metadata)
+def whole(batches, t):
+    """The values as the driver writes them whole, or the run fails naming the column. The driver writes a uint64 as
+    bigint and wraps one above 2**63 - 1 to a negative number: as decimal128(20, 0) it is staged as numeric(20,0), and a
+    mirror's bigint stays while it fits. It cuts a time finer than a microsecond, the finest Postgres holds."""
+    # shortcut: top-level columns only, and not an interval's nanoseconds; upgrade when a source delivers one
+    def held(type):
+        if pa.types.is_uint64(type):
+            return pa.decimal128(20, 0)
+        if getattr(type, "unit", None) != "ns":
+            return type
+        return pa.timestamp("us", type.tz) if pa.types.is_timestamp(type) else \
+            pa.time64("us") if pa.types.is_time64(type) else pa.duration("us")
+    schema = pa.schema([f.with_type(held(f.type)) for f in batches.schema], metadata=batches.schema.metadata)
     if schema.equals(batches.schema):
         return batches
-    return pa.RecordBatchReader.from_batches(schema, (b.cast(schema) for b in batches))
+
+    def cast(column, field):
+        try:
+            return column.cast(field.type)  # a safe cast: a time it would cut raises
+        except pa.ArrowInvalid:
+            pin = "time" if pa.types.is_time(field.type) else \
+                "timestamptz" if getattr(field.type, "tz", None) else "timestamp"  # a file brings no duration
+            raise Exception(f"{t['source_table']}: column {field.name} has a time finer than a microsecond, which the "
+                            "target does not hold; " + (f'columns = {{ {field.name} = "{pin}" }} reads it rounded to '
+                                                        "microseconds" if t["type"] == "file" else
+                                                        "cut it to microseconds in a view of the source")) from None
+    return pa.RecordBatchReader.from_batches(schema, (pa.record_batch(
+        [cast(c, f) for c, f in zip(b.columns, schema)], schema=schema) for b in batches))
 
 
 def without_nul(batches, raised):

@@ -568,12 +568,21 @@ def test_a_csv_without_a_header_gets_column0_and_up_and_keeps_its_first_line(fil
     assert files.target("select * from raw_files.nohead order by 1") == [("1", "Anna"), ("2", "Ben")]
 
 
-def test_a_timestamp_finer_than_microseconds_arrives_cut_to_microseconds(files):  # cases B16, as it is today
-    pq.write_table(pa.table({"k": [1], "t": pa.array([1767225600123456789], pa.timestamp("ns"))}),
-                   files.dir / "files" / "ns.parquet")
+def test_a_time_finer_than_microseconds_fails_naming_the_column_and_a_type_under_columns_rounds_it(files):  # cases B16
+    """The driver cut it to microseconds, the finest Postgres holds, with the run ok. Whole microseconds load."""
+    pq.write_table(pa.table({"k": [1], "w": pa.array([1767225600123456000], pa.timestamp("ns")),
+                             "t": pa.array([1767225600123456789], pa.timestamp("ns")),
+                             "z": pa.array([1767225600123456789], pa.timestamp("ns", tz="UTC")),
+                             "h": pa.array([3_600_000_000_001], pa.time64("ns"))}), files.dir / "files" / "ns.parquet")
     code, answer = load(files, '"ns.parquet" = {}\n')
+    assert answer["raw_files.ns"]["reason"] == (
+        'ns.parquet: column t has a time finer than a microsecond, which the target does not hold; columns = '
+        '{ t = "timestamp" } reads it rounded to microseconds')
+    code, answer = load(files, '"ns.parquet" = { columns = { t = "timestamp", z = "timestamptz", h = "time" } }\n')
     assert code == 0, answer
-    assert files.target("select t from raw_files.ns") == [(datetime(2026, 1, 1, 0, 0, 0, 123456),)]
+    assert files.target("select w, t, z::text, h::text from raw_files.ns") == [
+        (datetime(2026, 1, 1, 0, 0, 0, 123456), datetime(2026, 1, 1, 0, 0, 0, 123457), "2026-01-01 00:00:00.123457+00",
+         "01:00:00")]
 
 
 def test_an_unsigned_integer_of_a_parquet_file_arrives_whole(files):
