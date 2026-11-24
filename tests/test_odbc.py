@@ -223,6 +223,22 @@ def test_arrow_odbcs_own_message_of_a_value_keeps_what_comes_before_the_value():
 
 
 @needs_driver
+def test_a_double_arrives_whole_and_a_boolean_as_one_with_the_drivers_setting(ready):
+    """psqlODBC describes float8 with a precision of 17, which arrow-odbc took for a single: 0.1234567890123456
+    arrived as 0.12345679 and 1e300 as Infinity (host H2). Its booleans are text unless BoolsAsChar=0."""
+    ready.source("create table t (id int primary key, f float8, r real, b bool);"
+                 "insert into t values (1, 0.1234567890123456, 0.5, true), (2, 1e300, null, false)")
+    erp(ready, '"public.t" = { key = ["id"] }', odbc_string(ready.source_url) + ";BoolsAsChar=0")
+    r = ready.run("run", env=ENV)
+    assert r.returncode == 0, r.stdout
+    assert ready.target("select column_name, data_type from information_schema.columns where table_schema = "
+                        "'raw_erp' and table_name = 't' order by ordinal_position") == [
+        ("id", "integer"), ("f", "double precision"), ("r", "double precision"), ("b", "boolean")]
+    assert ready.target("select id, f, r, b from raw_erp.t order by 1") == [
+        (1, 0.1234567890123456, 0.5, True), (2, 1e300, None, False)]
+
+
+@needs_driver
 @pytest.mark.parametrize("value", ["4713-01-01 BC", "-infinity"])
 def test_a_timestamp_the_targets_type_cannot_hold_names_the_column_and_the_way_out(ready, value):
     """psqlODBC delivers 4713 BC a year early and -infinity as the year -9999, before the least timestamp of
