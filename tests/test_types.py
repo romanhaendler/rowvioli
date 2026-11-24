@@ -258,6 +258,18 @@ def test_F4_a_guessed_type_that_flips_to_another_family_stops_with_the_hint_to_p
     assert files.target("select n from raw_files.counts order by id") == [(42,), (43,)]
 
 
+def test_F4_a_parquet_column_that_flips_to_json_stops_with_the_hint_to_pin_it_as_well(files):
+    parquet(files, [42, 43], pa.int64())
+    assert load(files, COUNTS)[0] == 0
+    parquet(files, ["42", '{"n": 43}'], pa.json_())  # Parquet's JSON, a type the file brings itself too
+    code, answer = load(files, COUNTS)
+    assert code == 1
+    assert answer["raw_files.counts"]["reason"].startswith(
+        "column n has changed its type from bigint to jsonb; a source without a catalog guesses its types, so pin it "
+        "under columns"), answer
+    assert files.target("select n from raw_files.counts order by id") == [(42,), (43,)]
+
+
 def test_F4_a_pin_taken_out_of_a_parquet_column_stops_and_the_drop_it_names_brings_the_file_s_type(files):
     # Parquet's own types can flip, so the run cannot tell a pin taken out; the drop is the way to the file's type
     parquet(files, [42, 43], pa.int64())
