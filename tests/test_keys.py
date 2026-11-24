@@ -269,9 +269,14 @@ def test_a_column_of_an_old_key_retired_in_the_change_log_is_renamed_in_the_comm
     log_replays(erp)
 
 
-def test_a_column_of_the_old_key_retired_in_the_run_the_key_changes_keeps_its_values_and_frees_its_not_null(erp):
+# a change log of 0.4.1 has no comment on _op (ticket 15, B1: the old key was written with its name in the mirror)
+@pytest.mark.parametrize("of_0_4_1", [False, True])
+def test_a_column_of_the_old_key_retired_in_the_run_the_key_changes_keeps_its_values_and_frees_its_not_null(
+        erp, of_0_4_1):
     ok(erp)
     first = erp.target(LOADED_AT)[0][0]
+    if of_0_4_1:
+        erp.target("comment on column raw_erp.customers__log._op is null")
     apply(erp, definition(erp, '"public.customers" = { key = ["name"] }\n'))
     erp.source("alter table customers alter column customer_no type text")  # in the same run: goes and comes
     seam = again(erp)

@@ -724,7 +724,9 @@ def carry_out(conn, t, plan):
                                                               for c in loose))
         if by == "definition" and plan["key"]["log"]:  # a stretch of the change log begins under the new key
             [(now,)] = sql(conn, "SELECT to_json(now()) #>> '{}'")  # ISO 8601, whatever the DateStyle
-            keys = (stretches(conn, t) or [{"key": was}]) + [{"from": now, "key": key}]
+            # without a comment (0.4.1) the one key before, a column retired in this run under its new name
+            keys = stretches(conn, t) or [{"key": [plan["retired"].get(c, c) for c in was]}]
+            keys += [{"from": now, "key": key}]
             note = KEYS_NOTE + keys_of_log(conn, t, keys)
         changes.update({c: {**changes.get(c, {}), "by": by, "note": note} for c in {*was, *key}})  # a rename keeps was
     for name in plan["gone"]:
