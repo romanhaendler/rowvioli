@@ -116,7 +116,7 @@ def test_B6_B8_without_a_change_log_a_type_of_another_family_stops_and_says_how_
                       "and attrelid = 'raw_erp.amounts'::regclass") == [("timestamp with time zone",)]
 
 
-def test_a_key_column_is_widened_like_any_other_and_a_consumers_foreign_key_keeps_its_type(erp):  # story 21, C7
+def test_C7_a_key_column_is_widened_like_any_other_and_a_consumers_foreign_key_keeps_its_type(erp):  # story 21
     amounts(erp, "integer", "(1, 10)")
     erp.target("create table public.orders (amount_id integer references raw_erp.amounts (id))")
     erp.target("insert into public.orders values (1)")
