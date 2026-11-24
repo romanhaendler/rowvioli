@@ -160,8 +160,8 @@ def check(conn, t, staged, mirror, log_columns):
         raise Exception(f"the change log {t['name']}__log exists and {why}: {drop}")
     # decision 9: one branch over a change log written under two keys gives wrong rows, so the record says them
     if log_columns and stretches(conn, t) is None and (noted := sql(
-            conn, """SELECT substr(note, length($2) + 1) FROM _rowvioli.columns__log WHERE id = $1
-                      AND starts_with(note, $2) ORDER BY _loaded_at DESC LIMIT 1""", [t["id"], KEYS_NOTE])):
+            conn, """SELECT substr(note, strpos(note, $2) + length($2)) FROM _rowvioli.columns__log WHERE id = $1
+                      AND strpos(note, $2) > 0 ORDER BY _loaded_at DESC LIMIT 1""", [t["id"], KEYS_NOTE])):
         raise Exception(f"the comment on column _op of the change log {t['name']}__log, which says the keys it was "
                         "written under, is missing or unreadable, and the key has changed: put it back, "
                         f"COMMENT ON COLUMN {t['log_table']}._op IS '{noted[0][0].replace(chr(39), chr(39) * 2)}'")
@@ -463,7 +463,7 @@ def carry_out(conn, t, plan):
             for table in [t["mirror"], t["log_table"]] if plan["key"]["log"] else [t["mirror"]]:
                 sql(conn, f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(c)} DROP NOT NULL" for c in loose))
         if by == "definition" and plan["key"]["log"]:  # a stretch of the change log begins under the new key
-            [(now,)] = sql(conn, "SELECT now()::text")
+            [(now,)] = sql(conn, "SELECT to_json(now()) #>> '{}'")  # ISO 8601, whatever the DateStyle
             keys = (stretches(conn, t) or [{"key": was}]) + [{"from": now, "key": key}]
             note = KEYS_NOTE + keys_of_log(conn, t, keys)
         changes.update({c: {"by": by, "note": note} for c in {*was, *key}})
@@ -476,6 +476,7 @@ def carry_out(conn, t, plan):
 
 
 KEYS_NOTE = "the change log's keys: "  # the note in the columns table of a change of key, before the comment's text
+# (the reader's versions may come first)
 
 
 def stretches(conn, t):
@@ -525,6 +526,8 @@ def write_log(conn, t, staged, log, names):
         rows = f"SELECT _op, {names} FROM _diff"
     else:
         sql(conn, f"CREATE TABLE {t['log_table']} (_run bigint, _op text, _loaded_at timestamptz, LIKE {t['mirror']})")
+        # its one key said, so that a change of key the columns table noted for an earlier change log does not stop it
+        keys_of_log(conn, t, [{"key": t["key"]}])
         rows = f"SELECT 'I', {names} FROM {t['mirror']}"
     # now() is the transaction's moment, the one that goes into tables.loaded_at
     sql(conn, f"INSERT INTO {t['log_table']} (_run, _loaded_at, _op, {names}) SELECT $1, now(), * FROM ({rows}) r",
@@ -581,7 +584,8 @@ def record_columns(conn, t, delivered, mirror, log, changes):
                 **{n: (type, True) for n, type in mirror}}
     found = state(mirror, log)
     now = state(sql(conn, COLUMNS, [t["mirror"]]), sql(conn, COLUMNS, [t["log_table"]]))
-    key = {k: i + 1 for i, k in enumerate(t["key"] or [])}
+    # the primary key's order, not the definition's: the same columns in another order are the same key (story 20)
+    key = {k: i + 1 for i, (k,) in enumerate(sql(conn, PRIMARY_KEY, [t["mirror"]]))}
     delivered = dict(delivered)
     with conn.cursor() as c:
         c.execute("""SELECT target_schema, target_table, "column", type, source_type, "key", mirror, was, "by", note,

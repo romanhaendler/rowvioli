@@ -35,6 +35,7 @@ def test_C6_the_same_key_columns_in_another_order_are_the_same_key(erp):
     assert primary_key(erp, "raw_erp.lines") == ["order_no", "line_no"]
     assert erp.target(f"select _op, order_no, line_no, item from raw_erp.lines__log {THIS_RUN}") == [("U", 1, 2, "B")]
     log_replays(erp, "raw_erp.lines")
+    assert erp.target(f'select "column", "key" from _rowvioli.columns__log {THIS_RUN}') == []  # the record neither
 
 
 def comment(rv, table="raw_erp.customers"):
@@ -85,7 +86,7 @@ def test_C1_a_first_key_replaces_the_mirror_once_more_adds_the_primary_key_and_b
     assert rows(erp.target, "select * from raw_erp.notes") == [("a", 1), ("b", 2)]
     assert erp.target("select _op, txt, n, _loaded_at from raw_erp.notes__log order by txt") == [
         ("I", "a", 1, loaded_at), ("I", "b", 2, loaded_at)]
-    assert comment(erp, "raw_erp.notes") is None  # one key
+    assert comment(erp, "raw_erp.notes") == [{"key": ["txt"]}]
     assert erp.target(f'select _op, "column", "key", "by" from _rowvioli.columns__log {THIS_RUN}') == [
         ("U", "txt", 1, "definition")]
     log_replays(erp, "raw_erp.notes")
@@ -130,7 +131,7 @@ def test_C15_a_primary_key_changed_by_hand_is_put_back_and_recorded_by_hand(erp)
     assert erp.target(NOT_NULL, ["raw_erp.customers"]) == [("customer_no",)]
     # the change log was written under the definition's key all along: only the row that changed
     assert erp.target(f"select _op, customer_no, city from raw_erp.customers__log {THIS_RUN}") == [("U", 1, "Köln")]
-    assert comment(erp) is None
+    assert comment(erp) == [{"key": ["customer_no"]}]
     assert erp.target(f'select _op, "column", "key", "by", note from _rowvioli.columns__log {THIS_RUN} '
                       'order by "column"') == [
         ("U", column, key, "hand", "the primary key (customer_no, name) was put back to the definition's (customer_no)")
@@ -232,13 +233,19 @@ def test_a_column_of_an_old_key_retired_in_the_change_log_is_renamed_in_the_comm
     erp.source("alter table customers drop column customer_no")
     again(erp)
     erp.source("alter table customers add column customer_no text")
+    erp.target("update _rowvioli.runs set program_version = '0.0.1'")  # the retirement is recorded by the reader
     again(erp)
     [(run,)] = erp.target("select max(run) from _rowvioli.runs")
-    assert [k["key"] for k in comment(erp)] == [[f"customer_no__{run}"], ["name"]]
+    keys = comment(erp)
+    assert [k["key"] for k in keys] == [[f"customer_no__{run}"], ["name"]]
     assert erp.target(f"select customer_no__{run}, _valid_from, _valid_to from raw_erp.customers__history "
                       "where name = 'Anna' order by _valid_from limit 1") == [(1, first, seam)]
-    assert erp.target(f'select note from _rowvioli.columns__log {THIS_RUN} and "column" = %s',
-                      [f"customer_no__{run}"]) == [(f"the change log's keys: {json.dumps(comment(erp))}",)]
+    [(note,)] = erp.target(f'select note from _rowvioli.columns__log {THIS_RUN} and "column" = %s',
+                           [f"customer_no__{run}"])
+    assert note.endswith(f"the change log's keys: {json.dumps(keys)}")
+    erp.target("comment on column raw_erp.customers__log._op is null")  # the text to put back is the renamed one
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp).endswith(f"._op IS '{json.dumps(keys)}'")
     log_replays(erp)
 
 
@@ -271,3 +278,54 @@ def test_C8_a_key_column_of_another_family_stops_the_run_and_changes_nothing(erp
     assert failed(erp).startswith("column customer_no ")
     assert (rows(erp.target, MIRROR), erp.target("select count(*) from raw_erp.customers__log")) == before
     assert primary_key(erp) == ["customer_no"]
+
+
+def test_two_changes_of_key_and_one_back_with_rows_and_a_column_that_go_give_the_table_at_every_moment(erp):
+    erp.source("alter table customers add column phone text")
+    ok(erp)
+    moments = [(erp.target(LOADED_AT)[0][0], rows(erp.target, MIRROR))]
+    apply(erp, definition(erp, ANOTHER_KEY))
+    erp.source("alter table customers drop column phone")  # in the run of the change, with a row gone and one come
+    erp.source("delete from customers where customer_no = 3; insert into customers values (4, 'Dora', 'Ulm')")
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    erp.source("update customers set name = 'Ben2' where customer_no = 2")
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    apply(erp, definition(erp, '"public.customers" = { key = ["name"] }\n'))
+    erp.source("delete from customers where customer_no = 1")
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    apply(erp, definition(erp))  # back to the first key
+    erp.source("update customers set city = 'Köln' where customer_no = 2")
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    erp.source("update customers set city = 'Kiel' where customer_no = 4")
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    assert primary_key(erp) == ["customer_no"]
+    assert [k["key"] for k in comment(erp)] == [["customer_no"], ["customer_no", "name"], ["name"], ["customer_no"]]
+    assert [datetime.fromisoformat(k["from"]) for k in comment(erp)[1:]] == [moments[i][0] for i in (1, 3, 4)]
+    for moment, mirror in moments:
+        assert at(erp, moment) == mirror, moment
+    log_replays(erp)
+
+
+def test_the_moments_in_the_comment_on_op_are_iso_8601_whatever_the_datestyle(erp, monkeypatch):
+    ok(erp)
+    apply(erp, definition(erp, ANOTHER_KEY))
+    monkeypatch.setenv("PGOPTIONS", "-c datestyle=SQL,DMY")  # for the run only: the tests read timestamps in ISO
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    monkeypatch.delenv("PGOPTIONS")
+    assert datetime.fromisoformat(comment(erp)[1]["from"]) == erp.target(LOADED_AT)[0][0]
+
+
+def test_a_change_log_begun_anew_after_a_change_of_key_has_one_key_and_does_not_stop(erp):
+    ok(erp)
+    apply(erp, definition(erp, ANOTHER_KEY))
+    again(erp)
+    apply(erp, definition(erp, ANOTHER_KEY.replace(" }", ", log = false }")))
+    erp.target("drop table raw_erp.customers__log cascade")  # the way out the reason gives for log = false
+    again(erp)
+    apply(erp, definition(erp, ANOTHER_KEY))
+    again(erp)
+    assert comment(erp) == [{"key": ["customer_no", "name"]}]
+    erp.source("update customers set city = 'Köln' where customer_no = 1")
+    again(erp)
+    log_replays(erp)
