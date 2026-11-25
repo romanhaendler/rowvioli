@@ -335,6 +335,25 @@ def test_a_lost_comment_on_op_of_a_change_log_begun_after_a_change_of_key_is_no_
     log_replays(erp, f"raw_erp.{table}")
 
 
+def test_a_lost_comment_on_op_back_under_an_earlier_target_name_gives_that_change_logs_keys_to_put_back(erp):
+    ok(erp)  # ticket 18, item 4: a note of another target name's change log, newer than this one's first row
+    apply(erp, definition(erp, ANOTHER_KEY))
+    again(erp)
+    keys = comment(erp)
+    apply(erp, definition(erp, ANOTHER_KEY.replace("}", ', target_table = "clients" }')))
+    again(erp)
+    apply(erp, definition(erp, '"public.customers" = { key = ["name"], target_table = "clients" }\n'))
+    again(erp)
+    apply(erp, definition(erp, ANOTHER_KEY))
+    erp.target("comment on column raw_erp.customers__log._op is null")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    put_back = f"""COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '{json.dumps(keys)}'"""
+    assert failed(erp).endswith(f"put it back, {put_back}")
+    erp.target(put_back)
+    again(erp)
+    log_replays(erp)
+
+
 def test_a_lost_comment_on_op_of_a_mirror_renamed_by_hand_gives_its_keys_to_put_back(erp):  # ticket 17, V1
     ok(erp)
     apply(erp, definition(erp, ANOTHER_KEY))

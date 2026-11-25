@@ -345,10 +345,12 @@ def check(conn, t, staged, mirror, log_columns, renamed):
 def noted(conn, t):
     """The latest text of the comment on _op the columns log noted for the table, under any of its target names (a
     mirror renamed by hand), or None. Only a note of this change log counts, one no older than its first row: a change
-    log created again, or one of an earlier target name, may have had other stretches (ticket 17)."""
+    log created again, or one of an earlier target name, may have had other stretches (ticket 17). A note of this
+    target name comes first: another's may be newer, made while the table was loaded under it (ticket 18)."""
     found = sql(conn, """SELECT substr(note, strpos(note, $2) + length($2)), _loaded_at FROM _rowvioli.columns__log
-                          WHERE id = $1 AND strpos(note, $2) > 0 ORDER BY _loaded_at DESC LIMIT 1""",
-                [t["id"], KEYS_NOTE])
+                          WHERE id = $1 AND strpos(note, $2) > 0
+                          ORDER BY (target_schema, target_table) = ($3, $4) DESC, _loaded_at DESC LIMIT 1""",
+                [t["id"], KEYS_NOTE, t["schema"], t["table"]])
     # the oldest rows come first in a change log that is only appended to, so EXISTS ends at once where one counts
     if found and sql(conn, f"SELECT EXISTS (SELECT FROM ONLY {t['log_table']} WHERE _loaded_at <= $1)",
                      [found[0][1]])[0][0]:
