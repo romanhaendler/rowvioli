@@ -82,6 +82,27 @@ def test_a_column_a_person_dropped_from_the_mirror_before_the_run_that_follows_t
     assert erp.target("select count(*) from raw_erp.customers__log where _loaded_at = %s", [third]) == [(0,)]
 
 
+def test_two_columns_a_person_dropped_from_the_mirror_close_a_row_that_had_a_value_in_only_one(erp):
+    ok(erp)  # customer 3 has a name and no city: the closing U is written for a value in any of the columns
+    erp.source("alter table customers drop column name, drop column city")
+    erp.target("alter table raw_erp.customers drop column name, drop column city")
+    again(erp)
+    assert erp.target("select _op, customer_no from raw_erp.customers__log where _run = (select max(run) from "
+                      "_rowvioli.runs) order by customer_no") == [("U", 1), ("U", 2), ("U", 3)]
+
+
+def test_a_column_a_person_dropped_is_closed_by_the_latest_version_of_a_key_the_i_not_the_d_of_one_moment(erp):
+    ok(erp)  # a change of key writes a D and an I of one key at one _loaded_at: the I, whose city is null here, is latest
+    erp.source("update customers set city = null where customer_no = 1")
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no", "name"] }\n'))
+    again(erp)
+    erp.source("alter table customers drop column city")
+    erp.target("alter table raw_erp.customers drop column city")
+    again(erp)
+    assert erp.target("select _op, customer_no from raw_erp.customers__log where _run = (select max(run) from "
+                      "_rowvioli.runs) order by customer_no") == [("U", 2)]
+
+
 @pytest.mark.parametrize("table", ['{ key = ["customer_no"], log = false }', "{}", "begins"])
 def test_A5_without_a_change_log_a_gone_column_stops_the_run_and_says_how_to_drop_it(erp, table):
     if table == "begins":  # the first run onto a table it did not create, whose change log begins (ticket 17, M5)
