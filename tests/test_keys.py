@@ -424,7 +424,10 @@ def test_a_primary_key_changed_by_hand_to_the_new_key_of_a_mirror_renamed_by_han
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
     put_back = f'ALTER TABLE "raw_erp"."clients" DROP CONSTRAINT "{pk}", ADD PRIMARY KEY ({", ".join(f'"{c}"' for c in old)})'
-    assert reason.endswith(put_back if earlier else f"or the old primary key, {put_back}"), reason
+    # ticket 19: without a note the comment it offered was built from the definition's new key, and following it gave
+    # a wrong history; the old primary key alone leads out
+    assert reason.endswith(f"put the old primary key back, and the next run changes it as the definition says, "
+                           f"{put_back}"), reason
     erp.target(put_back)
     erp.target("update _rowvioli.tables set requested_at = now()")
     ok(erp)

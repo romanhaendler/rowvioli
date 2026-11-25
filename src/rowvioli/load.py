@@ -306,6 +306,14 @@ def check(conn, t, staged, mirror, log_columns, renamed):
             # a person changed the primary key by hand to the definition's new key before a run did: the change log is
             # written under the recorded one, so the run changes the key as the definition would (ticket 18)
             plan["key"] = {"was": was, "by": "definition", "log": True, "primary": primary_key}
+        elif log_columns and not sql(conn, "SELECT 1 FROM _rowvioli.columns WHERE id = $1 LIMIT 1", [t["id"]]):
+            # before the record (0.4.1, which wrote no comment on _op): the change log must fit the key, and the comment
+            # a person wrote at its stop says the key it was written under, which the run changes (ticket 19)
+            if not (keys := stretches(conn, t)):
+                before_the_record(conn, t, primary_key, key, log_columns, renamed)
+            elif {renamed_to.get(c, c) for c in keys[-1]["key"]} != set(key):
+                plan["key"] = {"was": [renamed_to.get(c, c) for c in keys[-1]["key"]], "by": "definition", "log": True,
+                               "primary": primary_key}
         # the diff joins the mirror by the definition's key, or where it replaces it writes its old rows' D by the old
         # one into a change log: a key column it lacks went by hand
         by = plan["key"].get("by") == "definition"
@@ -322,7 +330,7 @@ def check(conn, t, staged, mirror, log_columns, renamed):
     # and one that names another key last than the one the change log is written under, before this run's renames
     last = [renamed.get(c, c) for c in (plan["key"]["was"] if plan["key"].get("by") == "definition" else key)]
     if log_columns and last and (keys := stretches(conn, t)) and set(keys[-1]["key"]) != set(last):
-        text = noted(conn, t) or json.dumps([{"key": last}])
+        text = (note := noted(conn, t)) or json.dumps([{"key": last}])
         way = f"put it back, COMMENT ON COLUMN {t['log_table']}._op IS {literal(text)}"
         # without a record under this target name (a mirror renamed by hand) a primary key changed by hand to the
         # definition's is the other cause, and the comment the program wrote is no way out (ticket 18)
@@ -332,7 +340,8 @@ def check(conn, t, staged, mirror, log_columns, renamed):
             back = (f"ALTER TABLE {t['mirror']} DROP CONSTRAINT {quote(name)}, ADD PRIMARY KEY "
                     f"({', '.join(quote(c) for c in keys[-1]['key'])})")
             way = (f"put the old primary key back, and the next run changes it as the definition says, {back}"
-                   if text == comments(conn, t)["_op"] else
+                   # without a note the text is built from the definition's key, never written under (ticket 19)
+                   if not note or text == comments(conn, t)["_op"] else
                    f"put back what was changed, the comment, COMMENT ON COLUMN {t['log_table']}._op IS "
                    f"{literal(text)}, or the old primary key, {back}")
         raise Exception(f"the comment on column _op of the change log {t['name']}__log, which says the keys it was "
@@ -386,7 +395,7 @@ def before_the_record(conn, t, primary_key, key, log_columns, renamed):
     under the definition's key then, so the same definition now says a person changed it. Otherwise the change log,
     written under one of the two keys, says which: under the other a key value has two rows at one moment, an I while
     it lives or a U or D while it does not. Stops where neither tells: the program never guesses what identifies a
-    row (story 22)."""
+    row (story 22). Where the primary key is the definition's, the change log must fit it (ticket 19)."""
     [(same,)] = sql(conn, """SELECT definition = (SELECT definition FROM _rowvioli.runs WHERE "table" = r."table"
                                                      AND status = 'ok' ORDER BY run DESC LIMIT 1)
                                FROM _rowvioli.runs r WHERE run = $1""", [t["run"]])
@@ -395,6 +404,7 @@ def before_the_record(conn, t, primary_key, key, log_columns, renamed):
     if not log_columns:  # replaced as a whole and under the definition's key either way, with no history to get wrong
         return False
     defined, primary = ([renamed.get(c, c) for c in k] for k in (key, primary_key))  # the change log's names
+    keys = [defined] if set(defined) == set(primary) else [defined, primary]  # one key is read once
     with long(f"reading the change log {t['name']}__log under the definition's key and the primary key, to tell which "
               "of them wrote it; raise max_seconds once, until a run has told it"):  # 0.6 s per million rows
         fits = [bool(k) and set(k) <= dict(log_columns).keys() and not sql(conn, f"""
@@ -402,9 +412,22 @@ def before_the_record(conn, t, primary_key, key, log_columns, renamed):
                            FROM ONLY {t['log_table']} WINDOW w AS (PARTITION BY {', '.join(quote(c) for c in k)}
                                                               ORDER BY _loaded_at)) l
              WHERE at = _loaded_at OR (_op = 'I') <> (before IS NULL OR before = 'D') LIMIT 1""")
-                for k in (defined, primary)]
+                for k in keys]
+    say = ("say the key it was written under, the key the table had when its change log was written, and the next run "
+           f"changes the key as the definition says: COMMENT ON COLUMN {t['log_table']}._op IS "
+           + literal(json.dumps([{"key": ["<the key column>"]}])))
+    if len(keys) == 1:
+        if fits[0]:
+            return True
+        raise Exception(f"the change log {t['name']}__log was not written under ({', '.join(key)}), the key of the "
+                        "definition and of the mirror's primary key, so a person changed the primary key by hand "
+                        f"before a run changed it: {say}")
     if fits[0] != fits[1]:
         return fits[0]
+    if not fits[0]:  # each comment of the two would be false (ticket 19)
+        raise Exception(f"the primary key of {t['name']} is ({', '.join(primary_key)}), the definition's key is "
+                        f"({', '.join(key)}), and the change log {t['name']}__log was written under neither, so a "
+                        f"person changed the primary key by hand before a run changed the key: {say}")
     comment = f"COMMENT ON COLUMN {t['log_table']}._op IS " + "{}"
     raise Exception(f"the primary key of {t['name']} is ({', '.join(primary_key)}), the definition's key is "
                     f"({', '.join(key)}), and nothing in the target tells which of them the change log {t['name']}__log "
