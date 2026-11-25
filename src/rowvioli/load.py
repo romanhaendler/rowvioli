@@ -1395,7 +1395,7 @@ VALUE = re.compile(r'(?<=: )"[^\n]*"$|(?:^|(?<=\s))"[^\n]*"(?= is out of range)'
 # (`ODBC emitted an error calling 'SQLExecDirect': State: 22P02, Native error: 1, Message: ...`); a driver that sets
 # none leaves five NULs there. Before it the ODBC call that failed: a failure to connect (SQLDriverConnect) comes before
 # any row and is shown, whatever its SQLSTATE (the driver manager's `Can't open lib` is a 01000)
-ODBC_STATE = re.compile(r"(?:\bcalling '(\w+)':\s*)?\bState: ([^,]{5}), Native error: -?\d+, Message: ")
+ODBC_STATE = re.compile(r"(?:\bcalling '(\w+)':\s*)?\bState: ([^,]{5}), Native error: (-?\d+), Message: ")
 OWN = os.path.dirname(os.path.abspath(__file__)) + os.sep  # the program's code, its shipped connectors among it
 
 
@@ -1495,6 +1495,12 @@ SHOWN = {"08000", "08001", "08003", "08004", "08006", "08P01", "08S01",  # a con
          "55006", "55P03",  # an object in use: the object
          "57014", "57P01", "57P02", "57P03", "57P04", "57P05"}  # a cancel, a timeout, a shutdown: fixed words
 
+# SQL Server's missing right on an object (229) or a column (230) and Informix's missing SELECT right (-272, names the
+# table) come with the catch-all 42000, which also carries `Incorrect syntax near '<value>'`, so it is told by the native
+# error: names alone. Code in the source can raise these numbers only as it can raise a SQLSTATE of SHOWN (an Informix
+# SPL routine may `RAISE EXCEPTION -272` with its own text; SQL Server's own code raises 50000 and up)
+SHOWN_NATIVE = {("42000", "229"), ("42000", "230"), ("42000", "-272")}
+
 
 # an object a statement names that does not exist: a table, a column, a type or a function; ODBC's for a table and a
 # column. Its message may name a row's value (`relation "Anna" does not exist` of ::regclass), so the program says it
@@ -1503,7 +1509,8 @@ MISSING = {"42P01", "42703", "42704", "42883", "42S02", "42S22"}
 
 def withheld(e, step, source, name=None):
     """Decision 54, item 8, the one rule for a database's message, of the source or the target, through ADBC or ODBC:
-    it reaches a reason only where the SQLSTATE the driver gives says that it holds names alone (SHOWN),
+    it reaches a reason only where the SQLSTATE the driver gives says that it holds names alone (SHOWN, or through
+    ODBC with the native error that tells it, SHOWN_NATIVE),
     or as Postgres's own message of a violated constraint, and never from under a consumer's function. Every other is
     withheld: a value's (class 22), a consumer's RAISE or ASSERT (P0001, P0004) or a function in C (it names no frame),
     a code the program does not know, a driver's HY000 or none. Returns the reason, which names what the program
@@ -1521,7 +1528,8 @@ def withheld(e, step, source, name=None):
     message = details.get("PG_DIAG_MESSAGE_PRIMARY") or WRAPPER.sub("", text).split("\n")[0]
     # a constraint's words count only as Postgres's own: of class 23 and not under a consumer's code, which may copy them
     if not function and str(state).startswith("23") and CONSTRAINT.fullmatch(message) \
-            or not (function or state and state not in SHOWN):
+            or not (function or state and state not in SHOWN
+                    and not (not details and odbc and (state, odbc[3]) in SHOWN_NATIVE)):
         return None
     who = f"function {function[1]}" if function else "a function" if state in ("P0001", "P0004") else "a statement"
     where = "source" if step == "reading the source" else "target"

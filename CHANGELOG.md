@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2 (2026-11-25)
+
+Changed:
+
+- A missing right on a source table read through ODBC from Informix (SQLSTATE 42000, native error -272, `No SELECT permission for <table>`) or SQL Server (42000 with native error 229 or 230) is shown in the reason again. Since 0.5.0 it was withheld with every other message of 42000, the catch-all both use, which also carries syntax errors that quote a value; every other 42000 stays withheld.
+
 ## 0.5.1 (2026-11-25)
 
 Changed:

@@ -101,7 +101,7 @@ def test_a_message_of_a_violated_constraint_under_a_function_is_withheld_since_i
             "the source's server log or a trace has it")
 
 
-ODBC = "ODBC emitted an error calling 'SQLFetch': State: {}, Native error: 1, Message: "
+ODBC = "ODBC emitted an error calling 'SQLFetch': State: {}, Native error: {}, Message: "
 
 
 @pytest.mark.parametrize("state, message, shown", [
@@ -117,11 +117,22 @@ ODBC = "ODBC emitted an error calling 'SQLFetch': State: {}, Native error: 1, Me
     # names alone: a refused login, a missing right
     ("28000", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Login failed for user 'reader'.", True),
     ("42501", "ERROR: permission denied for table orders", True),
+    # a missing right shares 42000 with syntax errors (SQL Server's, Informix's): told by the native error, 229, 230 or -272
+    ("42000/229", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]The SELECT permission was denied on the object "
+                  "'orders', database 'erp', schema 'dbo'.", True),
+    ("42000/230", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]The SELECT permission was denied on the column "
+                  "'n' of the object 'orders', database 'erp', schema 'dbo'.", True),
+    ("42000/-272", "[Informix][Informix ODBC Driver][Informix]No SELECT permission for tablexyz.", True),
+    ("42000/-201", "[Informix][Informix ODBC Driver][Informix]A syntax error has occurred.", None),
+    ("HY000/-272", "[Some][ODBC Driver]Secret", None),  # the native error counts with its SQLSTATE only
+    ("42000/102", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Incorrect syntax near 'Secret'.", None),
     # whatever its SQLSTATE, a failure to connect, before any row: the driver manager's own (ticket 15, D2)
     ("IM002", "[unixODBC][Driver Manager]Data source name not found and no default driver specified", "connect"),
     ("01000", "[unixODBC][Driver Manager]Can't open lib 'NoSuchDriver' : file not found", "connect")])
-def test_an_odbc_drivers_message_is_shown_by_its_sqlstate_alone(state, message, shown):  # decision 54, item 8
+def test_an_odbc_drivers_message_is_shown_by_its_sqlstate_or_with_it_a_native_error(state, message, shown):  # decision 54, item 8
     odbc = ODBC.replace("SQLFetch", "SQLDriverConnect") if shown == "connect" else ODBC
+    state, _, native = state.partition("/")
+    odbc = odbc.format("{}", native or 1)
     said = reason_line([], RuntimeError(odbc.format(state) + message), "reading the source", "dbo.orders", "erp")
     if shown == "connect":  # ticket 17, L1
         assert said == odbc.format(state) + message + AGAIN
