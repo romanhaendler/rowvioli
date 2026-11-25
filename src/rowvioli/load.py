@@ -249,13 +249,16 @@ def check(conn, t, staged, mirror, log_columns, renamed):
                 raise Exception(f"{changed}, and no change log keeps its values, so a person drops it "
                                 f"and the next run adds it anew: ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
             plan["gone"].append(name)
-    # a column the last run recorded in the mirror that a person dropped from it, and the source too: its last values
-    # are closed in the change log, as for a column that goes (ticket 17, M3)
+    # a column the last run recorded in the mirror that a person dropped from it: its last values are closed in the
+    # change log, as for a column that goes, and what the source delivers comes as a column that comes back (tickets
+    # 17, M3, and 18). Without a record (a table last loaded before version 4) every column of the change log, in this
+    # one run: write_log closes only a value that differs from the mirror's, which 0.4.1 left where a person dropped a
+    # column it added again and a row's value had become null
     if t["key"] and t["log"] and log_columns:
-        plan["closed"] = [n for (n,) in sql(conn, 'SELECT "column" FROM _rowvioli.columns WHERE id = $1 AND '
-                                                  "target_schema = $2 AND target_table = $3 AND mirror",
-                                            [t["id"], t["schema"], t["table"]])
-                          if n in logged and n not in had and n not in types]
+        recorded = sql(conn, 'SELECT "column", mirror FROM _rowvioli.columns WHERE id = $1 AND target_schema = $2 AND '
+                             "target_table = $3", [t["id"], t["schema"], t["table"]])
+        plan["closed"] = [n for n, in_mirror in recorded if in_mirror and n in logged and n not in had] if recorded \
+            else [n for n in logged if n not in ("_run", "_op", "_loaded_at", *(renamed.get(k, k) for k in key))]
     said = comments(conn, t)  # decision 54: a retired column is known by its comment, never by its name
     retired = {n: was for n, text in said.items() if (was := retirement(text))}
     for name, type in staged:
@@ -282,18 +285,35 @@ def check(conn, t, staged, mirror, log_columns, renamed):
                             for kind, table in ([("TABLE", t["mirror"])] if n in had else [])
                             + [("TABLE", t["log_table"]), ("VIEW", t["history"])]))
     if mirror:
+        # decision 54: the key the last run recorded (this target name's: an old one that stays keeps the key it had)
+        recorded = sql(conn, 'SELECT "column", "key" FROM _rowvioli.columns WHERE id = $1 AND target_schema = $2 '
+                             'AND target_table = $3 ORDER BY "key"', [t["id"], t["schema"], t["table"]])
+        was = [renamed_to.get(c, c) for c, k in recorded if k is not None]
         if set(primary_key) != set(key):  # the same columns in another order are the same key (story 20)
-            # decision 54: the key the last run recorded is the definition's, so a person changed the primary key
-            # (this target name's: an old one that stays keeps the key it had)
-            recorded = sql(conn, 'SELECT "column", "key" FROM _rowvioli.columns WHERE id = $1 AND target_schema = $2 '
-                                 'AND target_table = $3', [t["id"], t["schema"], t["table"]])
+            # the key the last run recorded is the definition's, so a person changed the primary key
             # without a record (a program that kept none), the comment on _op names the key the change log was
             # written under, which is the definition's where a person changed the primary key
             keys = None if recorded or not log_columns else stretches(conn, t)
             hand = {renamed_to.get(c, c) for c, k in recorded if k is not None} == set(key) if recorded else \
                 {renamed_to.get(c, c) for c in keys[-1]["key"]} == set(key) if keys else \
                 before_the_record(conn, t, primary_key, key, log_columns, renamed)
-            plan["key"] = {"was": primary_key, "by": "hand" if hand else "definition", "log": bool(log_columns)}
+            # by the definition, from the key the change log was written under, also where a person changed the
+            # primary key to a third one meanwhile (ticket 18)
+            old = was or ([renamed_to.get(c, c) for c in keys[-1]["key"]] if keys else primary_key)
+            plan["key"] = {"was": primary_key if hand else old, "by": "hand" if hand else "definition",
+                           "log": bool(log_columns), "primary": primary_key}
+        elif log_columns and was and set(was) != set(key):
+            # a person changed the primary key by hand to the definition's new key before a run did: the change log is
+            # written under the recorded one, so the run changes the key as the definition would (ticket 18)
+            plan["key"] = {"was": was, "by": "definition", "log": True, "primary": primary_key}
+        # the diff joins the mirror by the definition's key, or where it replaces it writes its old rows' D by the old
+        # one into a change log: a key column it lacks went by hand
+        by = plan["key"].get("by") == "definition"
+        if lost := [k for k in (plan["key"]["was"] if by and plan["key"]["log"] else [] if by else key)
+                    if renamed.get(k, k) not in had]:
+            raise Exception(f"key column {' and '.join(lost)} is missing in the mirror {t['name']}, dropped by hand, so "
+                            "its rows cannot be told apart: give the table another target_table, which begins a new "
+                            "mirror")
     # decision 54: one branch over a change log written under two keys gives wrong rows, so the record says them
     if log_columns and stretches(conn, t) is None and (text := noted(conn, t)):
         raise Exception(f"the comment on column _op of the change log {t['name']}__log, which says the keys it was "
@@ -302,15 +322,30 @@ def check(conn, t, staged, mirror, log_columns, renamed):
     # and one that names another key last than the one the change log is written under, before this run's renames
     last = [renamed.get(c, c) for c in (plan["key"]["was"] if plan["key"].get("by") == "definition" else key)]
     if log_columns and last and (keys := stretches(conn, t)) and set(keys[-1]["key"]) != set(last):
+        text = noted(conn, t) or json.dumps([{"key": last}])
+        way = f"put it back, COMMENT ON COLUMN {t['log_table']}._op IS {literal(text)}"
+        # without a record under this target name (a mirror renamed by hand) a primary key changed by hand to the
+        # definition's is the other cause, and the comment the program wrote is no way out (ticket 18)
+        if not was and set(primary_key) == set(key):
+            [(name,)] = sql(conn, "SELECT conname FROM pg_constraint WHERE conrelid = $1::regclass AND contype = 'p'",
+                            [t["mirror"]])
+            back = (f"ALTER TABLE {t['mirror']} DROP CONSTRAINT {quote(name)}, ADD PRIMARY KEY "
+                    f"({', '.join(quote(c) for c in keys[-1]['key'])})")
+            way = (f"put the old primary key back, and the next run changes it as the definition says, {back}"
+                   if text == comments(conn, t)["_op"] else
+                   f"put back what was changed, the comment, COMMENT ON COLUMN {t['log_table']}._op IS "
+                   f"{literal(text)}, or the old primary key, {back}")
         raise Exception(f"the comment on column _op of the change log {t['name']}__log, which says the keys it was "
                         f"written under, names ({', '.join(keys[-1]['key'])}) last, where the change log is written "
                         f"under ({', '.join(last)}): the comment was changed, or the mirror's primary key was changed "
-                        "by hand to the definition's new key before a run changed it; put it back, COMMENT ON COLUMN "
-                        f"{t['log_table']}._op IS "
-                        + literal(noted(conn, t) or json.dumps([{"key": last}])))
+                        f"by hand to the definition's new key before a run changed it; {way}")
     # the same for a retired column's comment, whose text the record noted when the run retired it
-    for name, note in sql(conn, 'SELECT "column", note FROM _rowvioli.columns WHERE id = $1 AND NOT mirror '
-                                "AND strpos(note, $2) > 0", [t["id"], RETIRED_NOTE]):  # also under an old target name
+    # also under an old target name (a mirror renamed by hand), where this one has not recorded the column otherwise
+    for name, note in sql(conn, """SELECT "column", note FROM _rowvioli.columns c WHERE id = $1 AND NOT mirror
+                                      AND strpos(note, $2) > 0 AND ((target_schema, target_table) = ($3, $4)
+                                       OR NOT EXISTS (SELECT FROM _rowvioli.columns o WHERE (o.target_schema,
+                                                      o.target_table, o."column") = ($3, $4, c."column")))""",
+                          [t["id"], RETIRED_NOTE, t["schema"], t["table"]]):
         if name in said and name not in retired:
             text = retired_comment(note)
             raise Exception(f"the comment on column {name} of the change log {t['name']}__log, which says that it "
@@ -333,10 +368,12 @@ def check(conn, t, staged, mirror, log_columns, renamed):
 def noted(conn, t):
     """The latest text of the comment on _op the columns log noted for the table, under any of its target names (a
     mirror renamed by hand), or None. Only a note of this change log counts, one no older than its first row: a change
-    log created again, or one of an earlier target name, may have had other stretches (ticket 17)."""
+    log created again, or one of an earlier target name, may have had other stretches (ticket 17). A note of this
+    target name comes first: another's may be newer, made while the table was loaded under it (ticket 18)."""
     found = sql(conn, """SELECT substr(note, strpos(note, $2) + length($2)), _loaded_at FROM _rowvioli.columns__log
-                          WHERE id = $1 AND strpos(note, $2) > 0 ORDER BY _loaded_at DESC LIMIT 1""",
-                [t["id"], KEYS_NOTE])
+                          WHERE id = $1 AND strpos(note, $2) > 0
+                          ORDER BY (target_schema, target_table) = ($3, $4) DESC, _loaded_at DESC LIMIT 1""",
+                [t["id"], KEYS_NOTE, t["schema"], t["table"]])
     # the oldest rows come first in a change log that is only appended to, so EXISTS ends at once where one counts
     if found and sql(conn, f"SELECT EXISTS (SELECT FROM ONLY {t['log_table']} WHERE _loaded_at <= $1)",
                      [found[0][1]])[0][0]:
@@ -701,7 +738,7 @@ def publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, 
             sql(conn, f"CREATE SCHEMA IF NOT EXISTS {quote(t['schema'])}")
         sql(conn, "SELECT pg_advisory_unlock(hashtext($1))", [t["schema"]])
     changes = {}
-    if any(plan.values()):  # anything but added columns
+    if any(v for k, v in plan.items() if k != "closed"):  # anything but added columns and closed ones, rows alone
         lock(conn, t)
         changes = carry_out(conn, t, plan)
     elif not new and dict(staged).keys() - {moved.get(n, n) for n, _ in mirror}:
@@ -728,9 +765,11 @@ def publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, 
         # cascaded the delete to its rows (ticket 17)
         values = ", ".join(f"{quote(c)} = d.{quote(c)}" for c, _ in staged)
         updated = rowcount(conn, f"UPDATE ONLY {t['mirror']} m SET {values} FROM _diff d WHERE d._op = 'U' AND {on}{kept}")
-        sql(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _diff WHERE _op = 'I'")
+        # with the row of a U a person deleted while the run compared, which the change log keeps (ticket 18)
+        inserted = rowcount(conn, f"""INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _diff d WHERE _op = 'I'
+                                       OR _op = 'U' AND NOT EXISTS (SELECT FROM ONLY {t['mirror']} m WHERE {on})""")
         # the counts are the mirror's: a U only the change log gets, for a column that went, updates no row of it
-        counts = {**counts, "updated": updated}
+        counts = {**counts, "updated": updated + inserted - counts["inserted"]}
     else:  # without a key, or under another key (decision 54): replaced as a whole
         deleted = rowcount(conn, f"DELETE FROM ONLY {t['mirror']}")
         counts = {"inserted": rowcount(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _stage"),
@@ -738,7 +777,8 @@ def publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, 
     if t["key"] and plan["key"]:  # once the old rows are gone, which may hold the new key twice
         sql(conn, f"ALTER TABLE {t['mirror']} ADD PRIMARY KEY ({', '.join(quote(k) for k in t['key'])})")
     if t["key"] and t["log"]:  # the change log's columns under the names the plan gave them
-        write_log(conn, t, staged, [(moved.get(n, n), type) for n, type in log_columns], logged, plan.get("closed"))
+        write_log(conn, t, staged, [(moved.get(n, n), type) for n, type in log_columns], logged,
+                  [moved.get(n, n) for n in plan.get("closed", [])])
     if t["long"]:
         say(long=None)
     record_columns(conn, t, delivered, mirror, log_columns, changes)
@@ -912,7 +952,8 @@ def carry_out(conn, t, plan):
         was, key, by = plan["key"]["was"], t["key"] or [], plan["key"]["by"]
         note = (f"the primary key ({', '.join(was)}) was put back to the definition's ({', '.join(key)})"
                 if by == "hand" else None)
-        if was:
+        dropped = True
+        if plan["key"]["primary"]:
             [(name,)] = sql(conn, "SELECT conname FROM pg_constraint WHERE conrelid = $1::regclass AND contype = 'p'",
                             [t["mirror"]])
             why = f"the key of {t['name']} would change from ({', '.join(was)}) to ({', '.join(key)})"
@@ -923,9 +964,11 @@ def carry_out(conn, t, plan):
                 t.setdefault("blocked", []).append(
                     f"{why}, but {published} publishes its updates and deletes, for which the primary key is its "
                     f"replica identity: give it another for the change, ALTER TABLE {t['mirror']} REPLICA IDENTITY FULL")
-        # Postgres leaves NOT NULL behind, also where LIKE copied it; a column still in a key it refuses to free
-        if (loose := [c for c in was if c not in key]) and dropped:
-            for table, named in [(t["mirror"], {}), (t["log_table"], plan["retired"])][:2 if plan["key"]["log"] else 1]:
+        # Postgres leaves NOT NULL behind, also where LIKE copied it, and in the mirror of a primary key a person set;
+        # a column still in a key it refuses to free
+        for table, named, of in [(t["mirror"], {}, dict.fromkeys([*was, *plan["key"]["primary"]])),
+                                 (t["log_table"], plan["retired"], was)][:2 if plan["key"]["log"] else 1]:
+            if (loose := [c for c in of if c not in key]) and dropped:
                 # one retired in this run has its new name in the change log already
                 sql(conn, f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(named.get(c, c))} DROP NOT NULL"
                                                               for c in loose))
@@ -1088,7 +1131,7 @@ def alter(conn, t, why, statement, table, columns=(), constraint=None, drop=True
 def write_log(conn, t, staged, log_columns, names, closed=None):
     """After the mirror is published, in the same transaction: a log that exists gets the diff, a new one begins
     with the whole mirror, so that replaying a log from the last change of key always gives the mirror; `closed`, the
-    columns a person dropped from the mirror, get a U for every row whose latest version has a value in one. The
+    columns a person dropped from the mirror, get a U for every row whose latest version differs in one. The
     history view is created when missing and replaced when the log got a column; otherwise it is not touched, so takes
     no lock."""
     if log_columns:
@@ -1102,14 +1145,17 @@ def write_log(conn, t, staged, log_columns, names, closed=None):
     # now() is the transaction's moment, the one that goes into tables.loaded_at
     sql(conn, f"INSERT INTO {t['log_table']} (_run, _loaded_at, _op, {names}) SELECT $1, now(), * FROM ({rows}) r",
         [t["run"]])
-    if closed:  # after this run's rows, which have none there, in one pass over the change log (ticket 17, M3)
+    if closed:  # after this run's rows, in one pass over the change log (tickets 17, M3, and 18)
         key, mine, mirrored, gone = (", ".join(f"{a}{quote(c)}" for c in cs) for a, cs in (
             ("", t["key"]), ("", dict(staged)), ("m.", dict(staged)), ("", closed)))
+        # a version is still current where it differs from the mirror, which has a value where the source kept one
+        current = " OR ".join(f"l.{quote(c)} IS DISTINCT FROM m.{quote(c)}" if c in dict(staged) else
+                              f"l.{quote(c)} IS NOT NULL" for c in closed)
         sql(conn, f"""INSERT INTO {t['log_table']} (_run, _loaded_at, _op, {mine})
                        SELECT $1, now(), 'U', {mirrored} FROM ONLY {t['mirror']} m
                          JOIN (SELECT DISTINCT ON ({key}) {key}, {gone} FROM ONLY {t['log_table']}
                                 ORDER BY {key}, _loaded_at DESC, _op = 'D') l USING ({key})
-                        WHERE {' OR '.join(f'l.{quote(c)} IS NOT NULL' for c in closed)}""", [t["run"]])
+                        WHERE {current}""", [t["run"]])
     if log_columns and not widened and sql(conn, "SELECT to_regclass($1) IS NOT NULL", [t["history"]])[0][0]:
         return
     columns = ", ".join(quote(c) for c, _ in sql(conn, COLUMNS, [t["log_table"]])

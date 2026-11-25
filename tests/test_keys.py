@@ -272,19 +272,46 @@ def test_a_comment_on_op_that_names_another_key_than_the_change_logs_stops_with_
     log_replays(erp)
 
 
-def test_a_primary_key_changed_by_hand_to_the_definitions_new_key_before_the_run_is_named_as_the_cause(erp):
-    ok(erp)  # ticket 17, M7
-    erp.target("alter table raw_erp.customers drop constraint customers_pkey, add primary key (customer_no, name)")
-    apply(erp, definition(erp, ANOTHER_KEY))
-    erp.target("update _rowvioli.tables set requested_at = now()")
-    put_back = """COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '[{"key": ["customer_no", "name"]}]'"""
-    assert failed(erp) == (
-        "the comment on column _op of the change log raw_erp.customers__log, which says the keys it was written "
-        "under, names (customer_no) last, where the change log is written under (customer_no, name): the comment was "
-        "changed, or the mirror's primary key was changed by hand to the definition's new key before a run changed "
-        f"it; put it back, {put_back}")
-    erp.target(put_back)
-    again(erp)
+@pytest.mark.parametrize("earlier", [False, True])
+def test_a_primary_key_changed_by_hand_to_the_definitions_new_key_before_the_run_is_changed_as_the_definition_would(
+        erp, earlier):
+    ok(erp)  # tickets 17, M7, and 18: the stop gave the comment there already, or a key the log was not written under
+    moments = [(erp.target(LOADED_AT)[0][0], rows(erp.target, MIRROR))]
+    if earlier:  # a change of key by the definition before
+        apply(erp, definition(erp, ANOTHER_KEY))
+        moments.append((again(erp), rows(erp.target, MIRROR)))
+    erp.source("update customers set name = 'Bert' where customer_no = 2")
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    [(pk,)] = erp.target("select conname from pg_constraint where conrelid = 'raw_erp.customers'::regclass and "
+                         "contype = 'p'")
+    erp.target(f"alter table raw_erp.customers drop constraint {pk}, add primary key (name)")
+    apply(erp, definition(erp, '"public.customers" = { key = ["name"] }\n'))
+    erp.source("update customers set city = 'Kiel' where customer_no = 3")
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    assert primary_key(erp) == ["name"]
+    assert [k["key"] for k in comment(erp)] == [["customer_no"], *[["customer_no", "name"]] * earlier, ["name"]]
+    log_replays(erp)
+    for moment, mirror in moments:
+        assert at(erp, moment) == mirror
+
+
+def test_a_primary_key_changed_by_hand_to_a_third_key_while_the_definition_changes_it_changes_from_the_recorded_one(
+        erp):
+    erp.source("update customers set city = 'Kiel' where customer_no = 3")
+    ok(erp)  # ticket 18, review: the stop said to write the hand's key into the comment, which the log was not written under
+    moments = [(erp.target(LOADED_AT)[0][0], rows(erp.target, MIRROR))]
+    erp.target("alter table raw_erp.customers drop constraint customers_pkey, add primary key (city)")
+    apply(erp, definition(erp, '"public.customers" = { key = ["name"] }\n'))
+    erp.source("update customers set city = 'Ulm' where customer_no = 2")
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    erp.source("alter table customers drop constraint customers_pkey, alter customer_no drop not null")  # no key now
+    erp.source("update customers set city = null, customer_no = null where customer_no = 1")
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    assert primary_key(erp) == ["name"]
+    assert [k["key"] for k in comment(erp)] == [["customer_no"], ["name"]]
+    log_replays(erp)
+    for moment, mirror in moments:
+        assert at(erp, moment) == mirror
 
 
 @pytest.mark.parametrize("removal", ["is null", "is 'our customers'", "a key no list", "a from no moment",
@@ -340,6 +367,25 @@ def test_a_lost_comment_on_op_of_a_change_log_begun_after_a_change_of_key_is_no_
     log_replays(erp, f"raw_erp.{table}")
 
 
+def test_a_lost_comment_on_op_back_under_an_earlier_target_name_gives_that_change_logs_keys_to_put_back(erp):
+    ok(erp)  # ticket 18, item 4: a note of another target name's change log, newer than this one's first row
+    apply(erp, definition(erp, ANOTHER_KEY))
+    again(erp)
+    keys = comment(erp)
+    apply(erp, definition(erp, ANOTHER_KEY.replace("}", ', target_table = "clients" }')))
+    again(erp)
+    apply(erp, definition(erp, '"public.customers" = { key = ["name"], target_table = "clients" }\n'))
+    again(erp)
+    apply(erp, definition(erp, ANOTHER_KEY))
+    erp.target("comment on column raw_erp.customers__log._op is null")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    put_back = f"""COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '{json.dumps(keys)}'"""
+    assert failed(erp).endswith(f"put it back, {put_back}")
+    erp.target(put_back)
+    again(erp)
+    log_replays(erp)
+
+
 def test_a_lost_comment_on_op_of_a_mirror_renamed_by_hand_gives_its_keys_to_put_back(erp):  # ticket 17, V1
     ok(erp)
     apply(erp, definition(erp, ANOTHER_KEY))
@@ -356,6 +402,40 @@ def test_a_lost_comment_on_op_of_a_mirror_renamed_by_hand_gives_its_keys_to_put_
     erp.target(put_back)
     again(erp)
     log_replays(erp, "raw_erp.clients")
+
+
+@pytest.mark.parametrize("earlier", [True, False])
+def test_a_primary_key_changed_by_hand_to_the_new_key_of_a_mirror_renamed_by_hand_stops_with_the_old_key_to_put_back(
+        erp, earlier):
+    ok(erp)  # ticket 18, review: without a record under the new name the stop gave the comment there already
+    moments = [(erp.target(LOADED_AT)[0][0], rows(erp.target, MIRROR))]
+    if earlier:  # a change of key by the definition, whose note gives the comment's text
+        apply(erp, definition(erp, ANOTHER_KEY))
+        moments.append((again(erp), rows(erp.target, MIRROR)))
+    old = comment(erp)[-1]["key"]
+    erp.target("alter table raw_erp.customers rename to clients; alter table raw_erp.customers__log rename to "
+               "clients__log; alter view raw_erp.customers__history rename to clients__history")
+    [(pk,)] = erp.target("select conname from pg_constraint where conrelid = 'raw_erp.clients'::regclass and "
+                         "contype = 'p'")
+    erp.target(f"alter table raw_erp.clients drop constraint {pk}, add constraint by_name primary key (name)")
+    pk = "by_name"
+    apply(erp, definition(erp, '"public.customers" = { key = ["name"], target_table = "clients" }\n'))
+    erp.source("update customers set city = 'Kiel' where customer_no = 3")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    put_back = f'ALTER TABLE "raw_erp"."clients" DROP CONSTRAINT "{pk}", ADD PRIMARY KEY ({", ".join(f'"{c}"' for c in old)})'
+    assert reason.endswith(put_back if earlier else f"or the old primary key, {put_back}"), reason
+    erp.target(put_back)
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    moments.append((erp.target("select loaded_at from _rowvioli.tables")[0][0],
+                    rows(erp.target, "select customer_no, name, city from raw_erp.clients")))
+    assert primary_key(erp, "raw_erp.clients") == ["name"]
+    log_replays(erp, "raw_erp.clients")
+    for moment, mirror in moments:
+        assert rows(lambda q: erp.target(q, [moment, moment]), "select customer_no, name, city from "
+                    "raw_erp.clients__history where _valid_from <= %s and (_valid_to > %s or _valid_to is null)") \
+            == mirror
 
 
 def test_a_column_of_an_old_key_retired_in_the_change_log_is_renamed_in_the_comment_on_op_too(erp):  # decision 9

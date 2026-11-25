@@ -82,6 +82,46 @@ def test_a_column_a_person_dropped_from_the_mirror_before_the_run_that_follows_t
     assert erp.target("select count(*) from raw_erp.customers__log where _loaded_at = %s", [third]) == [(0,)]
 
 
+@pytest.mark.parametrize("by_hand, source", [
+    ("retyped", "update customers set city = null where customer_no = 1"),  # the way out of G4 (ticket 18)
+    ("retyped", "update customers set city = 'Ulm' where customer_no = 1"),
+    ("retyped", None),
+    ("retyped", "alter table customers alter city type int using nullif(length(city), 4)"),
+    ("dropped", None),
+    ("dropped", "update customers set city = null where customer_no = 1"),
+    ("dropped before the record", "update customers set city = null where customer_no = 1"),
+    ("dropped before the record", "alter table customers alter city type int using nullif(length(city), 4)")])
+def test_a_column_a_person_dropped_from_the_mirror_that_the_source_keeps_is_closed_in_the_log_and_comes_back(
+        erp, by_hand, source):
+    ok(erp)  # ticket 18: the source's values came against null, and a null left the change log's last value current
+    moments = [(erp.target(LOADED_AT)[0][0], rows(erp.target, MIRROR))]
+    if by_hand == "retyped":
+        erp.target("alter table raw_erp.customers alter city type int using length(city)")
+        erp.target("update _rowvioli.tables set requested_at = now()")
+        drop = re.search(r"(ALTER TABLE .*)$", failed(erp))[1]
+    else:
+        drop = 'ALTER TABLE "raw_erp"."customers" DROP COLUMN "city"'
+    if source:
+        erp.source(source)
+    erp.target(drop)
+    if by_hand == "dropped before the record":  # a table last loaded by a program that kept none (before version 4)
+        erp.target("delete from _rowvioli.columns where target_table = 'customers'")
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
+    log_replays(erp)
+    retired = [c for c in columns(erp, "raw_erp.customers__log") if c.startswith("city__")]
+    for i, (moment, mirror) in enumerate(moments):  # the history at every moment is the mirror then
+        city = retired[0] if retired and not i else "city"
+        assert rows(lambda q: erp.target(q, [moment, moment]), f"select customer_no, name, {city} from "
+                    "raw_erp.customers__history where _valid_from <= %s and (_valid_to > %s or _valid_to is null)") \
+            == mirror, i
+    for c in retired:  # a retired column has no current value
+        assert erp.target(f'select count(*) from raw_erp.customers__history where _valid_to is null and "{c}" is not '
+                          "null") == [(0,)]
+    third = again(erp)  # once
+    assert erp.target("select count(*) from raw_erp.customers__log where _loaded_at = %s", [third]) == [(0,)]
+
+
 def test_two_columns_a_person_dropped_from_the_mirror_close_a_row_that_had_a_value_in_only_one(erp):
     ok(erp)  # customer 3 has a name and no city: the closing U is written for a value in any of the columns
     erp.source("alter table customers drop column name, drop column city")
@@ -117,6 +157,29 @@ def test_A5_without_a_change_log_a_gone_column_stops_the_run_and_says_how_to_dro
     assert failed(erp) == ("column city is missing in the source, and no change log keeps its values, "
                            'so a person drops it: ALTER TABLE "raw_erp"."customers" DROP COLUMN "city"')
     assert rows(erp.target, MIRROR) == before
+
+
+@pytest.mark.parametrize("gone", [False, True])  # with a column that goes, whose rows the update in place keeps
+def test_a_row_a_person_deletes_from_the_mirror_while_the_run_compares_is_back_with_its_update(erp, gone):
+    ok(erp)  # ticket 18: the update in place changed no row, the change log said U, and the mirror lacked the row
+    erp.source("update customers set city = 'Köln' where customer_no = 1")
+    if gone:
+        erp.source("alter table customers drop column name")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    with psycopg.connect(erp.target_url) as person:  # lets the run compare and holds it before it writes
+        person.execute("lock table raw_erp.customers in share row exclusive mode")
+        worker = erp.start("run")
+        until(lambda: erp.target("select 1 from pg_locks where not granted and mode = 'RowExclusiveLock' and relation "
+                                 "= 'raw_erp.customers'::regclass") if not gone else  # its own lock it tries again
+              erp.target("select 1 from pg_stat_activity where datname = current_database() "
+                         "and (query like 'LOCK TABLE%' or query = 'ROLLBACK')"))
+        # customer 2 differs only in the column that went, the change log's U alone
+        person.execute(f"delete from raw_erp.customers where customer_no in (1{', 2' * gone})")
+    assert worker.wait(timeout=30) == 0
+    assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
+    log_replays(erp)
+    assert erp.target("select inserted, updated, deleted from _rowvioli.runs order by run desc limit 1") == [
+        (0, 1 + gone, 0)]
 
 
 def test_a_column_goes_in_the_run_that_changes_deletes_and_inserts_rows(erp):  # story 4
@@ -302,6 +365,23 @@ def test_A10_a_gone_key_column_stops_the_run_as_before(erp):
     assert failed(erp) == ("table public.customers has no column customer_no, which the key names: give the table a key of "
                            "the columns it has: name, city")
     assert columns(erp) == ["customer_no", "name", "city"]
+
+
+@pytest.mark.parametrize("key", ["customer_no", "name"])  # name: an old key column, in the run that changes the key
+@pytest.mark.parametrize("record", [True, False])
+def test_a_key_column_a_person_dropped_from_the_mirror_stops_and_another_target_table_leads_out(erp, record, key):
+    ok(erp)  # ticket 18: the run failed with SQLSTATE 42703, withheld; under a new key with a null in the change log
+    erp.target("alter table raw_erp.customers drop column customer_no")
+    if not record:  # a table last loaded by a program that kept none (before version 4)
+        erp.target("delete from _rowvioli.columns where target_table = 'customers'")
+    apply(erp, definition(erp, f'"public.customers" = {{ key = ["{key}"] }}\n'))
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    assert reason == ("key column customer_no is missing in the mirror raw_erp.customers, dropped by hand, so its rows "
+                      "cannot be told apart: give the table another target_table, which begins a new mirror"), reason
+    apply(erp, definition(erp, f'"public.customers" = {{ key = ["{key}"], target_table = "clients" }}\n'))
+    ok(erp)
+    assert rows(erp.target, "select * from raw_erp.clients") == rows(erp.source, "select * from customers")
 
 
 def test_A11_A15_a_column_back_with_its_type_continues_its_log_column_and_the_record_shows_the_gap(erp):
@@ -536,6 +616,21 @@ def test_a_retired_column_whose_comment_a_person_removed_stops_with_the_text_to_
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert failed(erp).startswith(f"column city__{run} of the source has the name under which the change log keeps "
                                   "the old values of city")
+
+
+def test_a_source_column_under_a_new_target_name_named_like_an_old_target_names_retired_one_is_no_retired_column(erp):
+    ok(erp)  # ticket 18, item 4: the check read the note of the old target name's retired column
+    erp.source("alter table customers drop column city")
+    again(erp)
+    erp.source("alter table customers add column city integer")
+    again(erp)
+    [(run,)] = erp.target("select max(run) from _rowvioli.runs")
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], target_table = "clients" }\n'))
+    erp.source(f"alter table customers add column city__{run} text")
+    again(erp)
+    erp.source(f"update customers set city__{run} = 'x' where customer_no = 1")
+    again(erp)
+    log_replays(erp, "raw_erp.clients")
 
 
 @pytest.mark.parametrize("catalog", [None, "data", "definition"])
