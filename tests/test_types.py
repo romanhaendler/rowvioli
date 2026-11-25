@@ -109,7 +109,7 @@ def test_B6_B8_without_a_change_log_a_type_of_another_family_stops_and_says_how_
     erp.source("alter table amounts alter a type timestamptz")
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert failed(erp) == ("column a has changed its type from timestamp without time zone to timestamp with time "
-                           "zone; without a change log its values are nowhere else, so a person drops it and the ne***t "
+                           "zone, and no change log keeps its values, so a person drops it and the next "
                            'run adds it anew: ALTER TABLE "raw_erp"."amounts" DROP COLUMN "a"')  # x is the password
     erp.target('ALTER TABLE "raw_erp"."amounts" DROP COLUMN "a"')  # the way out
     again(erp)
@@ -167,18 +167,20 @@ def test_a_type_of_any_family_widened_by_hand_in_the_mirror_is_followed_in_the_c
     log_replays(erp, "raw_erp.amounts")
 
 
-def test_G4_a_type_changed_by_hand_to_another_family_stops_and_says_the_way_out_which_works(erp):  # story 47
-    amounts(erp, "integer", "(1, 10), (2, null)")
+@pytest.mark.parametrize("source, values", [("integer", [(1, 10), (2, None)]), ("text", [(1, "10"), (2, None)])])
+def test_G4_a_type_changed_by_hand_to_another_family_stops_and_says_the_way_out_which_works(erp, source, values):
+    amounts(erp, "integer", "(1, 10), (2, null)")  # story 47; the source changing too is ticket 17, M4
     erp.target("alter table raw_erp.amounts alter a type text")
+    erp.source(f"alter table amounts alter a type {source}")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    assert failed(erp) == (  # x is the harness's password, which a reason hides
-        "column a of the mirror has the type te***t, of another family than the integer the source delivers, and a run "
-        "does not change it back; drop it from the mirror and the ne***t run brings it again: "
+    assert failed(erp) == (
+        "column a of the mirror has the type text, of another family than the integer it has in the change log, and a "
+        "run does not change it back; drop it from the mirror and the next run brings it again: "
         'ALTER TABLE "raw_erp"."amounts" DROP COLUMN "a"')
     erp.target('ALTER TABLE "raw_erp"."amounts" DROP COLUMN "a"')
     again(erp)
-    assert types(erp, "a") == ["integer", "integer"]
-    assert erp.target("select id, a from raw_erp.amounts order by id") == [(1, 10), (2, None)]
+    assert types(erp, "a") == [source, source]
+    assert erp.target("select id, a from raw_erp.amounts order by id") == values
     log_replays(erp, "raw_erp.amounts")
 
 
@@ -203,7 +205,7 @@ def test_G1_a_column_a_person_added_whose_name_the_source_brings_in_its_family_i
     erp.source("alter table amounts add column memo text")
     erp.source("update amounts set memo = 'theirs'")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    assert failed(erp) == (  # x is the harness's password, which a reason hides
+    assert failed(erp) == (
         "column memo of the mirror is not in the change log, so it is not known to be from the source; the source "
         "brings a column memo, which a run would write into: drop it from the mirror, after copying its values into "
         'a table of your own if they are to be kept: CREATE TABLE <a table of yours> AS SELECT "id", "memo" FROM '
@@ -264,7 +266,7 @@ def test_a_parquet_key_column_that_flips_to_another_family_stops_with_the_way_ou
     assert load(files, COUNTS)[0] == 0
     pq.write_table(pa.table({"id": pa.array(["1", "2"], pa.string())}), files.dir / "files" / "counts.parquet")
     code, answer = load(files, COUNTS)  # the drop of the generic way out would take the key column for good
-    assert answer["raw_files.counts"]["reason"].replace("***", "x") == (  # x is the harness's password
+    assert answer["raw_files.counts"]["reason"] == (
         "column id has changed its type from integer to text, a type of another family in the key, so a row before "
         "cannot be told from one after: give the table another target_table, which begins a new mirror")
 
@@ -380,7 +382,7 @@ def test_without_a_change_log_a_pin_taken_out_of_columns_stops_and_says_how_to_d
     code, answer = load(files, table.format(""))
     assert code == 1
     assert answer["raw_files.counts"]["reason"] == (
-        "column n has changed its type from integer to text; without a change log its values are nowhere else, so a "
+        "column n has changed its type from integer to text, and no change log keeps its values, so a "
         'person drops it and the next run adds it anew: ALTER TABLE "raw_files"."counts" DROP COLUMN "n"')
 
 
@@ -391,7 +393,7 @@ def test_without_a_change_log_a_type_under_columns_of_another_family_stops_and_s
     code, answer = load(files, table.format(', columns = { n = "integer" }'))
     assert code == 1
     assert answer["raw_files.counts"]["reason"] == (
-        "column n has changed its type from text to integer; without a change log its values are nowhere else, so a "
+        "column n has changed its type from text to integer, and no change log keeps its values, so a "
         'person drops it and the next run adds it anew: ALTER TABLE "raw_files"."counts" DROP COLUMN "n"')
 
 
@@ -513,7 +515,7 @@ def test_a_run_ended_after_max_seconds_in_a_long_step_of_a_change_says_which_rol
     if change != "key":
         erp.source(change)
     erp.target("update _rowvioli.tables set requested_at = now()")
-    reason = failed(erp).replace("***", "x")  # the source's password is x
+    reason = failed(erp)
     if holder:
         holder.close()
     assert reason == f"ended after max_seconds = 3 while {step}"
@@ -536,7 +538,7 @@ def test_a_short_step_after_a_long_one_that_a_consumer_holds_up_names_no_step(er
     holder = psycopg.connect(erp.target_url)
     try:  # the record of the columns, after the rows, waits for it; reading it does not
         holder.execute("lock table _rowvioli.columns__log in exclusive mode")
-        reason = failed(erp).replace("***", "x")
+        reason = failed(erp)
     finally:
         holder.close()
     assert reason.startswith("raw_erp.customers, its change log and its history view were held by this run when an "

@@ -36,14 +36,14 @@ ROWVIOLI = shutil.which("rowvioli", path=os.path.dirname(sys.executable))
 
 def _start(name):
     subprocess.run(["docker", "run", "-d", "--name", name, "--label", "rowvioli-test",
-                    "-e", "POSTGRES_PASSWORD=x", "-p", "127.0.0.1::5432", IMAGE, "-c", "max_connections=500"],
+                    "-e", "POSTGRES_PASSWORD=harness-pw-7", "-p", "127.0.0.1::5432", IMAGE, "-c", "max_connections=500"],
                    check=True, capture_output=True)
 
 
 def _url(name, db="postgres"):
     port = subprocess.run(["docker", "port", name, "5432/tcp"], check=True, capture_output=True,
                           text=True).stdout.split()[0].rsplit(":", 1)[1]
-    return f"postgresql://postgres:x@{HOST}:{port}/{db}"
+    return f"postgresql://postgres:harness-pw-7@{HOST}:{port}/{db}"
 
 
 def _wait(url):

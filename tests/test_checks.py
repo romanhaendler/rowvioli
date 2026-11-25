@@ -21,6 +21,10 @@ def failed(rv, *args):
 
 
 MIRROR = "select * from raw_erp.customers"
+# what a reason says of an object the source does not have (ticket 17, L2, G2)
+MISSING = ("an object the statement reading {table} names does not exist (SQLSTATE {state}): the table itself, a "
+           "column, or one a view of it reads; rowvioli list erp shows the tables, and a table renamed or moved in "
+           "the source keeps its mirror and history when the definition names it anew and keeps its target_table")
 
 
 @pytest.mark.parametrize("change, expected", [
@@ -33,8 +37,8 @@ MIRROR = "select * from raw_erp.customers"
     ("delete from customers", "zero rows"),
     ("delete from customers where customer_no <> 1", "67 % of the rows would be deleted"),
     ("alter table customers alter customer_no type text", "column customer_no has changed its type from integer to "
-     "te***t, a type of another family in the key, so a row before cannot be told from one after: give the table "
-     "another target_table"),  # cases C8; the harness's password is x, which a reason hides
+     "text, a type of another family in the key, so a row before cannot be told from one after: give the table "
+     "another target_table"),  # cases C8
     ("alter table customers add column _op text", "column _op is a name of the change log"),
     ("alter table customers add column _run int", "column _run is a name of the change log"),
 ])
@@ -59,35 +63,66 @@ def test_another_key_that_does_not_identify_a_row_fails_the_run_and_leaves_the_m
     assert rows(erp.target, MIRROR) == before
 
 
-def test_a_table_that_lost_its_key_in_the_definition_says_so_and_names_both_ways_out(erp):
-    ok(erp)
+def test_a_table_that_lost_its_key_in_the_definition_says_the_least_that_works_and_keeps_the_mirror(erp):
+    ok(erp)  # ticket 17, E2: the reason told to drop the mirror too, which consumers read
     apply(erp, definition(erp, '"public.customers" = {}\n'))
     erp.target("update _rowvioli.tables set requested_at = now()")
-    reason = failed(erp)
-    assert "no key any more" in reason and "['customer_no']" in reason, reason
-    assert "put the key back" in reason and "target_table" in reason, reason
-    assert "[] differs" not in reason, reason
+    assert failed(erp) == ("the change log raw_erp.customers__log exists and this run would not write to it (log = "
+                           'false or no key): drop it with its history view (DROP TABLE "raw_erp"."customers__log" '
+                           "CASCADE), or rename both with the mirror")
+    erp.target('DROP TABLE "raw_erp"."customers__log" CASCADE')
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
 
 
-@pytest.mark.parametrize("table, says", [('{ key = ["customer_no"], log = false }', "and this run would not "
-                                          "write to it"), ("{}", "no key any more")])
-def test_a_change_log_this_run_would_not_write_is_told_before_a_column_gone_from_the_source(erp, table, says):
+@pytest.mark.parametrize("table", ['{ key = ["customer_no"], log = false }', "{}"])
+def test_a_change_log_this_run_would_not_write_is_told_before_a_column_gone_from_the_source(erp, table):
     ok(erp)  # ticket 15, P3: the stop for the column said to drop it, and doing so led into this stop
     apply(erp, definition(erp, f'"public.customers" = {table}\n'))
     erp.source("alter table customers drop column city")
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
-    assert says in reason
+    assert "and this run would not write to it" in reason
     # its way out, followed as it says, leads into no second stop: the column's drop is said with the change log's
-    ways = ['DROP TABLE "raw_erp"."customers__log" CASCADE'] + (
-        ['ALTER TABLE "raw_erp"."customers" DROP COLUMN "city"'] if "log = false" in table else [])
-    for way in ways:
-        assert way in reason.replace("***", "x"), reason
+    for way in ['DROP TABLE "raw_erp"."customers__log" CASCADE', 'ALTER TABLE "raw_erp"."customers" DROP COLUMN "city"']:
+        assert way in reason, reason
         erp.target(way)
-    if "log = false" not in table:  # "and the mirror"
-        erp.target("drop table raw_erp.customers")
     erp.target("update _rowvioli.tables set requested_at = now()")
     ok(erp)
+
+
+@pytest.mark.parametrize("mirror", [False, True])
+@pytest.mark.parametrize("team, what", [
+    ("create table raw_erp.customers__log (x int)", "change log"),
+    ("create table raw_erp.customers__log (customer_no int, name text, city text)", "change log"),
+    ("create view raw_erp.customers__log as select 1 as _run, 'I' as _op, 'epoch'::timestamptz as _loaded_at", "change log"),
+    ("create table raw_erp.customers__history (x int)", "history view"),
+    ("create view raw_erp.customers__history as select 1 as x", "history view")])
+def test_a_table_or_view_of_the_team_named_like_the_change_log_or_history_view_is_never_taken_for_it(
+        erp, team, what, mirror):  # ticket 17, M2
+    erp.target("create schema raw_erp")
+    if mirror:  # the program moves onto a table it did not create
+        erp.target("create table raw_erp.customers (customer_no int primary key, name text, city text)")
+    erp.target(team)
+    name = team.split()[2]
+    before = erp.target(f"select * from {name}")
+    kind = "a table with the columns _run, _op and _loaded_at" if what == "change log" else \
+        "a view with the columns _valid_from and _valid_to"
+    assert failed(erp) == (f"{name} is not rowvioli's {what} ({kind}), so the run leaves it alone: rename it, or "
+                           "give the table another target_table")
+    assert erp.target(f"select * from {name}") == before
+
+
+@pytest.mark.parametrize("table, name", [('"public.notes" = {}', "raw_erp.notes__history"),
+                                         ('"public.customers" = { key = ["customer_no"], log = false }',
+                                          "raw_erp.customers__history")])
+def test_a_view_of_the_team_named_like_a_history_view_beside_a_table_without_a_change_log_is_no_stop(erp, table, name):
+    erp.target("create schema raw_erp")  # review of ticket 17, M2: such a table has no history view, and 0.4.1 loaded
+    erp.target(f"create view {name} as select 1 as x")
+    apply(erp, definition(erp, table + "\n"))
+    ok(erp)
+    assert erp.target(f"select * from {name}") == [(1,)]
 
 
 def test_a_new_source_column_appears_in_the_mirror_and_the_change_log_with_values(erp):
@@ -168,7 +203,7 @@ def secret(erp):
     role = "reader_" + erp.source_url.rsplit("/", 1)[1]
     erp.source(f"create role {role} login password '{PASSWORD}'")
     erp.source(f"grant select on all tables in schema public to {role}")
-    url = erp.source_url.replace("postgres:x@", f"{role}:$ERP_PASSWORD@")
+    url = erp.source_url.replace("postgres:harness-pw-7@", f"{role}:$ERP_PASSWORD@")
     text = definition(erp).replace(erp.source_url, url)
     erp.definition({"erp.toml": text, "crm.toml": text.replace("[erp", "[crm")})
     return erp
@@ -229,7 +264,11 @@ def test_the_password_appears_nowhere_when_a_run_fails(secret):
 def test_the_password_appears_nowhere_when_the_source_refuses_the_login(secret):
     out = [apply_with(secret, WRONG), secret.run("run", "erp")]
     assert out[-1].returncode == 1
-    assert "password authentication failed" in secret.target("select reason from _rowvioli.runs")[0][0]
+    [(reason,)] = secret.target("select reason from _rowvioli.runs")
+    assert "password authentication failed" in reason
+    # ticket 17, L1: a person fixes the variable and runs again, and meets the same reason
+    assert reason.endswith("; the connection is the one the last apply stored: after changing a variable it reads, "
+                           "run apply again"), reason
     assert leaks(secret, WRONG, *out) == []
 
 
@@ -321,7 +360,7 @@ def test_a_table_without_a_key_is_emptied_the_same_way(erp):
     ('my "secret": value', "n::int", "22P02"), ("3000000000", "n::int", "22003"),
     # Postgres's own messages that show the value unquoted or as a name: date field value out of range: 2000-13-01,
     # relation "3000000000" does not exist
-    ("3000000000", "make_date(2000, length(n) + 3, 1)", "22008"), ("3000000000", "n::regclass", "42P01"),
+    ("3000000000", "make_date(2000, length(n) + 3, 1)", "22008"),
     # a syntax error of a row's value, which Postgres quotes in class 42 too: syntax error in tsquery: "my secret 4711",
     # syntax error at or near "4711", improper relation name (too many dotted names): a.b.c.secret.e, invalid name
     # syntax; of class 42 only a missing right is shown
@@ -339,8 +378,17 @@ def test_a_value_in_the_sources_message_is_withheld_by_its_sqlstate(erp, value, 
     apply(erp, definition(erp, '"public.quoting" = {}\n'))
     reason = failed(erp)
     assert reason == (f"a statement raised an error (SQLSTATE {state}) in the source, reading public.quoting; its "
-                      "message may hold a row's values, so it is left out here: the source's server log has it"), reason
+                      "message may hold a row's values, so it is left out here: the source's server log or a trace has it"), reason
     assert "secret" not in reason and "3000000000" not in reason and "2000-13" not in reason
+
+
+def test_an_object_a_rows_value_names_that_does_not_exist_is_said_without_the_value(erp):  # ticket 17, L2
+    erp.source("create table texts (k int, n text)")
+    erp.source("insert into texts values (1, '3000000000')")
+    erp.source("create view quoting as select k, n::regclass as n from texts")  # relation "3000000000" does not exist
+    apply(erp, definition(erp, '"public.quoting" = {}\n'))
+    reason = failed(erp)
+    assert reason == MISSING.format(table="public.quoting", state="42P01") and "3000000000" not in reason
 
 
 @pytest.mark.parametrize("where", ["target", "source"])
@@ -349,7 +397,7 @@ def test_a_statement_timeout_that_ends_a_run_is_named_with_the_way_out(erp, wher
     apply(erp, definition(erp, '"public.many" = { key = ["id"] }\n'))
     db = getattr(erp, f"{where}_url").rsplit("/", 1)[1]
     getattr(erp, where)(f"alter role postgres in database {db} set statement_timeout = '300ms'")
-    assert failed(erp).replace("***", "x") == (
+    assert failed(erp) == (
         "canceling statement due to statement timeout: the statement_timeout of the role in the " + where + " ended it; "
         "to let a run take longer, ALTER ROLE <its role> IN DATABASE <its database> SET statement_timeout = 0")
 
@@ -392,7 +440,7 @@ def test_a_message_a_consumers_trigger_raises_on_the_target_is_withheld_and_the_
     ok(erp)
     erp.target(f"create function public.guard() returns trigger language plpgsql as $$ begin {statement}; return NEW;"
                " end $$")
-    erp.target("create trigger g before insert on raw_erp.customers for each row execute function public.guard()")
+    erp.target("create trigger g before insert or update on raw_erp.customers for each row execute function public.guard()")
     erp.source("update customers set name = 'Anna2' where customer_no = 1")
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert withheld(erp) == (f"function guard() raised an error (SQLSTATE {sqlstate}) in the target; its message may "
@@ -426,10 +474,10 @@ def test_a_message_a_function_in_a_source_view_raises_is_withheld(erp, statement
                f"if n = 'Anna' then {statement}; end if; return n; end $$")
     erp.source("create view checked as select customer_no, check_name(name) as name from customers")
     apply(erp, definition(erp, '"public.checked" = { key = ["customer_no"] }\n'))
-    state = "P0001" if "raise" in statement else "42P01"  # x is the harness's password
-    assert withheld(erp) == (f"function check_name(te***t) raised an error (SQLSTATE {state}) in the source, reading "
+    state = "P0001" if "raise" in statement else "42P01"
+    assert withheld(erp) == (f"function check_name(text) raised an error (SQLSTATE {state}) in the source, reading "
                              "public.checked; its message may hold a row's values, so it is left out here: the "
-                             "source's server log has it")
+                             "source's server log or a trace has it")
 
 
 @pytest.mark.parametrize("constraint, change, says", [
@@ -444,7 +492,74 @@ def test_postgres_own_constraint_messages_keep_their_names(erp, constraint, chan
     erp.target(f"alter table raw_erp.customers {constraint}")
     erp.source(f"update customers set {change} where customer_no = 1")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    assert failed(erp).endswith(says)
+    assert says in failed(erp)  # a unique constraint's with the way out (review of ticket 17)
+
+
+ORDERS = "create schema reporting; create table reporting.orders (id int, customer_no int references raw_erp.customers{})"
+
+
+@pytest.mark.parametrize("action", ["", " on delete cascade", " on delete set null"])
+def test_a_consumers_foreign_key_onto_the_mirror_keeps_its_rows_when_a_row_it_refers_to_is_updated(erp, action):
+    ok(erp)  # ticket 17, M1: an update was a delete and an insert, which the key refused, cascaded or set null
+    erp.target(ORDERS.format(action) + "; insert into reporting.orders values (1, 1)")
+    erp.source("update customers set city = 'Köln' where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    assert erp.target("select * from reporting.orders") == [(1, 1)]
+    assert erp.target("select city from raw_erp.customers where customer_no = 1") == [("Köln",)]
+
+
+def test_a_row_the_source_deleted_that_a_consumers_foreign_key_refers_to_stops_with_the_way_out(erp):  # ticket 17, M1
+    ok(erp)
+    erp.target(ORDERS.format("") + "; insert into reporting.orders values (1, 1)")
+    erp.source("delete from customers where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == (
+        'update or delete on table "customers" violates foreign key constraint "orders_customer_no_fkey" on table '
+        '"orders"' + REFERS.format('"orders"'))
+    erp.target("delete from reporting.orders")  # the way out
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+
+
+REFERS = (": the source deleted a row that table {0} refers to, or changed the value it refers to; delete the rows "
+          "there that refer to it, or give the constraint ON DELETE CASCADE or ON DELETE SET NULL (ON UPDATE CASCADE "
+          "for a changed value)")
+
+
+def test_a_value_the_source_changed_that_a_consumers_foreign_key_refers_to_is_not_called_a_deleted_row(erp):
+    ok(erp)  # review of ticket 17: a foreign key onto a unique column of the mirror that is not its key
+    erp.target("alter table raw_erp.customers add constraint city_u unique (city); create schema reporting; "
+               "create table reporting.visits (city text references raw_erp.customers (city)); "
+               "insert into reporting.visits values ('Bonn')")
+    erp.source("update customers set city = 'Köln' where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == ('update or delete on table "customers" violates foreign key constraint "visits_city_fkey" '
+                           'on table "visits"' + REFERS.format('"visits"'))
+    erp.target("alter table reporting.visits drop constraint visits_city_fkey, add foreign key (city) references "
+               "raw_erp.customers (city) on update cascade")  # the way out
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    assert erp.target("select city from reporting.visits") == [("Köln",)]
+
+
+def test_values_two_rows_swap_stop_on_a_consumers_unique_index_with_the_way_out_and_no_value(erp):
+    ok(erp)  # review of ticket 17, M1: an update in place meets a unique index row by row, a delete and insert did not
+    erp.target("create unique index city_u on raw_erp.customers (city)")
+    erp.source("update customers set city = case customer_no when 1 then 'Essen' else 'Bonn' end "
+               "where customer_no in (1, 2)")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == (
+        'duplicate key value violates unique constraint "city_u": Postgres checks a unique index on the mirror row by '
+        "row, so it refuses a value that moves from one row to another within a run, as well as one the source holds "
+        "twice; drop it, or put in its place a constraint that Postgres checks at the end of the statement: ALTER TABLE "
+        "<the mirror> ADD UNIQUE (<its columns>) DEFERRABLE")
+    erp.target("drop index raw_erp.city_u; alter table raw_erp.customers add unique (city) deferrable")  # the way out
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
+    from test_columns_go_and_come import log_replays  # here: that module imports this one
+    log_replays(erp)
 
 
 def test_a_source_table_created_anew_with_other_columns_says_what_it_may_be_and_the_setting_for_one_run(erp):  # H2
@@ -452,7 +567,7 @@ def test_a_source_table_created_anew_with_other_columns_says_what_it_may_be_and_
     erp.source("drop table customers; create table customers (customer_no int primary key, label text);"
                "insert into customers values (7, 'a'), (8, 'b'), (9, 'c')")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    assert failed(erp).replace("***", "x") == (  # the source's password is x, and the reason hides it
+    assert failed(erp) == (
         "100 % of the rows would be deleted, more than max_delete_share = 0.5 allows: the source table may have been "
         "replaced or emptied; if so, max_delete_share = 1.0 on the table lets one run through")
     apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], max_delete_share = 1.0 }\n'))
@@ -520,7 +635,7 @@ def test_a_message_a_consumers_trigger_in_pl_perl_or_pl_python_raises_is_withhel
     language(erp.target, name)
     ok(erp)
     erp.target(f"create function public.guard() returns trigger language {name} as $${RAISES[name][0]}$$")
-    erp.target("create trigger g before insert on raw_erp.customers for each row execute function public.guard()")
+    erp.target("create trigger g before insert or update on raw_erp.customers for each row execute function public.guard()")
     erp.source("update customers set name = 'Anna2' where customer_no = 1")
     erp.target("update _rowvioli.tables set requested_at = now()")
     state = {"plperl": "38000", "plpython3u": "XX000"}[name]  # external_routine_exception, internal_error
@@ -535,4 +650,4 @@ def test_a_message_a_function_in_pl_perl_or_pl_python_in_a_source_view_raises_is
     erp.source("create view checked as select customer_no, check_name(name) as name from customers")
     apply(erp, definition(erp, '"public.checked" = { key = ["customer_no"] }\n'))
     assert withheld(erp) == ('function "check_name" raised an error in the source; its message may hold a row\'s '
-                             "values, so it is left out here: the source's server log has it")
+                             "values, so it is left out here: the source's server log or a trace has it")

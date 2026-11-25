@@ -1,7 +1,8 @@
 """Delivers the option `rows` (or `columns`, as it arrives) as a table with one column `n`, or `records`, objects, a
 column per key. With the option `fail` it raises with the connection,
 its values and the password of its URL (and of an ODBC `string`) in the message: `at_once` when called, `deep` from
-a nested call while the batches are read. With the option `print` it writes the connection to stderr, as a chatty
+a nested call while the batches are read. With the option `odd` it delivers what the contract does not allow: `list`
+a list for a batch, `schemas` two batches of two schemas. With the option `print` it writes the connection to stderr, as a chatty
 driver might, and a progress bar to stdout, as DuckDB does."""
 import os
 import re
@@ -29,6 +30,11 @@ def read(connection, table, options):
 
 
 def batches(connection, options):
+    if options.get("odd") == "list":  # what the contract does not allow: no batch
+        yield [1, 2, 3]
+    if options.get("odd") == "schemas":  # a second batch of another schema
+        yield pa.record_batch({"n": [1]})
+        yield pa.record_batch({"n": ["x"]})
     if "records" in options:  # objects, a column per key
         yield pa.RecordBatch.from_pylist(options["records"])
         return

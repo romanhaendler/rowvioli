@@ -22,7 +22,8 @@ def columns(rv, table="raw_erp.customers"):
 
 def log_replays(rv, table="raw_erp.customers"):
     """The invariant: the change log replayed from the last change of key, the latest version of each key without the
-    D rows, gives the mirror. The comment on _op says when the key changed last."""
+    D rows, gives the mirror, by the query of docs/target.md (ticket 17, E1). The comment on _op says when the key
+    changed last."""
     key = ", ".join(f'"{k}"' for (k,) in rv.target(
         "select a.attname from pg_index i join pg_attribute a on a.attrelid = i.indrelid and a.attnum = any(i.indkey) "
         "where i.indrelid = %s::regclass and i.indisprimary", [table]))
@@ -32,8 +33,8 @@ def log_replays(rv, table="raw_erp.customers"):
     since = json.loads(keys)[-1].get("from") if keys else None
     stretch = "_loaded_at > %s or _loaded_at = %s and _op = 'I'" if since else "true"
     replay = rows(lambda q: rv.target(q, [since, since] if since else None),
-                  f"select {names} from (select distinct on ({key}) _op, {names} from {table}__log where {stretch} "
-                  f"order by {key}, _loaded_at desc, _run desc) r where _op <> 'D'")
+                  f"select {names} from (select distinct on ({key}) _op, {names} from only {table}__log where {stretch} "
+                  f"order by {key}, _loaded_at desc, _op = 'D') r where _op <> 'D'")
     assert replay == rows(rv.target, f"select {names} from {table}")
 
 
@@ -63,14 +64,36 @@ def test_A5_a_column_gone_from_the_source_leaves_the_mirror_and_its_values_stay_
 COUNTS = "select inserted, updated, deleted from _rowvioli.runs order by run desc limit 1"
 
 
-@pytest.mark.parametrize("table", ['{ key = ["customer_no"], log = false }', "{}"])
+def test_a_column_a_person_dropped_from_the_mirror_before_the_run_that_follows_the_source_is_closed_in_the_log(erp):
+    ok(erp)  # ticket 17, M3: the history showed its last values as current for good
+    first = erp.target(LOADED_AT)[0][0]
+    erp.source("alter table customers drop column city")
+    erp.target("alter table raw_erp.customers drop column city")
+    erp.source("update customers set name = 'Bert2' where customer_no = 2")  # a row this run writes anyway
+    second = again(erp)
+    assert erp.target(LOG) == [("U", 1, None), ("U", 2, None)]
+    assert erp.target(CITY) == [("Bonn", first, second), (None, second, None)]
+    assert erp.target("select count(*) from raw_erp.customers__history where _valid_to is null and city is not null") \
+        == [(0,)]
+    assert erp.target(COUNTS) == [(0, 1, 0)]
+    assert erp.target(LAST) == [("U", "city", False, "hand", None)]
+    log_replays(erp)
+    third = again(erp)  # once
+    assert erp.target("select count(*) from raw_erp.customers__log where _loaded_at = %s", [third]) == [(0,)]
+
+
+@pytest.mark.parametrize("table", ['{ key = ["customer_no"], log = false }', "{}", "begins"])
 def test_A5_without_a_change_log_a_gone_column_stops_the_run_and_says_how_to_drop_it(erp, table):
-    apply(erp, definition(erp, f'"public.customers" = {table}\n'))
-    ok(erp)
+    if table == "begins":  # the first run onto a table it did not create, whose change log begins (ticket 17, M5)
+        erp.target("create schema raw_erp; create table raw_erp.customers (customer_no int primary key, name text, "
+                   "city text); insert into raw_erp.customers values (1, 'Anna', 'Bonn')")
+    else:
+        apply(erp, definition(erp, f'"public.customers" = {table}\n'))
+        ok(erp)
     before = rows(erp.target, MIRROR)
     erp.source("alter table customers drop column city")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    assert failed(erp) == ("column city is missing in the source; without a change log its values are nowhere else, "
+    assert failed(erp) == ("column city is missing in the source, and no change log keeps its values, "
                            'so a person drops it: ALTER TABLE "raw_erp"."customers" DROP COLUMN "city"')
     assert rows(erp.target, MIRROR) == before
 
@@ -186,7 +209,7 @@ def test_a_stop_names_every_object_in_the_way_through_the_layers_so_one_round_of
                       "on view public.v2; and column city is gone from the source and would leave the mirror "
                       "raw_erp.customers, but materialized view public.m depends on column city of table "
                       "raw_erp.customers; view public.w depends on column city of table raw_erp.customers: change or "
-                      "drop that, and the ne***t run goes on"), reason
+                      "drop that, and the next run goes on"), reason
     assert columns(erp) == ["customer_no", "name", "city"]
     erp.target("drop view public.v3, public.v2, public.v1, public.w; drop materialized view public.m")  # one round
     again(erp)
@@ -381,7 +404,7 @@ def test_a_retired_name_the_source_takes_stops_once_and_the_next_run_retires_und
         again(erp)
     erp.source("alter table customers add column city integer")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    reason = failed(erp).replace("***", "x")  # the source's password is x, and the reason hides it
+    reason = failed(erp)
     assert erp.target("select max(run) from _rowvioli.runs") == [(run,)]
     assert reason == TAKEN.format(run), reason
     assert erp.target("select count(*) from raw_erp.customers__log where city = 'Bonn'") == [(1,)]
@@ -405,7 +428,7 @@ def test_a_retired_name_taken_for_the_next_run_too_stops_until_a_run_whose_name_
                "add column city integer")
     for number in (run, run + 1):
         erp.target("update _rowvioli.tables set requested_at = now()")
-        assert failed(erp).replace("***", "x") == TAKEN.format(number)  # the source's password x is hidden
+        assert failed(erp) == TAKEN.format(number)
     again(erp)
     assert erp.target(f"select count(*) from raw_erp.customers__log where city__{run + 2} = 'Bonn'") == [(1,)]
     log_replays(erp)
@@ -518,7 +541,7 @@ def follow(rv, reason):
 
 
 def test_a_retired_name_longer_than_postgres_takes_stops_and_says_what_to_rename(erp):  # story 10
-    long = "y" * 62  # not x: the source's password is x, and the reason hides it
+    long = "y" * 62
     erp.source(f"alter table customers add column {long} text")
     ok(erp)
     erp.source(f"alter table customers drop column {long}")
@@ -616,8 +639,7 @@ def test_a_run_that_holds_the_mirror_waits_for_no_consumers_table_with_a_foreign
         failing = erp.start("run")
         assert reads_meanwhile(erp)
         assert failing.wait(timeout=30) == 1
-        assert erp.target("select reason from _rowvioli.runs order by run desc limit 1")[0][0].replace(
-            "***", "x") == IN_USE
+        assert erp.target("select reason from _rowvioli.runs order by run desc limit 1")[0][0] == IN_USE
         assert time.monotonic() - started < 15
     ok(erp)
     log_replays(erp)

@@ -25,7 +25,7 @@ HOW = (f"needs an ODBC driver manager with the driver {DRIVER} (unixodbc and odb
 has_driver = arrow_odbc is not None and bool(shutil.which("odbcinst")) and f"[{DRIVER}]" in subprocess.run(
     ["odbcinst", "-q", "-d"], capture_output=True, text=True).stdout
 needs_driver = pytest.mark.skipif(not has_driver, reason=HOW)
-ENV = {"ERP_PASSWORD": "x"}  # the password of the harness's containers
+ENV = {"ERP_PASSWORD": "harness-pw-7"}  # the password of the harness's containers
 
 
 def odbc_string(url, password="$ERP_PASSWORD"):
@@ -108,7 +108,9 @@ def test_a_wrong_password_fails_the_run_and_appears_nowhere(ready):
     out = [erp(ready, '"public.customers" = {}', odbc_string(ready.source_url, "{$ERP_PASSWORD}"),
                {"ERP_PASSWORD": wrong}), ready.run("run")]
     assert out[-1].returncode == 1
-    assert "password authentication failed" in ready.target("select reason from _rowvioli.runs")[0][0]
+    [(reason,)] = ready.target("select reason from _rowvioli.runs")
+    assert "password authentication failed" in reason and reason.endswith("after changing a variable it reads, run "
+                                                                          "apply again"), reason  # ticket 17, L1
     for value in (wrong, "Falsch", "Kenn@wort42"):
         assert leaks(ready, value, *out) == [], value
 
@@ -256,3 +258,20 @@ def test_a_timestamp_the_targets_type_cannot_hold_names_the_column_and_the_way_o
     assert failed(ready, "erp") == ("public.t: column ts has a value its type in the target, timestamp without time "
                                     "zone, cannot hold (SQLSTATE 22008); cast it in a view of the source or change it "
                                     "there")
+
+
+@needs_driver
+@pytest.mark.parametrize("value", ["infinity", "-infinity"])
+def test_a_date_of_infinity_the_driver_gives_as_no_date_fails_naming_the_column_and_others_load(ready, value):
+    """psqlODBC gives a date's infinity and -infinity as the text 0000-00-00, which arrived as the day of the run
+    (ticket 16); the connector reads dates as text and stops where one is no date (ticket 17, T1)."""
+    ready.source("create table t (id int primary key, d date); insert into t values (1, '2024-02-29'), (2, null)")
+    erp(ready, '"public.t" = { key = ["id"] }')
+    assert run(ready, "erp")[0] == 0
+    assert ready.target("select id, d from raw_erp.t order by 1") == [(1, date(2024, 2, 29)), (2, None)]
+    assert ready.target("select data_type from information_schema.columns where table_name = 't' and "
+                        "column_name = 'd'") == [("date",)]
+    ready.source(f"insert into t values (3, '{value}')")
+    ready.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(ready, "erp") == ("public.t: column d has a date the driver gives as no date, as psqlODBC gives "
+                                    "infinity and -infinity; cast it in a view of the source")

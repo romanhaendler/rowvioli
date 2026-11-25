@@ -155,7 +155,7 @@ def test_a_grant_passed_on_with_the_grant_option_comes_back_from_its_grantor_whe
             erp.target(f"create role {worker} login password 'w'")
             for statement in WORKER.format(worker, db).split(";\n"):
                 erp.target(statement)
-            env = {"ROWVIOLI_TARGET_URL": erp.target_url.replace("postgres:x@", f"{worker}:w@")}
+            env = {"ROWVIOLI_TARGET_URL": erp.target_url.replace("postgres:harness-pw-7@", f"{worker}:w@")}
         if runs_as.startswith("a member of"):
             erp.target(f"grant {lender} to {worker}")
         assert erp.run("run", env=env).returncode == 0
@@ -211,7 +211,7 @@ def test_an_object_of_another_role_that_a_change_of_columns_reaches_is_named_wit
         erp.target(f"create role {other}; create role {worker} login password 'w'")
         for statement in WORKER.format(worker, db).split(";\n"):
             erp.target(statement)
-        env = {"ROWVIOLI_TARGET_URL": erp.target_url.replace("postgres:x@", f"{worker}:w@")}
+        env = {"ROWVIOLI_TARGET_URL": erp.target_url.replace("postgres:harness-pw-7@", f"{worker}:w@")}
         assert erp.run("run", env=env).returncode == 0
         erp.target(f"grant usage, create on schema raw_erp to {other}; grant select on all tables in schema raw_erp "
                    f"to {other}")
@@ -220,8 +220,7 @@ def test_an_object_of_another_role_that_a_change_of_columns_reaches_is_named_wit
         erp.target("update _rowvioli.tables set requested_at = now()")
         r = erp.run("run", env=env)
         assert r.returncode == 1
-        assert erp.target("select reason from _rowvioli.runs order by run desc limit 1")[0][0].replace(
-            "***", "x") == says.format(other=other, worker=worker)
+        assert erp.target("select reason from _rowvioli.runs order by run desc limit 1")[0][0] == says.format(other=other, worker=worker)
     finally:
         erp.target("drop table if exists raw_erp.vip; drop view if exists raw_erp.customers__history")
         for role in (other, worker):
@@ -283,7 +282,7 @@ def test_a_history_view_given_to_a_role_that_only_reads_stops_a_change_of_column
                    f"alter view raw_erp.customers__history owner to {other}")
         erp.source("alter table customers drop column name")
         erp.target("update _rowvioli.tables set requested_at = now()")
-        assert failed(erp).replace("***", "x") == OWNED.format(other=other, worker="postgres")
+        assert failed(erp) == OWNED.format(other=other, worker="postgres")
         erp.target('ALTER VIEW "raw_erp"."customers__history" OWNER TO postgres')  # the way out
         again(erp)
     finally:
@@ -297,7 +296,7 @@ def test_a_rule_on_the_history_view_that_names_a_column_the_run_renames_stops_it
                "do instead nothing")
     erp.source("alter table customers rename column city to town")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    assert failed(erp).replace("***", "x") == (
+    assert failed(erp) == (
         "the history view raw_erp.customers__history is created again for a change of columns, but rule keep on it "
         "names column city of raw_erp.customers__history, which this run renames or drops, so it cannot be carried "
         "over: change or drop that, and the next run goes on")
@@ -316,7 +315,7 @@ def test_a_worker_without_its_rights_on_a_schema_it_did_not_create_is_told_them_
             erp.target(f"grant usage on schema raw_erp to {worker}")
         for statement in WORKER.format(worker, db).split(";\n"):
             erp.target(statement)
-        env = {"ROWVIOLI_TARGET_URL": erp.target_url.replace("postgres:x@", f"{worker}:w@")}
+        env = {"ROWVIOLI_TARGET_URL": erp.target_url.replace("postgres:harness-pw-7@", f"{worker}:w@")}
         assert erp.run("run", env=env).returncode == 1
         reason = erp.target("select reason from _rowvioli.runs")[0][0]
         assert reason == ("permission denied for schema raw_erp: the worker's role needs USAGE and CREATE on it (GRANT "
@@ -398,14 +397,13 @@ def test_a_source_column_with_a_name_of_the_log_or_the_view_fails_the_run(erp, n
     assert "log = false frees it" in reason
 
 
-def test_C2_a_key_taken_away_fails_naming_the_log_until_log_view_and_mirror_are_dropped(erp):
+def test_C2_a_key_taken_away_fails_naming_the_log_until_log_and_view_are_dropped(erp):
     ok(erp)
     apply(erp, definition(erp, '"public.customers" = {}\n'))
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
-    assert "no key any more" in reason and "raw_erp.customers__log" in reason and "DROP TABLE" in reason
-    erp.target("drop table raw_erp.customers__log cascade")
-    erp.target("drop table raw_erp.customers")
+    assert "no key" in reason and "raw_erp.customers__log" in reason and "DROP TABLE" in reason
+    erp.target("drop table raw_erp.customers__log cascade")  # the mirror stays (ticket 17, E2)
     again(erp)
 
 

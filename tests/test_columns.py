@@ -218,8 +218,8 @@ def test_a_run_stopped_by_a_consumers_view_never_waits_for_it_while_holding_the_
         worker.communicate(timeout=20)
         assert consumer.result(timeout=20) == (3,)
     reason = erp.target("select reason from _rowvioli.runs order by run desc limit 1")[0][0]
-    # the catalogue names what was in use, without a lock on it; the harness's password x is hidden
-    assert reason.replace("***", "x") == (
+    # the catalogue names what was in use, without a lock on it
+    assert reason == (
         "column city is gone from the source and would leave the mirror raw_erp.customers, but view public.cities "
         "depends on column city of table raw_erp.customers, in use, so the run did not wait for it: change or drop "
         "that, and the next run goes on"), reason
@@ -259,7 +259,7 @@ def test_a_run_that_changes_columns_notifies_on_commit_and_one_that_fails_does_n
     # a consumer's check that Postgres runs at COMMIT, after the run has recorded fax and notified
     erp.target("create function no_koeln() returns trigger language plpgsql as "
                "$$ begin if new.city = 'Köln' then raise exception 'no Köln'; end if; return null; end $$")
-    erp.target("create constraint trigger no_koeln after insert on raw_erp.customers deferrable initially deferred "
+    erp.target("create constraint trigger no_koeln after insert or update on raw_erp.customers deferrable initially deferred "
                "for each row execute function no_koeln()")
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert erp.run("run").returncode == 1

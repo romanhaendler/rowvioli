@@ -2,6 +2,7 @@
 import pytest
 
 from rowvioli.load import reason_line
+from test_checks import MISSING
 
 TRACEBACK = ('. Detail: Python exception: Traceback (most recent call last):\n'
              '  File "/long/path/src/rowvioli/connectors/postgres.py", line 21, in batches\n'
@@ -31,11 +32,14 @@ def test_a_bare_traceback_gives_its_last_line():
     assert reason("Traceback (most recent call last):\n  File \"x.py\", line 1\nValueError: bad") == "ValueError: bad"
 
 
+AGAIN = "; the connection is the one the last apply stored: after changing a variable it reads, run apply again"
+
+
 def test_a_line_ending_in_a_colon_is_joined_with_the_next():
     message = ("ODBC emitted an error calling 'SQLDriverConnect':\nState: 08001, Native error: 101, Message: FATAL:  "
                "password authentication failed for user \"reader\"\nmore")
     assert reason(message) == ("ODBC emitted an error calling 'SQLDriverConnect': State: 08001, Native error: 101, "
-                               "Message: FATAL:  password authentication failed for user \"reader\"")
+                               "Message: FATAL:  password authentication failed for user \"reader\"" + AGAIN)
 
 
 def test_the_wrapper_of_a_failed_statement_goes_whatever_its_sql_holds():
@@ -68,7 +72,7 @@ def test_a_source_table_named_columns_that_may_not_be_read_is_not_said_to_be_the
 
 
 WITHHELD = " raised an error in the source; its message may hold a row's values, so it is left out here: the source's " \
-           "server log has it"
+           "server log or a trace has it"
 
 
 @pytest.mark.parametrize("message, function", [
@@ -88,7 +92,7 @@ def test_a_message_of_a_violated_constraint_under_a_function_is_withheld_since_i
     assert reason('IO: [libpq] Execution error [PGRES_FATAL_ERROR]: ERROR:  duplicate key value violates unique '
                   'constraint "u"\nDETAIL:  Key (id)=(1) already exists.\nCONTEXT:  SQL function "f" statement 1') \
         == ('function "f" raised an error in the source; its message may hold a row\'s values, so it is left out here: '
-            "the source's server log has it")
+            "the source's server log or a trace has it")
 
 
 ODBC = "ODBC emitted an error calling 'SQLFetch': State: {}, Native error: 1, Message: "
@@ -101,8 +105,9 @@ ODBC = "ODBC emitted an error calling 'SQLFetch': State: {}, Native error: 1, Me
     ("HY000", "[MySQL][ODBC 9.1(w) Driver][mysqld-9.1.0]Incorrect integer value: 'Secret' for column 'n' at row 1", None),
     ("\0\0\0\0\0", "Secret is no number", None),
     ("P0001", "ERROR: bad row Secret;\nError while executing the query", None),
-    # a table that is not there: of class 42 only a missing right is shown, and the reason names the table
-    ("42S02", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Invalid object name 'dbo.orders'.", None),
+    # a table or column that is not there: the program's own words (ticket 17, L2)
+    ("42S02", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Invalid object name 'dbo.orders'.", "missing"),
+    ("42S22", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Invalid column name 'Secret'.", "missing"),
     # names alone: a refused login, a missing right
     ("28000", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Login failed for user 'reader'.", True),
     ("42501", "ERROR: permission denied for table orders", True),
@@ -111,13 +116,17 @@ ODBC = "ODBC emitted an error calling 'SQLFetch': State: {}, Native error: 1, Me
     ("01000", "[unixODBC][Driver Manager]Can't open lib 'NoSuchDriver' : file not found", "connect")])
 def test_an_odbc_drivers_message_is_shown_by_its_sqlstate_alone(state, message, shown):  # decision 54, item 8
     odbc = ODBC.replace("SQLFetch", "SQLDriverConnect") if shown == "connect" else ODBC
-    said = reason_line([], RuntimeError(odbc.format(state) + message), "reading the source", "dbo.orders")
-    if shown:
+    said = reason_line([], RuntimeError(odbc.format(state) + message), "reading the source", "dbo.orders", "erp")
+    if shown == "connect":  # ticket 17, L1
+        assert said == odbc.format(state) + message + AGAIN
+    elif shown == "missing":
+        assert said == MISSING.format(table="dbo.orders", state=state)
+    elif shown:
         assert said == odbc.format(state) + message
     else:
         assert said == (f"a{' function' if state == 'P0001' else ' statement'} raised an error"
                         f"{f' (SQLSTATE {state})' if state.isalnum() else ''} in the source, reading dbo.orders; its "
-                        "message may hold a row's values, so it is left out here: the source's server log has it")
+                        "message may hold a row's values, so it is left out here: the source's server log or a trace has it")
 
 
 @pytest.mark.parametrize("message", [  # as the driver gives them, without a SQLSTATE (ticket 15, R1: tried by hand)

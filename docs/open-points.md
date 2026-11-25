@@ -10,15 +10,6 @@ Decided after the prototype and no longer open: percent-encoding a password in a
 
 Decided in the second round and no longer open: new tables of the source do not arrive by themselves (decision 21), one key pair for all workers (decision 26), no second Postgres driver (decision 28), the address of the target comes from the worker's environment (decision 30), and the smaller points collected in decision 31.
 
-Closed by decision 54: a REST column that is absent from every row of a page, and the files of a pattern that do not all have a column, no longer fail the run. The column is empty there, and with a change log it never goes.
-
-Closed after the shakedown before the merge of schema changes: a primary key that a person changed by hand before the upgrade is no longer taken for a change of key on the first run after it; the run tells the two by the definition of the table's last successful run or by the change log, and asks where neither tells ([A key](loading.md#columns)).
-
-Closed by ticket 12 of schema changes: a column gone for good from the files of a table with a change log leaves the mirror by the drop that [What a person does by hand](loading.md#what-a-person-does-by-hand) gives, with its history kept.
-
-Closed by decision 55: a consumer's table that inherits from a mirror keeps its rows ([What a person does by hand](loading.md#what-a-person-does-by-hand)).
-
-Closed by ticket 13 of schema changes: a retired column is known by the change log's comment on it, not by its name, so a source column `x__2024` goes and comes back like any other ([Columns that go, come and change](target.md#history)). A connector of one's own may say that it has no catalog, as the shipped `file` and `rest` do, and then gets their rules ([`catalog`](connector-guide.md#otherwise-a-package-of-your-own)). A field named under `columns` that a file lacks is empty, as in REST ([the catalog](definition.md)).
 ## Left open
 
 
@@ -38,7 +29,6 @@ Unchanged from the first round:
 - **The connectors themselves**: arrow-odbc for MSSQL and Informix, DuckDB for files. The `postgres`, `file`, `odbc` and `rest` connectors are tested; `odbc` only against PostgreSQL through psqlODBC, SQL Server and Informix not at all.
 - **Wide tables with many rows.** A whole run was measured on 300 columns with 100,000 rows (about 11 s) and 300,000 rows (about 40 s), roughly linear, most of it the read from the source (section 15, ticket 16). Not measured: 900 columns in a whole run, a million rows of this width, the other connectors.
 - **The history view on a log some hundred times larger** than the 48 MB measured, or one that does not fit in memory (section 13).
-- **The time a large change log is locked** while a type is widened or the rows of a column are written. That is a measurement for `bench/`, run when the owner asks.
 - **The COPY from a client over a real network.** Experiment 8 filled the staging table from a client on the same machine.
 
 ## Known limits
@@ -78,7 +68,6 @@ Unchanged from the first round:
 - **Each file of a pattern is checked before it is read**, about 3 ms per file: 10,000 files take half a minute before the first row. A pattern reads 50 files at a time; open files under Linux were not measured.
 - **A JSON file is read twice**, once for its columns and once for its rows; so is every file of a pattern of JSON files.
 - **A REST field whose own name contains a dot cannot be named in `rows`**, and `apply` does not check `rows`: a value that is not text fails at the run.
-- **The pooler check was tried with PgBouncer and PgCat**, each in one version and one pool size, idle and with up to 16 busy neighbours, and PgBouncer idle handing five waiting server connections round-robin ([measurements](measurements.md#14-the-pooler-check-behind-pgbouncer-in-transaction-mode)); none missed. Odyssey and Supavisor were not tried; a pooler that hands a server connection at random to the next client passes the check by chance, as often as it gives the control connection's own back to it. Session mode is the requirement.
 - **Tables without a key** are replaced as a whole on every run, have no change log, and bloat until autovacuum has run.
 - **Advisory locks share one number space per database.** Another application using two-key advisory locks in the same database could collide.
 - **An idle worker keeps one connection to the target open**, with which it asks whether something is claimable.
@@ -89,24 +78,6 @@ Unchanged from the first round:
 - **A claim finds a dead run by walking `runs` back from the newest row** to the table's own newest, under the lock all claims share: 1.3 ms when 24,000 runs came since, 11 ms at 200,000 (the whole table scanned took 8 ms). An index on the table and the run would bound it; it needs a migration of the schema, which is not built.
 - **The ADBC driver cannot run `SHOW`** and other statements that return rows but cannot be wrapped into `COPY`.
 - **The driver decides the types in the target** (decisions 28 and 49). `varchar(n)` arrives as `text`, so a change from `text` to `varchar(n)` passes unseen, and an existing `varchar(n)` target column is of another family than `text`: with a change log it goes and comes back, without one it stops. A `numeric(p,s)` beyond 38 digits arrives as `numeric` in a new mirror. An unconstrained `numeric` beyond 38 digits, `NaN` or `Infinity` fails the run, and the reason says which. A column widened to plain `numeric` reads without trailing zeros (`3.00` reads `3`). Through ODBC, psqlODBC describes an unconstrained `numeric` as `numeric(28,6)`, and the value arrives cut to six decimals.
-
-Schema changes (decision 54):
-
-- **A declared length of the source is not recorded.** Arrow carries none, so `varchar(20)` and `varchar(200)` are both `text`, and a change of a length leaves no trace. The same holds for the source's constraints, defaults and comments: a mirror has none of them.
-- **A change by hand is dated when it is noticed**, by the next run that publishes, and not at all while its table fails.
-- **A person who changes the primary key and the definition by hand and keeps the change log leaves a seam nobody recorded.**
-- **A primary key from before the upgrade that nothing in the target tells about stops its table once.** Where the definition changed since the table's last successful run and the change log could have been written under either key (only its first rows, say), the run asks for the comment on `_op` that says which. Without a change log it takes the definition's key, which replaces the mirror as a whole either way, and records `by = definition`.
-- **A column that a person dropped from the change log stops the run with `is not in the change log`** while the mirror keeps it, as a person's own column does: the change log no longer says that it was the source's. The way out is the drop from the mirror.
-- **A reason never shows a value of the source, as far as the program can tell one.** A value that a type under `columns` does not take names the table, the column and the type; a `numeric` that no decimal holds (`NaN`, `Infinity`, more than 38 digits on a side) from the `postgres` connector names its column, whatever Arrow's message says. A database's message, of the source or the target, through ADBC or ODBC, is shown only where its SQLSTATE says that it holds names alone (a lost connection, a refused login, a missing right, a full disk, an object in use and the like) or it is Postgres's own message of a violated constraint; every other is withheld with its SQLSTATE and the source table named (decision 54, item 8): a value's, an object that does not exist, a class nobody told the program, a consumer's function in any language. Tried with Postgres through ADBC and psqlODBC; SQL Server's and MySQL's drivers by their documented SQLSTATEs only, in `tests/test_reason.py`, since neither is on the machine of the tests. Not covered: a connector of one's own whose message holds a value, and a message without a SQLSTATE that holds one unquoted, which only the program's, a connector's and libpq's before a server answered are. No rule covers them, since a rule broad enough would hide names. A consumer's function that raises in a class that holds names (`permission denied` inside a function in C) is shown, as Postgres's would be.
-- **A column name longer than 63 bytes stops its table.** Postgres keeps 63 bytes of a name, and the definition cannot give a delivered column another name: the way out is in the source, a view or a file's header. A Postgres source cuts such a name itself, so a run never sees it there.
-- **Two columns that swap names, or a name reused in the run its column was renamed, are not seen by any loader.** Every row of the two is a `U`.
-- **A rename the data prove needs 20 rows and 5 different values**, strict on purpose, since a false proof points a consumer's view at another column. A small table, a flag and two candidates are never proven; `renamed` states them. Nothing is proven for a table without a key or a change log, or for a source without a catalog (file, REST).
-- **The columns table has no tamper evidence.** A person with the right to write the change log can change its rows.
-- **A column that goes, or a type of another family, costs one change log row per row**, and a changed key two and a rewrite of the mirror: "what changed yesterday" on such a change log lists every row (40 changes of a table of 100,000 rows gave 4.2 million log rows, 383 MB). Widening can rewrite mirror and change log under an exclusive lock and outlast `max_seconds` once. A view on a history view stops changes to any column of it. A statement prepared on a mirror fails after its columns change, until it is prepared again. An upgrade that delivers a type in another family writes a row per row on every affected table once.
-- **A grant on a history view that its grantee passed on with the grant option** comes back from that grantee when a run builds the view anew only where the worker's role is a superuser or a member of the grantee that may `SET ROLE` to it, the grantee still has `USAGE` on the view's schema and still holds the grant option; otherwise it is given again by the worker's role, so a later `REVOKE ... CASCADE` from that grantee no longer takes it. Postgres 14 to 17 refuse `GRANTED BY` any other role than the current one ([History](target.md#history)).
-- **The columns table keeps a renamed column's old name for the moments before the rename**, where the history view of the mirror already shows the new one: `was` is the bridge ([History](target.md#history)).
-- **A source table dropped and created anew with other columns** looks like rows that go: the run stops with the share of rows that would be deleted, and the reason says that the source table may have been replaced or emptied and that `max_delete_share = 1.0` on the table lets one run through. The program cannot tell a replaced table from a broken source.
-- **A change log is never ended by the program**: `log = false` and a key taken away still stop while one exists.
 
 ## Not built
 

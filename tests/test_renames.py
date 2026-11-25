@@ -296,7 +296,7 @@ def test_renamed_across_two_families_stops_the_run_and_changes_nothing(erp):
     erp.source("alter table people rename column member to active; alter table people alter active type text")
     apply(erp, definition(erp, '"public.people" = { key = ["id"], renamed = { active = "member" } }\n'))
     erp.target("update _rowvioli.tables set requested_at = now()")
-    assert failed(erp).replace("***", "x") == ("column member is renamed active in the table's definition, but boolean and text are "
+    assert failed(erp) == ("column member is renamed active in the table's definition, but boolean and text are "
                            "types of two families, so their values are not the same: take active out of renamed")
     assert columns(erp, PEOPLE) == ["id", "name", "city", "member"]
 
@@ -364,7 +364,7 @@ def test_renamed_applied_while_a_run_loads_stops_it_from_publishing_and_the_next
     apply(erp, definition(erp, '"public.slow_flags" = { key = ["id"], target_table = "flags", '
                                'renamed = { state = "flag" } }\n'))
     assert loading.wait(timeout=30) == 1, loading.stdout.read()
-    assert erp.target("select reason from _rowvioli.status")[0][0].replace("***", "x") == (  # the password is x
+    assert erp.target("select reason from _rowvioli.status")[0][0] == (
         "the definition renames column flag to state since this run claimed raw_erp.flags; nothing was published, "
         "the next run renames it")
     assert columns(erp, "raw_erp.flags") == ["id", "flag"]

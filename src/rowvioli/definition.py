@@ -8,6 +8,8 @@ from pathlib import Path
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
+from .target import check_address
+
 UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days"}
 # a table may override these; its row carries them with the source's filled in
 TABLE_SETTINGS = {"max_age": str, "log": bool, "max_delete_share": (int, float), "max_seconds": int, "at": list,
@@ -47,7 +49,8 @@ def read(directory, env=None, only=None):
     whole, sources, tables, names = {}, [], [], {}
     files = sorted(Path(directory).rglob("*.toml"))
     if not files:
-        raise SystemExit(f"{directory} holds no source files (*.toml); applying it would disable every table")
+        raise SystemExit(f"{directory} holds no source files (*.toml): write one, as the README shows with "
+                         "sources/erp.toml; applying none would disable every table")
     for path in files:
         label = path.relative_to(directory).as_posix()
         try:
@@ -234,4 +237,7 @@ def fill(template, where, env):
         if m[1] not in env:
             raise SystemExit(f"{where}: variable {m[1]} is not set")
         return quote(env[m[1]], safe="") if m.start() < userinfo_end else env[m[1]]
-    return PLACEHOLDER.sub(sub, template)
+    filled = PLACEHOLDER.sub(sub, template)
+    if filled.startswith(("postgresql://", "postgres://")):  # a password that breaks it (ticket 17)
+        check_address(filled, where, ", or come from a variable ($NAME), which apply encodes")
+    return filled

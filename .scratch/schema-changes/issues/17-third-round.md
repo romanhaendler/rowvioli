@@ -2,7 +2,7 @@
 
 **Blocked by:** 15, 16
 
-**Status:** claimed
+**Status:** resolved
 
 **Model:** Opus
 
@@ -117,9 +117,110 @@ scratch directory given in the task (they may be gone; each item says enough to 
 
 ## Acceptance criteria
 
-- [ ] Every item: a test seen red first, or a sentence under Comments why none and what was done instead.
-- [ ] Documents (`docs/*.md`, decision 54/55, `CHANGELOG.md`) say what changed; no new entry in
+- [x] Every item: a test seen red first, or a sentence under Comments why none and what was done instead.
+- [x] Documents (`docs/*.md`, decision 54/55, `CHANGELOG.md`) say what changed; no new entry in
       `docs/open-points.md`.
-- [ ] The whole suite and `tests/odbc/run.sh` pass.
+- [x] The whole suite and `tests/odbc/run.sh` pass.
 
 ## Comments
+
+Built on `sc-17` (Opus, 2026-11-25), one commit per item, each test seen red first unless said here.
+
+- T1 fixed, not only documented: `odbc` reads every date as its text (`map_schema`, `yyyy-mm-dd` as ODBC writes it)
+  and casts it back per batch; psqlODBC's `0000-00-00` fails naming the column. Tested in the ODBC container.
+- L1: the sentence is added for a failed connect through ADBC (`Failed to connect`), ODBC (`SQLDriverConnect`) or a
+  28xxx; a connector of one's own that fails to connect is not recognised.
+- L2/G2: one sentence for 42P01, 42703, 42704, 42883 and ODBC's 42S02, 42S22 in the source, not under a function. It
+  cannot tell the table from an object a view reads, so it names both and the way for a renamed table; 42703 and
+  42S22 only by the unit test (no statement the program sends can raise them on demand).
+- L3: `target.check_address` is reused for every `postgres(ql)://` string of a connection, in `apply` and `list`.
+- L4: one message for an empty and a full target (no query of the target): "write one, as the README shows".
+- J3 judged: what the connector delivers is checked in one place (`stream()`, no batch or another schema). An error
+  the connector's own code raises stays as raised: pyarrow raises `precision should be between 1 and 38` inside the
+  connector, before the run sees a column, so the decimal case cannot name the column.
+- M1 judged: not the way out the ticket named (`DEFERRABLE`), but the cause: a `U` is an `UPDATE` in place instead of
+  `DELETE` + `INSERT`. Deferring helps only where the row stays, cannot help `ON DELETE CASCADE`/`SET NULL`, which
+  silently took the consumer's rows (seen red, both), and would need a change of the consumer's object. A row the
+  source deletes still stops on such a key, now with the way out. A consumer's trigger sees `UPDATE` (CHANGELOG
+  "Changed"); two tests' insert triggers became insert-or-update. Decision 55.
+- M3: the trigger is the columns table (`mirror` true for a column now in neither mirror nor source), so the one
+  pass over the change log happens once; a table without a record (before version 4) is not covered.
+- M6 judged worth a bullet in docs/operation.md ("Moving onto existing tables"), with `max_delete_share = 0` as the
+  existing way to see the first run's deletes; no machinery.
+- M7: the cause is added; the docs say that putting the old primary key back lets the run change the key with the
+  history kept (that path is the ordinary change of key, not tested again here).
+- E1: no red possible for the helper: its stretch filter already leaves out the `D` rows at the moment of a change
+  of key, so the tie cannot occur in it; it now uses exactly the documented query (`_op = 'D'` last, `ONLY`).
+- E2: the special branch for a key taken away is deleted; the general reason (drop the change log with its view, or
+  rename) holds and was followed in the test (`ok`, mirror kept).
+- E3: docs one sentence; the harness's password is `harness-pw-7` now, and every `.replace("***", "x")` in the tests
+  is gone. `tests/test_work.py` starts a container of its own and keeps `x`.
+- E4 not mine (the coordinator sets the version).
+- G1: documented (docs/loading.md "A type", decision 54): Postgres has no `integer[] = bigint[]`, so an array kept in
+  its family needs casts in `misfits`, `diff` and `proven`, more than a few lines. The existing B13 test holds it.
+- G3, M6, J1: documents only, no test.
+- V1: rule by moment: a note counts only if the change log has a row no later than it (EXISTS, which ends at once on
+  a log that is only appended to); scoping by target name would lose a mirror renamed by hand. Both tested.
+- V2: "the source's server log or a trace has it", for every source.
+
+Suites at the tip (after merging schema-changes 7f19c9c): the whole suite 868 passed, 24 skipped (8 min 11 s);
+`tests/odbc/run.sh` 20 passed, 1 skipped.
+
+Review (Opus, 2026-11-25, branch `sc-17-review` from `sc-17` 09eb9f7).
+
+Each item that changes `src/` had its fix taken out and its tests run: red for T1 (2, in the ODBC container), L1
+(4), L2/G2 (4), L3 (2), J2 (2), J3 (2), M1 (3: the update keeps the consumer's rows with no action, cascade and set
+null), M2 (10), M3 (1), M4 (2), E2 (1) and V1 (2 of 3; the case of a mirror renamed by hand passes without the fix, as
+the guard it is). M5 and M7 change words their tests compare exactly; their fix could not be taken out cleanly beside
+later commits and was read. The rest is documents and was read.
+
+M1, tried against a database (scratch tests, not kept): the change is right and stays. A row whose only change is in a
+column that went is no update of the mirror (`+0 ~0 -0`, a `U` in the change log alone), mixed with others `+1 ~1
+-1`; replaying the change log gives the mirror, and the history view gives the mirror at every earlier moment, after
+three runs of `U`, `D`, `I` and a changed key value; a child table (`INHERITS`) keeps its rows; an index of a
+consumer's on an expression is no matter; a `numeric` key of `1.0` that the source writes `1.00` arrives as `1` both
+times, so no form reaches the mirror that the key's comparison would miss. Faults found and fixed:
+
+- Values that two rows swap within one run (or move along a chain) failed on a consumer's unique index with
+  Postgres's bare `duplicate key value violates unique constraint "city_u"`, where 0.4.1's delete and insert passed:
+  Postgres checks a non-deferrable unique index for each row an update writes. No order of the updates avoids a swap,
+  and a fallback to delete and insert brings back the cascade, so the run stops naming the way out (a `UNIQUE ...
+  DEFERRABLE` constraint in its place, checked at the end of the statement; tried, it passes) and no value: 12179fd,
+  with docs/target.md, docs/operation.md, CHANGELOG "Changed" and decision 55.
+- A foreign key onto a unique column of the mirror that is not its key refuses an update in place, and the reason
+  called that a row the source deleted, with a way out that did not help: it says a changed value and `ON UPDATE
+  CASCADE` too, 8f329a7.
+- docs/target.md and decision 54 said a consumer's trigger that rewrites a value makes every run write the row
+  again. Now one `BEFORE INSERT` alone holds only until the next run, which updates the row to the source's value
+  (tried); said with CHANGELOG, e355864.
+
+M2: every change log and history view of 0.1.0 to 0.4.1 has `_run`, `_op`, `_loaded_at` and `_valid_from`,
+`_valid_to` (read in the tags), and the upgrade tests pass. Fault: the check also stopped a table without a key or
+with `log = false` for a person's `<table>__history`, which such a table never has and 0.4.1 loaded beside; now
+the history view's name is checked only for a table with a change log, 1a9e8f4. A person's `<table>__log` beside
+such a table still stops, as in 0.4.1, now with the right reason.
+
+M3, V1 with the change log's rows in the reverse physical order (copied back sorted newest first): right in both V1
+cases and in M3, since V1's rule is a condition (`EXISTS ... _loaded_at <= note`) and M3 orders by `_loaded_at`;
+only V1's speed depends on the order, on a path taken when the comment on `_op` is lost.
+
+L2/G2: the sentence is built from the definition's source table and source name alone, so no value can reach it. A
+file or REST source gives no SQLSTATE, so it never sees the sentence; for an ODBC source (`42S02`) it reads right, and
+`rowvioli list` works for ODBC.
+
+No new or changed reason of this ticket shows a value of a row (decision 54 item 8): read in every one, and the two
+new ways out are appended only to Postgres's message, without its detail `Key (...)=(...)`.
+
+`docs/open-points.md`: every entry the branch added is gone, 06cdeb2. The Closed-by paragraphs are dropped; the list
+"Schema changes (decision 54)" went into decision 54 as limits with their reasons where it was not there already
+(declared lengths, hand changes while a table fails, swapped names, rename proof, the columns table's missing tamper
+evidence, the measured cost, the old name before a rename, a replaced source table, the 63-byte way out, item 8's
+reach); the seam of a primary key changed by hand with the definition is closed by tickets 15 and 17 (the run stops
+and names the cause); the untried poolers went into decision 55; the lock time is closed by measurement 17, written
+from the shakedown's numbers. Decision 54 no longer points to open points.
+
+Not checked: an exclusion constraint on a mirror under the same swap (its message is shown as Postgres's, without a way
+out); a text key under a nondeterministic collation.
+
+Suites at 1a9e8f4, on fresh containers: the whole suite 872 passed, 24 skipped (14 min 16 s, beside other sessions'
+containers); `tests/odbc/run.sh` 20 passed, 1 skipped.

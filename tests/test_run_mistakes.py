@@ -5,7 +5,7 @@ import psycopg
 import pytest
 
 from conftest import HOST, _query, _url, until
-from test_checks import failed
+from test_checks import MISSING, failed
 from test_rest import api, load, reason  # noqa: F401 (api is a fixture)
 from test_secrets import lab
 from test_run import apply, definition, erp, ok, run  # noqa: F401 (erp is a fixture)
@@ -74,8 +74,13 @@ def test_a_value_the_source_cannot_convert_stays_out_of_the_reason(erp, value, t
     assert r.returncode == 1
     why = erp.target("select reason from _rowvioli.runs where status = 'failed'")[0][0]
     assert why == (f"a statement raised an error (SQLSTATE {state}) in the source, reading public.cast_view; its message "
-                   "may hold a row's values, so it is left out here: the source's server log has it")
+                   "may hold a row's values, so it is left out here: the source's server log or a trace has it")
     assert value not in r.stdout + r.stderr
+
+
+def test_a_table_the_source_does_not_have_is_said_in_the_programs_own_words(erp):  # ticket 17, L2, G2
+    apply(erp, definition(erp, '"public.customers2" = {}\n'))  # misspelt, which apply cannot know
+    assert failed(erp) == MISSING.format(table="public.customers2", state="42P01")
 
 
 def test_a_failed_rest_path_stays_in_the_reason(api):
@@ -181,13 +186,13 @@ def pooler(erp, servers, request):
     name = f"{servers['target']}-pooler-{db}"
     mode, _, clients = request.param.partition(" with ")  # "session with 1": a pooler that takes one client
     subprocess.run(["docker", "run", "-d", "--name", name, "--label", "rowvioli-test", "-e", "AUTH_TYPE=scram-sha-256",
-                    "-e", f"DATABASE_URL=postgres://postgres:x@{ip}:5432/{db}", "-e", f"POOL_MODE={mode}",
+                    "-e", f"DATABASE_URL=postgres://postgres:harness-pw-7@{ip}:5432/{db}", "-e", f"POOL_MODE={mode}",
                     *(["-e", f"MAX_CLIENT_CONN={clients}"] if clients else []),
                     "-p", "127.0.0.1::5432", POOLER], check=True, capture_output=True)
     request.addfinalizer(lambda: subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True))
     port = subprocess.run(["docker", "port", name, "5432/tcp"], check=True, capture_output=True,
                           text=True).stdout.split()[0].rsplit(":", 1)[1]
-    url = f"postgresql://postgres:x@{HOST}:{port}/{db}"
+    url = f"postgresql://postgres:harness-pw-7@{HOST}:{port}/{db}"
     until(lambda: reachable(url))
     return url
 
@@ -222,7 +227,7 @@ def test_a_worker_without_create_on_the_database_loads_into_a_precreated_schema(
                       "grant all on all sequences in schema _rowvioli to loader",
                       "revoke create on schema public from public", f"revoke create on database {db} from public"):
         erp.target(statement)
-    url = erp.target_url.replace("postgres:x@", "loader:x@")
+    url = erp.target_url.replace("postgres:harness-pw-7@", "loader:x@")
     r = erp.run("run", env={"ROWVIOLI_TARGET_URL": url})
     assert r.returncode == 0, r.stdout + r.stderr
     assert erp.target("select count(*) from raw_erp.customers") == [(3,)]
@@ -308,7 +313,7 @@ def test_a_line_break_in_a_column_name_is_written_as_a_question_mark_and_the_rea
     erp.source('alter table customers drop column "a\nb"')
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)  # the way out with Unicode escapes, so that it works when pasted (ticket 15, X3)
-    assert reason == ("column a?b is missing in the source; without a change log its values are nowhere else, "
+    assert reason == ("column a?b is missing in the source, and no change log keeps its values, "
                       'so a person drops it: ALTER TABLE "raw_erp"."customers" DROP COLUMN U&"a\\000Ab"')
     erp.target(reason.rpartition(": ")[2])
     erp.target("update _rowvioli.tables set requested_at = now()")
@@ -335,7 +340,7 @@ def test_a_latin1_target_stores_the_sources_text_and_refuses_one_it_has_no_chara
     assert r.returncode == 0 and "raw_ü.customers" in r.stdout, r.stderr
     rv.source("update customers set name = 'Ω'")
     rv.target("update _rowvioli.tables set requested_at = now()")
-    assert failed(rv).replace("***", "x") == (  # the harness's password is x
+    assert failed(rv) == (
         "public.customers: column name has a value its type in the target, text, cannot hold (SQLSTATE 22P05); cast "
         "it in a view of the source or change it there")
 

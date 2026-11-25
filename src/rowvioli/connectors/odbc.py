@@ -26,21 +26,45 @@ def read(connection, table, options):
     # shortcut: 1 MiB per text value, a longer one fails the run; when sources hold more, add an option
     reader = arrow_odbc.read_arrow_batches_from_odbc(
         "SELECT * FROM " + table, connection["string"],
-        max_bytes_per_batch=16 * 2**20, max_text_size=2**20, map_schema=doubles).into_pyarrow_record_batch_reader()
+        max_bytes_per_batch=16 * 2**20, max_text_size=2**20, map_schema=read_as).into_pyarrow_record_batch_reader()
+    dates = {i for i, f in enumerate(reader.schema) if f.metadata == DATE}
+    schema = pa.schema([f.with_type(pa.date32()).remove_metadata() if i in dates else f
+                        for i, f in enumerate(reader.schema)])
 
-    def batches():
+    def rows():
         try:
             yield from reader
         except Exception as e:
             raise without_value(e, table) from None
-    return pa.RecordBatchReader.from_batches(reader.schema, batches())
+
+    def batches():
+        for b in rows():
+            yield pa.record_batch([day(table, c, f.name) if i in dates else c
+                                   for i, (c, f) in enumerate(zip(b.columns, schema))], schema=schema)
+    return pa.RecordBatchReader.from_batches(schema, batches())
 
 
-def doubles(schema):
+# the mark of a date read as text, which read() casts back
+DATE = {b"rowvioli:date": b"text"}
+
+
+def read_as(schema):
     """Every float read as a double. arrow-odbc takes a float of a precision up to 24 for a single, and psqlODBC
     describes float8 with 17, its digits, so 1e300 arrived as Infinity; a double holds every single too, and the
-    schema says nothing more that would tell them apart."""
-    return pa.schema([f.with_type(pa.float64()) if pa.types.is_float32(f.type) else f for f in schema])
+    schema says nothing more that would tell them apart. Every date read as its text, yyyy-mm-dd as ODBC writes it:
+    psqlODBC gives a date's infinity and -infinity as 0000-00-00, which arrived as a date struct of the day of the
+    run (ticket 17)."""
+    return pa.schema([f.with_type(pa.float64()) if pa.types.is_float32(f.type) else
+                      f.with_type(pa.string()).with_metadata(DATE) if pa.types.is_date32(f.type) else f for f in schema])
+
+
+def day(table, column, name):
+    """A date read as text, as a date; one that is none fails naming the column, never the value."""
+    try:
+        return column.cast(pa.date32())
+    except pa.ArrowInvalid:
+        raise Exception(f"{table}: column {name} has a date the driver gives as no date, as psqlODBC gives infinity "
+                        "and -infinity; cast it in a view of the source") from None
 
 
 def without_value(e, table):

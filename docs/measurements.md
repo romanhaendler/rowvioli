@@ -344,6 +344,22 @@ The read is a window over the log sorted by key and `_loaded_at`, about 0.6 s pe
 
 Limitations: one series, one key shape, a log that fits in memory, the read alone timed by `EXPLAIN ANALYZE`; a log larger than memory sorts on disk and was not measured.
 
+## 17. How long a change of columns locks out readers
+
+Two series from the shakedown of schema changes, by its agents, with the program as a real process; the machine is not recorded and the scripts are not kept.
+
+The time a mirror of 500,000 rows with a change log is locked (2026-11-24, persona H4 of the shakedown, the wheel of the branch `schema-changes`; `.scratch/shakedown/eighth-run.md`), the whole publishing and the longest wait of a reader of the mirror beside it:
+
+| Change of the run | Publishing | Readers locked out |
+|---|---|---|
+| a column the source dropped (a `U` per row in the change log) | 3.2 s | 1.4 s |
+| a `numeric` widened in mirror and change log | 4.7 s | 2.4 s |
+| both in one run | 6.8 s | 3.4 s |
+
+Under load (2026-11-24, the review of ticket 15 of schema changes at commit 894610b): 3 workers, `apply` in a loop, readers of the mirrors and consumers with foreign keys onto them, for 3 minutes. 0 of 281 runs that took the publishing lock failed, and no reader waited longer than 0.32 s; before the run tried its publishing again after meeting a lock, 2 of 265 had failed.
+
+Limitations: one series each, one table shape, one size; how the lock grows with the rows was not measured.
+
 ## Summary
 
 | Claim | Evidence |
@@ -362,3 +378,4 @@ Limitations: one series, one key shape, a log that fits in memory, the read alon
 | A transaction-mode pooler is caught, idle or busy, by `pg_backend_pid()` read on the control connection twice and on a second connection once, and by the driver's statement it loses | experiment 14 |
 | A whole run on 300 columns costs no more per cell than on 8; 100,000 rows take about 11 s, three times the rows 3.5 times as long, and the read from the source is most of it | experiment 15 |
 | The first run after the upgrade reads a change log under two keys at about 0.6 s per million rows | experiment 16 |
+| A change of columns of a mirror of 500,000 rows locks out its readers for 1.4 to 3.4 s; under load no run failed on a lock and no reader waited longer than 0.32 s | experiment 17 |

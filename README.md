@@ -158,7 +158,7 @@ A table is due when it is older than its `max_age`, at a load time it names with
 
 ## Connectors
 
-Four connectors ship: `postgres` in the core, and `file` (CSV, Excel, Parquet, JSON), `odbc` (any ODBC source) and `rest` (flat JSON over HTTP) as extras of the same name. Any other source is a package of its own, and the whole contract is one function that yields Arrow batches:
+Four connectors ship: `postgres` in the core, and `file` (CSV, Excel, Parquet, JSON), `odbc` (any ODBC source) and `rest` (flat JSON over HTTP) as extras of the same name. Any other source is a package of its own, and the contract is one function that yields Arrow batches, with three optional names beside it (`tables`, `driver_version`, `catalog`):
 
 ```python
 def read(connection: dict, table: str, options: dict) -> Iterator[pyarrow.RecordBatch]:
