@@ -33,8 +33,8 @@ MIRROR = "select * from raw_erp.customers"
     ("delete from customers", "zero rows"),
     ("delete from customers where customer_no <> 1", "67 % of the rows would be deleted"),
     ("alter table customers alter customer_no type text", "column customer_no has changed its type from integer to "
-     "te***t, a type of another family in the key, so a row before cannot be told from one after: give the table "
-     "another target_table"),  # cases C8; the harness's password is x, which a reason hides
+     "text, a type of another family in the key, so a row before cannot be told from one after: give the table "
+     "another target_table"),  # cases C8
     ("alter table customers add column _op text", "column _op is a name of the change log"),
     ("alter table customers add column _run int", "column _run is a name of the change log"),
 ])
@@ -82,7 +82,7 @@ def test_a_change_log_this_run_would_not_write_is_told_before_a_column_gone_from
     ways = ['DROP TABLE "raw_erp"."customers__log" CASCADE'] + (
         ['ALTER TABLE "raw_erp"."customers" DROP COLUMN "city"'] if "log = false" in table else [])
     for way in ways:
-        assert way in reason.replace("***", "x"), reason
+        assert way in reason, reason
         erp.target(way)
     if "log = false" not in table:  # "and the mirror"
         erp.target("drop table raw_erp.customers")
@@ -168,7 +168,7 @@ def secret(erp):
     role = "reader_" + erp.source_url.rsplit("/", 1)[1]
     erp.source(f"create role {role} login password '{PASSWORD}'")
     erp.source(f"grant select on all tables in schema public to {role}")
-    url = erp.source_url.replace("postgres:x@", f"{role}:$ERP_PASSWORD@")
+    url = erp.source_url.replace("postgres:harness-pw-7@", f"{role}:$ERP_PASSWORD@")
     text = definition(erp).replace(erp.source_url, url)
     erp.definition({"erp.toml": text, "crm.toml": text.replace("[erp", "[crm")})
     return erp
@@ -349,7 +349,7 @@ def test_a_statement_timeout_that_ends_a_run_is_named_with_the_way_out(erp, wher
     apply(erp, definition(erp, '"public.many" = { key = ["id"] }\n'))
     db = getattr(erp, f"{where}_url").rsplit("/", 1)[1]
     getattr(erp, where)(f"alter role postgres in database {db} set statement_timeout = '300ms'")
-    assert failed(erp).replace("***", "x") == (
+    assert failed(erp) == (
         "canceling statement due to statement timeout: the statement_timeout of the role in the " + where + " ended it; "
         "to let a run take longer, ALTER ROLE <its role> IN DATABASE <its database> SET statement_timeout = 0")
 
@@ -426,8 +426,8 @@ def test_a_message_a_function_in_a_source_view_raises_is_withheld(erp, statement
                f"if n = 'Anna' then {statement}; end if; return n; end $$")
     erp.source("create view checked as select customer_no, check_name(name) as name from customers")
     apply(erp, definition(erp, '"public.checked" = { key = ["customer_no"] }\n'))
-    state = "P0001" if "raise" in statement else "42P01"  # x is the harness's password
-    assert withheld(erp) == (f"function check_name(te***t) raised an error (SQLSTATE {state}) in the source, reading "
+    state = "P0001" if "raise" in statement else "42P01"
+    assert withheld(erp) == (f"function check_name(text) raised an error (SQLSTATE {state}) in the source, reading "
                              "public.checked; its message may hold a row's values, so it is left out here: the "
                              "source's server log has it")
 
@@ -452,7 +452,7 @@ def test_a_source_table_created_anew_with_other_columns_says_what_it_may_be_and_
     erp.source("drop table customers; create table customers (customer_no int primary key, label text);"
                "insert into customers values (7, 'a'), (8, 'b'), (9, 'c')")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    assert failed(erp).replace("***", "x") == (  # the source's password is x, and the reason hides it
+    assert failed(erp) == (
         "100 % of the rows would be deleted, more than max_delete_share = 0.5 allows: the source table may have been "
         "replaced or emptied; if so, max_delete_share = 1.0 on the table lets one run through")
     apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], max_delete_share = 1.0 }\n'))

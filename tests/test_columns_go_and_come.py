@@ -186,7 +186,7 @@ def test_a_stop_names_every_object_in_the_way_through_the_layers_so_one_round_of
                       "on view public.v2; and column city is gone from the source and would leave the mirror "
                       "raw_erp.customers, but materialized view public.m depends on column city of table "
                       "raw_erp.customers; view public.w depends on column city of table raw_erp.customers: change or "
-                      "drop that, and the ne***t run goes on"), reason
+                      "drop that, and the next run goes on"), reason
     assert columns(erp) == ["customer_no", "name", "city"]
     erp.target("drop view public.v3, public.v2, public.v1, public.w; drop materialized view public.m")  # one round
     again(erp)
@@ -381,7 +381,7 @@ def test_a_retired_name_the_source_takes_stops_once_and_the_next_run_retires_und
         again(erp)
     erp.source("alter table customers add column city integer")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    reason = failed(erp).replace("***", "x")  # the source's password is x, and the reason hides it
+    reason = failed(erp)
     assert erp.target("select max(run) from _rowvioli.runs") == [(run,)]
     assert reason == TAKEN.format(run), reason
     assert erp.target("select count(*) from raw_erp.customers__log where city = 'Bonn'") == [(1,)]
@@ -405,7 +405,7 @@ def test_a_retired_name_taken_for_the_next_run_too_stops_until_a_run_whose_name_
                "add column city integer")
     for number in (run, run + 1):
         erp.target("update _rowvioli.tables set requested_at = now()")
-        assert failed(erp).replace("***", "x") == TAKEN.format(number)  # the source's password x is hidden
+        assert failed(erp) == TAKEN.format(number)
     again(erp)
     assert erp.target(f"select count(*) from raw_erp.customers__log where city__{run + 2} = 'Bonn'") == [(1,)]
     log_replays(erp)
@@ -518,7 +518,7 @@ def follow(rv, reason):
 
 
 def test_a_retired_name_longer_than_postgres_takes_stops_and_says_what_to_rename(erp):  # story 10
-    long = "y" * 62  # not x: the source's password is x, and the reason hides it
+    long = "y" * 62
     erp.source(f"alter table customers add column {long} text")
     ok(erp)
     erp.source(f"alter table customers drop column {long}")
@@ -616,8 +616,7 @@ def test_a_run_that_holds_the_mirror_waits_for_no_consumers_table_with_a_foreign
         failing = erp.start("run")
         assert reads_meanwhile(erp)
         assert failing.wait(timeout=30) == 1
-        assert erp.target("select reason from _rowvioli.runs order by run desc limit 1")[0][0].replace(
-            "***", "x") == IN_USE
+        assert erp.target("select reason from _rowvioli.runs order by run desc limit 1")[0][0] == IN_USE
         assert time.monotonic() - started < 15
     ok(erp)
     log_replays(erp)

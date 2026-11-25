@@ -181,13 +181,13 @@ def pooler(erp, servers, request):
     name = f"{servers['target']}-pooler-{db}"
     mode, _, clients = request.param.partition(" with ")  # "session with 1": a pooler that takes one client
     subprocess.run(["docker", "run", "-d", "--name", name, "--label", "rowvioli-test", "-e", "AUTH_TYPE=scram-sha-256",
-                    "-e", f"DATABASE_URL=postgres://postgres:x@{ip}:5432/{db}", "-e", f"POOL_MODE={mode}",
+                    "-e", f"DATABASE_URL=postgres://postgres:harness-pw-7@{ip}:5432/{db}", "-e", f"POOL_MODE={mode}",
                     *(["-e", f"MAX_CLIENT_CONN={clients}"] if clients else []),
                     "-p", "127.0.0.1::5432", POOLER], check=True, capture_output=True)
     request.addfinalizer(lambda: subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True))
     port = subprocess.run(["docker", "port", name, "5432/tcp"], check=True, capture_output=True,
                           text=True).stdout.split()[0].rsplit(":", 1)[1]
-    url = f"postgresql://postgres:x@{HOST}:{port}/{db}"
+    url = f"postgresql://postgres:harness-pw-7@{HOST}:{port}/{db}"
     until(lambda: reachable(url))
     return url
 
@@ -222,7 +222,7 @@ def test_a_worker_without_create_on_the_database_loads_into_a_precreated_schema(
                       "grant all on all sequences in schema _rowvioli to loader",
                       "revoke create on schema public from public", f"revoke create on database {db} from public"):
         erp.target(statement)
-    url = erp.target_url.replace("postgres:x@", "loader:x@")
+    url = erp.target_url.replace("postgres:harness-pw-7@", "loader:x@")
     r = erp.run("run", env={"ROWVIOLI_TARGET_URL": url})
     assert r.returncode == 0, r.stdout + r.stderr
     assert erp.target("select count(*) from raw_erp.customers") == [(3,)]
@@ -335,7 +335,7 @@ def test_a_latin1_target_stores_the_sources_text_and_refuses_one_it_has_no_chara
     assert r.returncode == 0 and "raw_ü.customers" in r.stdout, r.stderr
     rv.source("update customers set name = 'Ω'")
     rv.target("update _rowvioli.tables set requested_at = now()")
-    assert failed(rv).replace("***", "x") == (  # the harness's password is x
+    assert failed(rv) == (
         "public.customers: column name has a value its type in the target, text, cannot hold (SQLSTATE 22P05); cast "
         "it in a view of the source or change it there")
 

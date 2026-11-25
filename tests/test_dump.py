@@ -34,7 +34,7 @@ def test_a_run_that_changes_columns_while_pg_dump_reads_the_target_gives_up_afte
         again(erp)  # rows alone: pg_dump's share lock lets them through
         erp.source("alter table customers drop column city")
         erp.target("update _rowvioli.tables set requested_at = now()")
-        assert failed(erp).replace("***", "x") == (  # the source's password is x
+        assert failed(erp) == (
             "raw_erp.customers, its change log or its history view stayed in use for 10 s, so its columns could not "
             "change; the next run tries again")
     finally:  # also when the test fails, so that neither the dump nor its waiting shell outlives it

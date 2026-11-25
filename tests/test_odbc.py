@@ -25,7 +25,7 @@ HOW = (f"needs an ODBC driver manager with the driver {DRIVER} (unixodbc and odb
 has_driver = arrow_odbc is not None and bool(shutil.which("odbcinst")) and f"[{DRIVER}]" in subprocess.run(
     ["odbcinst", "-q", "-d"], capture_output=True, text=True).stdout
 needs_driver = pytest.mark.skipif(not has_driver, reason=HOW)
-ENV = {"ERP_PASSWORD": "x"}  # the password of the harness's containers
+ENV = {"ERP_PASSWORD": "harness-pw-7"}  # the password of the harness's containers
 
 
 def odbc_string(url, password="$ERP_PASSWORD"):

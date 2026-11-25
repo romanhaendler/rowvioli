@@ -75,8 +75,8 @@ def at(rv, moment):
 
 
 def reasons(rv):
-    """By table, the source's password x put back where the reason hides it."""
-    return {t.split(".")[1]: r.replace("***", "x") for t, r in rv.target(
+    """By table, the reason or the status."""
+    return {t.split(".")[1]: r for t, r in rv.target(
         "select target_table, coalesce(reason, status) from _rowvioli.status")}
 
 
@@ -129,7 +129,7 @@ def test_a_target_of_the_released_0_4_1_with_every_stuck_state_is_upgraded_by_in
     role = f"reader_{rv.target_url.rsplit('/', 1)[1]}"
     rv.target(f"create role {role} login password 'r'")
     try:  # init as a role without rights changes nothing
-        r = rv.run("init", env={"ROWVIOLI_TARGET_URL": rv.target_url.replace("postgres:x@", f"{role}:r@")})
+        r = rv.run("init", env={"ROWVIOLI_TARGET_URL": rv.target_url.replace("postgres:harness-pw-7@", f"{role}:r@")})
         assert r.returncode == 1 and [rv.target(q) for q in CATALOGUE] == catalogue
     finally:
         rv.target(f"drop role {role}")
@@ -192,7 +192,7 @@ def test_a_worker_role_of_least_rights_loads_under_0_4_1_and_after_init_with_the
     by the owner of _rowvioli, and the grants init prints, it takes them on, a table stuck under 0.4.1 included."""
     db = rv.target("select current_database()")[0][0]
     worker = f"worker_{db}"
-    env = {"ROWVIOLI_TARGET_URL": rv.target_url.replace("postgres:x@", f"{worker}:w@")}
+    env = {"ROWVIOLI_TARGET_URL": rv.target_url.replace("postgres:harness-pw-7@", f"{worker}:w@")}
     for args in (["init"], ["key", "new"]):
         assert old(rv, released, *args).returncode == 0
     for statement in SOURCE.strip().split(";\n")[:4]:  # customers and dropped

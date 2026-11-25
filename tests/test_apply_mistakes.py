@@ -180,7 +180,7 @@ def test_a_target_address_without_the_postgres_scheme_says_so_and_shows_no_part_
 
 
 def test_a_target_address_with_several_hosts_and_a_query_string_is_no_slip(rv):
-    url = "postgresql://postgres:x@127.0.0.1:1,127.0.0.1:2/db?connect_timeout=1&application_name=a"
+    url = "postgresql://postgres:harness-pw-7@127.0.0.1:1,127.0.0.1:2/db?connect_timeout=1&application_name=a"
     r = rv.run("status", env={"ROWVIOLI_TARGET_URL": url}, timeout=20)
     assert "percent-encoded" not in r.stderr
 

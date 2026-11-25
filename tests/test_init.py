@@ -87,7 +87,7 @@ def test_init_from_version_3_prints_the_grants_a_worker_needs_and_they_are_enoug
                       f"GRANT CREATE ON DATABASE {db} TO {role}",
                       *(g.replace(" TO worker;", f" TO {role}") for g in grants)]:
         erp.target(statement)
-    url = {"ROWVIOLI_TARGET_URL": erp.target_url.replace("postgres:x@", f"{role}:w@")}
+    url = {"ROWVIOLI_TARGET_URL": erp.target_url.replace("postgres:harness-pw-7@", f"{role}:w@")}
     for change in (None, "alter table customers drop column city"):  # a first fill, then a column that goes
         if change:
             erp.source(change)
@@ -111,7 +111,7 @@ def test_a_worker_without_the_grants_init_printed_is_told_where_they_are(erp, gi
                           f"GRANT CREATE ON DATABASE {db} TO {role}",
                           *(g.replace(" TO worker;", f" TO {role}") for g in grants[:given])]:
             erp.target(statement)
-        url = {"ROWVIOLI_TARGET_URL": erp.target_url.replace("postgres:x@", f"{role}:w@")}
+        url = {"ROWVIOLI_TARGET_URL": erp.target_url.replace("postgres:harness-pw-7@", f"{role}:w@")}
         reason = json.loads(erp.run("run", env=url).stdout)["tables"]["raw_erp.customers"]["reason"]
         assert reason.endswith(f"permission denied for table {lacking}: the worker's role lacks a right on "
                           f"_rowvioli.{lacking}, which rowvioli init printed with the upgrade to version 4 "
@@ -203,7 +203,7 @@ def test_a_key_changed_before_the_upgrade_that_nothing_in_the_target_tells_stops
     released(erp)
     before = rows(erp.target, MIRROR), erp.target("select count(*) from raw_erp.customers__log")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    reason = failed(erp).replace("***", "x")  # the source's password is x, and the reason hides it
+    reason = failed(erp)
     statement = """COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '[{"key": ["customer_no"]}]'"""
     assert reason == (
         "the primary key of raw_erp.customers is (customer_no, name), the definition's key is (customer_no), and "
@@ -225,7 +225,7 @@ def test_a_change_log_a_run_would_not_write_to_stops_first_also_where_nothing_te
     apply(erp, definition(erp, LOG_FALSE))  # the definition changed, and the change log is ended
     released(erp)
     erp.target("update _rowvioli.tables set requested_at = now()")
-    reason = failed(erp).replace("***", "x")  # the source's password is x, and the reason hides it
+    reason = failed(erp)
     assert reason == ('the change log raw_erp.customers__log exists and this run would not write to it (log = false or '
                       'no key): drop it with its history view (DROP TABLE "raw_erp"."customers__log" CASCADE), or '
                       "rename both with the mirror")
@@ -304,7 +304,7 @@ def test_a_first_run_after_the_upgrade_ended_while_it_reads_the_change_log_under
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
     holder.close()
-    assert reason.replace("***", "x") == (
+    assert reason == (
         "ended after max_seconds = 3 while reading the change log raw_erp.customers__log under the definition's key "
         "and the primary key, to tell which of them wrote it; raise max_seconds once, until a run has told it")
     apply(erp, definition(erp, table.format(30)))
@@ -324,7 +324,7 @@ def test_a_change_log_from_before_the_upgrade_that_fits_neither_key_stops_with_t
     erp.target("insert into raw_erp.customers__log select _run, 'I', _loaded_at + interval '1 s', customer_no, name, "
                "city from raw_erp.customers__log where customer_no = 1")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    reason = failed(erp).replace("***", "x")  # the source's password is x
+    reason = failed(erp)
     assert reason.startswith("the primary key of raw_erp.customers is (customer_no, name), the definition's key is "
                              "(customer_no), and nothing in the target tells"), reason
     assert """'[{"key": ["customer_no"]}]'""" in reason and """'[{"key": ["customer_no", "name"]}]'""" in reason
@@ -355,7 +355,7 @@ def test_three_inits_at_once_on_an_empty_target_all_end_as_on_a_ready_target(rv)
 
 
 def as_role(rv, role):
-    return {"ROWVIOLI_TARGET_URL": rv.target_url.replace("postgres:x@", f"{role}:secret_o@")}
+    return {"ROWVIOLI_TARGET_URL": rv.target_url.replace("postgres:harness-pw-7@", f"{role}:secret_o@")}
 
 
 @pytest.fixture
