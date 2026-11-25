@@ -273,10 +273,10 @@ def test_F4_B11_a_type_under_columns_changed_to_another_family_goes_and_comes_by
 
 
 @pytest.mark.parametrize("columns, why", [
-    ('{ station = "text", day = "text" }', "column day has changed its type from date to text; without a change log "
-                                           "its values are nowhere else, so a person drops it and the next run adds "
+    ('{ station = "text", day = "text" }', "column day has changed its type from date to text, and no change log keeps "
+                                           "its values, so a person drops it and the next run adds "
                                            'it anew: ALTER TABLE "raw_weather"."a" DROP COLUMN "day"'),
-    ('{ station = "text" }', "column day is missing in the source; without a change log its values are nowhere else, "
+    ('{ station = "text" }', "column day is missing in the source, and no change log keeps its values, "
                              'so a person drops it: ALTER TABLE "raw_weather"."a" DROP COLUMN "day"')])
 def test_without_a_change_log_a_column_whose_type_or_presence_columns_changes_stops_and_says_how_to_drop_it(
         api, columns, why):

@@ -109,7 +109,7 @@ def test_B6_B8_without_a_change_log_a_type_of_another_family_stops_and_says_how_
     erp.source("alter table amounts alter a type timestamptz")
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert failed(erp) == ("column a has changed its type from timestamp without time zone to timestamp with time "
-                           "zone; without a change log its values are nowhere else, so a person drops it and the next "
+                           "zone, and no change log keeps its values, so a person drops it and the next "
                            'run adds it anew: ALTER TABLE "raw_erp"."amounts" DROP COLUMN "a"')  # x is the password
     erp.target('ALTER TABLE "raw_erp"."amounts" DROP COLUMN "a"')  # the way out
     again(erp)
@@ -382,7 +382,7 @@ def test_without_a_change_log_a_pin_taken_out_of_columns_stops_and_says_how_to_d
     code, answer = load(files, table.format(""))
     assert code == 1
     assert answer["raw_files.counts"]["reason"] == (
-        "column n has changed its type from integer to text; without a change log its values are nowhere else, so a "
+        "column n has changed its type from integer to text, and no change log keeps its values, so a "
         'person drops it and the next run adds it anew: ALTER TABLE "raw_files"."counts" DROP COLUMN "n"')
 
 
@@ -393,7 +393,7 @@ def test_without_a_change_log_a_type_under_columns_of_another_family_stops_and_s
     code, answer = load(files, table.format(', columns = { n = "integer" }'))
     assert code == 1
     assert answer["raw_files.counts"]["reason"] == (
-        "column n has changed its type from text to integer; without a change log its values are nowhere else, so a "
+        "column n has changed its type from text to integer, and no change log keeps its values, so a "
         'person drops it and the next run adds it anew: ALTER TABLE "raw_files"."counts" DROP COLUMN "n"')
 
 

@@ -73,6 +73,7 @@ Fixed:
 - A withheld message of a source says that the source's server log or a trace has it: SQL Server keeps no failed statement in its log by default.
 - A table or view of a person's named like a mirror's change log or history view (`<table>__log`, `<table>__history`) stops the run before anything else with `raw_erp.customers__log is not rowvioli's change log (a table with the columns _run, _op and _loaded_at), so the run leaves it alone: rename it, or give the table another target_table`. Before, the run took it for its own and stopped with a way out that dropped a source column, printed SQL that did not run, or a withheld SQLSTATE.
 - A type a person changed in the mirror to another family stops with the way out (drop the column from the mirror) also where the source changed its type too. Before, the run failed with a withheld `SQLSTATE 42804` on every run.
+- The stop for a column missing in the source, or of another family, without a change log says `and no change log keeps its values` instead of `without a change log its values are nowhere else`: it also fits the first run onto an existing table, whose change log only begins.
 
 ## 0.4.1 (2026-11-23)
 

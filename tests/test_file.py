@@ -339,7 +339,7 @@ def test_without_a_change_log_a_column_missing_from_the_files_stops_and_says_how
     code, answer = load(files, tables)
     assert code == 1
     assert answer["raw_files.orders"]["reason"] == (
-        "column amount is missing in the source; without a change log its values are nowhere else, so a person drops "
+        "column amount is missing in the source, and no change log keeps its values, so a person drops "
         'it: ALTER TABLE "raw_files"."orders" DROP COLUMN "amount"')
     assert files.target("select amount from raw_files.orders order by 1") == [("10",), ("20",)]
     files.target('ALTER TABLE "raw_files"."orders" DROP COLUMN "amount"')  # the way out

@@ -226,8 +226,8 @@ Every stop gives its reason in the status view and says the way out. For `raw_er
 
 | Reason | What it means and the way out |
 |---|---|
-| `column city is missing in the source; without a change log its values are nowhere else, so a person drops it: ALTER TABLE "raw_erp"."customers" DROP COLUMN "city"` | A column is gone from a table without a change log (also a file or REST table without one, where a column missing from the data stops again). Drop it as said; the next run is `ok`. A table with a change log drops it by itself. |
-| `column amount has changed its type from text to numeric; without a change log its values are nowhere else, so a person drops it and the next run adds it anew: ALTER TABLE ... DROP COLUMN "amount"` | A type of another family in a table without a change log. Drop the column as said; to keep its values, copy them into a table of your own first. |
+| `column city is missing in the source, and no change log keeps its values, so a person drops it: ALTER TABLE "raw_erp"."customers" DROP COLUMN "city"` | A column is gone from a table without a change log (also a file or REST table without one, where a column missing from the data stops again), and on the first run onto an existing table, whose change log only begins: a column of the table that the source lacks is a person's. Drop it as said, after copying its values into a table of your own if they are to be kept; the next run is `ok`. A table with a change log drops it by itself. |
+| `column amount has changed its type from text to numeric, and no change log keeps its values, so a person drops it and the next run adds it anew: ALTER TABLE ... DROP COLUMN "amount"` | A type of another family in a table without a change log. Drop the column as said; to keep its values, copy them into a table of your own first. |
 | `column amount has changed its type from text to bigint; a source without a catalog guesses its types, so pin it under columns in the table's definition; where its pin was taken out, a person drops it and the next run adds it anew: ALTER TABLE ... DROP COLUMN "amount"` | A Parquet file brings a column in another family than before, and the column is not pinned under `columns`. Pin the type, and the next run goes and comes by the definition. Where a pin was just taken out, drop the column as said instead. |
 | `column id has changed its type from integer to text, a type of another family in the key, so a row before cannot be told from one after: give the table another target_table, which begins a new mirror` | A key column changes its family. The old rows cannot be told from the new ones. |
 | `column memo of the mirror is not in the change log, so it is not known to be from the source; drop it from the mirror, after copying its values into a table of your own if they are to be kept: CREATE TABLE <a table of yours> AS SELECT "customer_no", "memo" FROM "raw_erp"."customers"; ALTER TABLE "raw_erp"."customers" DROP COLUMN "memo"` | A column that a person added to the mirror, or dropped from the change log, while the source does not deliver it. A run never drops or writes it. Copy its values if they are to be kept, and drop it. Adding it to the change log is no way out: the next run would take it out of the mirror as a column gone from the source, and its values with it. |
@@ -285,7 +285,7 @@ DROP TABLE raw_erp.U&"c\001B[31mred" CASCADE;
 DROP TABLE raw_erp.U&"c\001B[31mred__log" CASCADE;
 ```
 
-**A column was dropped in the source of a table without a change log**, here `city`. The run fails with `column city is missing in the source; without a change log its values are nowhere else, so a person drops it: ALTER TABLE "raw_erp"."customers" DROP COLUMN "city"` and keeps failing until the column is dropped, since its values would be nowhere else:
+**A column was dropped in the source of a table without a change log**, here `city`. The run fails with `column city is missing in the source, and no change log keeps its values, so a person drops it: ALTER TABLE "raw_erp"."customers" DROP COLUMN "city"` and keeps failing until the column is dropped, since its values would be nowhere else:
 
 ```sql
 ALTER TABLE raw_erp.customers DROP COLUMN city;
@@ -296,7 +296,7 @@ A view of a consumer's own that reads `city` makes the `DROP` fail; drop that vi
 **A column's type was tightened after the first load of a table without a change log**, for example `columns = { amount = "decimal(10,2)" }` for a CSV column that arrived as text. The run fails and names the column and the way out:
 
 ```
-2026-11-12 14:03:05 ✘ raw_shop.items               failed      0.1s  column amount has changed its type from text to numeric(10,2); without a change log its values are nowhere else, so a person drops it and the next run adds it anew: ALTER TABLE "raw_shop"."items" DROP COLUMN "amount"
+2026-11-12 14:03:05 ✘ raw_shop.items               failed      0.1s  column amount has changed its type from text to numeric(10,2), and no change log keeps its values, so a person drops it and the next run adds it anew: ALTER TABLE "raw_shop"."items" DROP COLUMN "amount"
 ```
 
 Drop the column, and the next run adds it with the new type; its values come from the source again. A table with a change log goes and comes back by itself: the old values stay in the change log under `amount__<run>`.

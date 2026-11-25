@@ -63,14 +63,18 @@ def test_A5_a_column_gone_from_the_source_leaves_the_mirror_and_its_values_stay_
 COUNTS = "select inserted, updated, deleted from _rowvioli.runs order by run desc limit 1"
 
 
-@pytest.mark.parametrize("table", ['{ key = ["customer_no"], log = false }', "{}"])
+@pytest.mark.parametrize("table", ['{ key = ["customer_no"], log = false }', "{}", "begins"])
 def test_A5_without_a_change_log_a_gone_column_stops_the_run_and_says_how_to_drop_it(erp, table):
-    apply(erp, definition(erp, f'"public.customers" = {table}\n'))
-    ok(erp)
+    if table == "begins":  # the first run onto a table it did not create, whose change log begins (ticket 17, M5)
+        erp.target("create schema raw_erp; create table raw_erp.customers (customer_no int primary key, name text, "
+                   "city text); insert into raw_erp.customers values (1, 'Anna', 'Bonn')")
+    else:
+        apply(erp, definition(erp, f'"public.customers" = {table}\n'))
+        ok(erp)
     before = rows(erp.target, MIRROR)
     erp.source("alter table customers drop column city")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    assert failed(erp) == ("column city is missing in the source; without a change log its values are nowhere else, "
+    assert failed(erp) == ("column city is missing in the source, and no change log keeps its values, "
                            'so a person drops it: ALTER TABLE "raw_erp"."customers" DROP COLUMN "city"')
     assert rows(erp.target, MIRROR) == before
 

@@ -313,7 +313,7 @@ def test_a_line_break_in_a_column_name_is_written_as_a_question_mark_and_the_rea
     erp.source('alter table customers drop column "a\nb"')
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)  # the way out with Unicode escapes, so that it works when pasted (ticket 15, X3)
-    assert reason == ("column a?b is missing in the source; without a change log its values are nowhere else, "
+    assert reason == ("column a?b is missing in the source, and no change log keeps its values, "
                       'so a person drops it: ALTER TABLE "raw_erp"."customers" DROP COLUMN U&"a\\000Ab"')
     erp.target(reason.rpartition(": ")[2])
     erp.target("update _rowvioli.tables set requested_at = now()")

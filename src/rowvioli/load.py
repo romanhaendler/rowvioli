@@ -229,8 +229,8 @@ def check(conn, t, staged, mirror, log_columns, renamed):
                             f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
         if name not in types:
             if not (t["key"] and t["log"] and log_columns):
-                raise Exception(f"column {name} is missing in the source; without a change log its values are nowhere "
-                                f"else, so a person drops it: ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
+                raise Exception(f"column {name} is missing in the source, and no change log keeps its values, so a "
+                                f"person drops it: ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
             plan["gone"].append(name)
         elif family(types[name]) != family(type):  # another family goes and comes (decision 54)
             changed = f"column {name} has changed its type from {type} to {types[name]}"
@@ -247,7 +247,7 @@ def check(conn, t, staged, mirror, log_columns, renamed):
                                     f"{quote(name)}")
                 plan["unpinned"].append(name)
             if not (t["key"] and t["log"] and log_columns):
-                raise Exception(f"{changed}; without a change log its values are nowhere else, so a person drops it "
+                raise Exception(f"{changed}, and no change log keeps its values, so a person drops it "
                                 f"and the next run adds it anew: ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
             plan["gone"].append(name)
     said = comments(conn, t)  # decision 54: a retired column is known by its comment, never by its name
