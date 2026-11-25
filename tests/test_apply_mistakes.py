@@ -179,6 +179,19 @@ def test_a_target_address_without_the_postgres_scheme_says_so_and_shows_no_part_
         assert "keepalives" not in r.stderr and "secret" not in r.stderr and "127.0.0.1" not in r.stderr, r.stderr
 
 
+@pytest.mark.parametrize("password, says", [
+    ("p@ss/w:rd#1", " has more than one @ after the scheme: a password with @, / or : must be percent-encoded"),
+    ("pa/ss", ": the password holds a / or ?, which must be percent-encoded (%2F, %3F)")])
+def test_a_source_url_whose_password_breaks_it_fails_apply_and_shows_no_part_of_it(rv, password, says):
+    for command in ("apply", "list"):  # ticket 17, L3: it applied, and the run gave a part of it as a host name
+        r = check(rv, {"erp.toml": ERP.replace("$ERP_PASSWORD", password)}) if command == "apply" else \
+            rv.run("list", "erp", env=NO_TARGET)
+        assert r.returncode != 0
+        assert r.stderr.strip() == (f"erp.toml: erp: connection.url{says}, or come from a variable ($NAME), which "
+                                    "apply encodes"), r.stderr
+        assert password not in r.stderr and "nowhere" not in r.stderr
+
+
 def test_a_target_address_with_several_hosts_and_a_query_string_is_no_slip(rv):
     url = "postgresql://postgres:harness-pw-7@127.0.0.1:1,127.0.0.1:2/db?connect_timeout=1&application_name=a"
     r = rv.run("status", env={"ROWVIOLI_TARGET_URL": url}, timeout=20)

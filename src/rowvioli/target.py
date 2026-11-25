@@ -27,14 +27,15 @@ CLAIMABLE = files(__package__).joinpath("sql/claimable.sql").read_text()
 NO_SCHEMA = "the target has no schema _rowvioli: run `rowvioli init` first"
 
 
-def check_address(url):
+def check_address(url, name="ROWVIOLI_TARGET_URL", way=""):
     """Fails before connecting for an address that is no postgres URL, or has a second @, which the driver would
-    read as part of the host. Never prints the address: it may hold a password."""
+    read as part of the host. Never prints the address: it may hold a password. `name` says where it is written,
+    `way` another way to write the password (a source's URL, ticket 17)."""
     if not url.startswith(("postgresql://", "postgres://")):
-        raise SystemExit("ROWVIOLI_TARGET_URL must start with postgresql:// or postgres://")
+        raise SystemExit(f"{name} must start with postgresql:// or postgres://")
     if url.split("://", 1)[-1].split("?", 1)[0].count("@") > 1:
-        raise SystemExit("ROWVIOLI_TARGET_URL has more than one @ after the scheme: a password with @, / or : "
-                         "must be percent-encoded")
+        raise SystemExit(f"{name} has more than one @ after the scheme: a password with @, / or : "
+                         f"must be percent-encoded{way}")
     rest = url.split("://", 1)[1]
     authority = re.split(r"[/?]", rest, maxsplit=1)[0]  # not at #: the driver takes a # in a password as it is
     host = authority.rsplit("]", 1)[-1]  # after an IPv6 host's bracket, so its colons are no user info
@@ -43,8 +44,7 @@ def check_address(url):
     # Several hosts (a comma) and an empty port are the driver's to judge.
     if (":" in host and "@" not in authority and "," not in authority and port and not port.isdigit()
             and "@" in rest[len(authority):]):
-        raise SystemExit("ROWVIOLI_TARGET_URL: the password holds a / or ?, which must be percent-encoded "
-                         "(%2F, %3F)")
+        raise SystemExit(f"{name}: the password holds a / or ?, which must be percent-encoded (%2F, %3F){way}")
 
 
 def connect(init=False, versioned=True, pooler=True):

@@ -83,6 +83,7 @@ Fixed:
 - A connector's `driver_version` that is no text of one line and at most 200 characters fails the run naming the connector. Before, it was stored as given with every run: an integer as text, a line break, 100,000 characters. docs/connectors.md says the contract's three optional names in one place, and the README points to them.
 - A connector that delivers something that is no Arrow record batch, or a batch of another schema than its first, fails with `connector "<type>" delivered ..., which the contract does not allow`. Before, the reason was Arrow's own words (`'list' object has no attribute 'schema'`, `Expected array with 2 buffer(s) but found 3`).
 - A source that refuses a connection (a wrong password, an unknown host, a missing ODBC driver) adds to the reason that the connection is the one the last `apply` stored: after changing a variable, run `apply` again.
+- A password written plainly into a `postgres` source's URL that breaks it (`postgresql://lena:p@ss/w:rd#1@host/db`) is refused by `apply` and `list`, with the way to write it, as the target's address is. Before, it applied and the run failed with `could not translate host name "ss" to address`, a part of the password in the reason.
 
 ## 0.4.1 (2026-11-23)
 
