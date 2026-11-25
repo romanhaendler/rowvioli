@@ -59,7 +59,7 @@ Unchanged from the first round:
 - **A change log left under a name the definition no longer has** keeps a history view that nobody updates.
 - **A history view left behind under a name a new change log takes** is replaced by the next run, or the run fails if its columns do not fit.
 - **An empty page in the middle of REST paging ends the load.** An empty page is how paging ends, so an API that answers one in the middle delivers a table that stops there. The limit on deletions catches a large cut, a small one passes.
-- **`timestamptz 'infinity'` from a Postgres source fails the run** with `Error occurred writing COPY data:` and nothing after it. The driver gives no cause.
+- **A `timestamp` or `timestamptz` of `infinity` from a Postgres source fails the run**, with a reason that names the column: the driver reads it but cannot write it into the target. A view of the source that casts it is the way out ([connectors](connectors.md)).
 - **A JSON number with a fraction passes through a 64-bit float** in the `file` connector: beyond 15 to 17 significant digits it is rounded. Whole numbers of any size and exponents arrive exactly.
 - **An unterminated quote in a CSV loads with the quote kept**: `1,"Anna` followed by more lines arrives as a row whose value is `"Anna`, without an error. Forcing `quote = '"'` would fail such a file, and also one with a literal `"` in an unquoted field, which loads right today. Whoever sets `quote = '"'` gets the failure.
 - **`columns` casts follow DuckDB**, for CSV and JSON: `1.7` cast to `integer` becomes `2`.

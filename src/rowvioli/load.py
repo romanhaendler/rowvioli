@@ -924,7 +924,7 @@ def carry_out(conn, t, plan):
                     f"{why}, but {published} publishes its updates and deletes, for which the primary key is its "
                     f"replica identity: give it another for the change, ALTER TABLE {t['mirror']} REPLICA IDENTITY FULL")
         # Postgres leaves NOT NULL behind, also where LIKE copied it; a column still in a key it refuses to free
-        if (loose := [c for c in was if c not in key]) and (not was or dropped):
+        if (loose := [c for c in was if c not in key]) and dropped:
             for table, named in [(t["mirror"], {}), (t["log_table"], plan["retired"])][:2 if plan["key"]["log"] else 1]:
                 # one retired in this run has its new name in the change log already
                 sql(conn, f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(named.get(c, c))} DROP NOT NULL"
