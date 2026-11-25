@@ -297,7 +297,7 @@ A view of a consumer's own that reads `city` makes the `DROP` fail; drop that vi
 **A column's type was tightened after the first load of a table without a change log**, for example `columns = { amount = "decimal(10,2)" }` for a CSV column that arrived as text. The run fails and names the column and the way out:
 
 ```
-2026-11-12 14:03:05 ✘ raw_shop.items               failed      0.1s  column amount has changed its type from text to numeric(10,2), and no change log keeps its values, so a person drops it and the next run adds it anew: ALTER TABLE "raw_shop"."items" DROP COLUMN "amount"
+2026-11-12 14:03:05 ✘ raw_shop.items failed      0.1s  column amount has changed its type from text to numeric(10,2), and no change log keeps its values, so a person drops it and the next run adds it anew: ALTER TABLE "raw_shop"."items" DROP COLUMN "amount"
 ```
 
 Drop the column, and the next run adds it with the new type; its values come from the source again. A table with a change log goes and comes back by itself: the old values stay in the change log under `amount__<run>`.

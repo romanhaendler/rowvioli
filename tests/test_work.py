@@ -310,18 +310,22 @@ def said_after_sigterm(worker):
 
 def test_work_says_its_start_and_what_it_loads_and_the_counts_equal_those_in_runs(ready):
     ready.source("create table customers (id int primary key)")
-    ready.source("insert into customers values (1), (2)")
-    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
+    ready.source("insert into customers select generate_series(1, 1000)")
+    ready.source("create table customer_addresses (id int primary key)")
+    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }\n"public.customer_addresses" = { key = ["id"] }'))
     worker = ready.start("work", "--slots", "3", env=COLOUR)
-    until(lambda: ready.target("select status from _rowvioli.status") == [("ok",)])
+    until(lambda: ready.target("select status from _rowvioli.status") == [("ok",), ("ok",)])
     db = ready.target("select current_database()")[0][0]
     err = said_after_sigterm(worker)
     assert re.match(rf"\033\[2m\d{{4}}-\d\d-\d\d \d\d:\d\d:\d\d\033\[0m   worker \S+ started with 3 slots on {db}\n", err)
     assert "~~~" not in err  # no mascot when stderr is a pipe
-    assert re.search(r"\033\[0m ▶ raw_erp\.customers +started +run 1\n", err)
-    [(inserted, updated, deleted)] = ready.target("select inserted, updated, deleted from _rowvioli.runs")
-    assert re.search(rf"\033\[0m \033\[32m✔ raw_erp\.customers +ok +\d+\.\ds  \+{inserted} ~{updated} -{deleted}\033\[0m\n",
-                     err)
+    wide = len("raw_erp.customer_addresses")  # the longest name in scope: the shorter one is padded to it
+    assert re.search(rf"\033\[0m ▶ {'raw_erp.customers':<{wide}} started +run \d\n", err)
+    [(inserted, updated, deleted)] = ready.target(
+        "select inserted, updated, deleted from _rowvioli.runs r join _rowvioli.status s on s.id = r.\"table\" "
+        "where s.target_table = 'raw_erp.customers'")
+    counts = f"{f'+{inserted:,}':>11} {f'~{updated:,}':>11} {f'-{deleted:,}':>11}"
+    assert re.search(rf"\033\[0m \033\[32m✔ {'raw_erp.customers':<{wide}} ok +\d+\.\ds  {re.escape(counts)}\033\[0m\n", err)
 
 
 def test_work_says_a_failure_with_the_reason_of_the_status(ready):
@@ -541,10 +545,21 @@ def test_the_marks_are_green_red_and_yellow(monkeypatch, capsys):
         assert capsys.readouterr().err.endswith(f" \033[{code}m{mark} x\033[0m\n")
 
 
-def test_the_target_table_of_a_run_line_is_padded_to_28_characters(monkeypatch, capsys):
+def test_the_target_table_of_a_run_line_is_padded_to_width_and_a_longer_name_is_written_whole(monkeypatch, capsys):
     monkeypatch.setattr(work, "colour", lambda: False)
+    monkeypatch.setattr(work, "WIDTH", 40)
     work.say_run({"claimed": "raw_erp.t", "started": time.monotonic()}, "started", "run 1")
-    assert f"▶ {'raw_erp.t':<28} started " in capsys.readouterr().err
+    work.say_run({"claimed": "x" * 45, "started": time.monotonic()}, "started", "run 2")
+    err = capsys.readouterr().err
+    assert f"▶ {'raw_erp.t':<40} started " in err and f"▶ {'x' * 45} started " in err
+
+
+def test_a_run_line_says_the_time_in_tenths_under_a_minute_and_as_a_person_reads_it_from_there(monkeypatch, capsys):
+    monkeypatch.setattr(work, "colour", lambda: False)
+    for ago in (12, 1840):
+        work.say_run({"claimed": "t", "started": time.monotonic() - ago}, "ok", "x")
+    short, long = capsys.readouterr().err.splitlines()
+    assert re.search(r" ok +12\.\ds  x$", short) and " ok       30m 40s  x" in long
 
 
 def test_two_workers_and_a_run_on_a_table_whose_shape_changes_publish_each_change_once(ready):  # ticket 14, item 4

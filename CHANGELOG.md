@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 (2026-11-25)
+
+Changed:
+
+- The run lines of `run` and `work` stand in columns: the table column is as wide as the longest target table name in scope (it was 28 characters), the counts have thousands separators and stand right-aligned in columns of 11, and a duration from one minute on reads `5m 12s` or `1h 3m`. A script that reads these lines by field reads `_rowvioli.runs` instead, where the counts and times are numbers.
+
 ## 0.5.0 (2026-11-25)
 
 Added:

@@ -14,13 +14,14 @@ from datetime import datetime
 
 import adbc_driver_postgresql.dbapi as adbc
 
-from . import load, target
+from . import definition, load, target
 from .target import CLAIMABLE, sql
 
 SCOPE = "($1::text = '' OR source = $1::text) AND ($2::text = '' OR source_table = $2::text)"
 # how many runs may start now, and whether anything in scope is due or loading
 CLAIMABLE_AND_BUSY = f"""SELECT (SELECT count(*) FROM ({CLAIMABLE}) c),
-                                count(*) FILTER (WHERE status = 'loading' OR due_at <= now())
+                                count(*) FILTER (WHERE status = 'loading' OR due_at <= now()),
+                                coalesce(max(length(target_table)), 0)
                            FROM _rowvioli.status WHERE {SCOPE}"""
 # of the given runs, those whose table is no longer loading: their lock went with their connection (decision 7)
 LOST = """SELECT r.run FROM _rowvioli.runs r JOIN _rowvioli.status s ON s.id = r."table"
@@ -35,6 +36,7 @@ MASCOT = """\
 
 
 COLOURS = {"✔": "32", "✘": "31", "⚠": "33"}
+WIDTH = 0  # the longest target table name in scope, so every run line's columns stand under each other; it only grows
 
 
 def colour():
@@ -88,6 +90,7 @@ def loop(slots, source="", table="", once=False):
     start nothing new and return once its runs have ended (decision 33). SIGINT (Ctrl+C), with or without `once`,
     kills the run processes, says so in one line and exits with 130; nothing is recorded, the tables close as `worker
     lost` (decision 7)."""
+    global WIDTH
     worker = f"{socket.gethostname()}:{os.getpid()}"
     answers, runs, crashed = {}, {}, False  # runs: process -> what it said after its claim, None until then
     said_crash = None
@@ -111,7 +114,8 @@ def loop(slots, source="", table="", once=False):
             while ended:
                 record(conn, ended[0])
                 ended.pop(0)
-            claimable, busy = sql(conn, CLAIMABLE_AND_BUSY, [source, table])[0]
+            claimable, busy, width = sql(conn, CLAIMABLE_AND_BUSY, [source, table])[0]
+            WIDTH = max(WIDTH, width)
             end_lost(conn, runs)
             if down:
                 say(f"the target is reachable again after {time.monotonic() - down:.0f}s", "✔")
@@ -171,9 +175,11 @@ def pump(p, lines):
 
 
 def say_run(claim, outcome, text):
-    """A run's line: its target table, `started`, `ok` or `failed`, the seconds since its claim, the text."""
-    secs = "" if outcome == "started" else f"{time.monotonic() - claim['started']:.1f}s"
-    say(f"{claim['claimed']:<28} {outcome:<7} {secs:>8}  {text}", {"started": "▶", "ok": "✔"}.get(outcome, "✘"))
+    """A run's line: its target table padded to WIDTH, `started`, `ok` or `failed`, the time since its claim, the text."""
+    # shortcut: len() counts characters, so a name in wide (CJK) characters is padded too little, use the display width if someone asks
+    secs = round(time.monotonic() - claim["started"], 1)
+    secs = "" if outcome == "started" else f"{secs:.1f}s" if secs < 60 else definition.duration(int(secs))
+    say(f"{claim['claimed']:<{WIDTH}} {outcome:<7} {secs:>8}  {text}", {"started": "▶", "ok": "✔"}.get(outcome, "✘"))
 
 
 def listen(runs, answers, ended, seconds, lines):
@@ -209,7 +215,8 @@ def listen(runs, answers, ended, seconds, lines):
                 if said.get("reason") == "connection to the target lost":  # the run could not record it itself
                     ended.append(runs[p] | {"reason": said["reason"]})
                 if said["status"] == "ok":
-                    say_run(runs[p], "ok", f"+{said['inserted']} ~{said['updated']} -{said['deleted']}")
+                    # shortcut: a count of more than 8 digits pushes its line, widen when a run changes 100 million rows
+                    say_run(runs[p], "ok", " ".join(f"{sign + format(said[k], ','):>11}" for sign, k in zip("+~-", ("inserted", "updated", "deleted"))))
                 else:
                     say_run(runs[p], "failed", said["reason"])
                 runs[p]["deadline"] = math.inf
