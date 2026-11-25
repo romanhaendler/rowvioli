@@ -1421,7 +1421,8 @@ def main(worker, source, table):
     try:
         conn = target.connect(pooler=False)  # the worker that started this process checked for a pooler
         t = claim(conn, worker, source, table)
-    except Exception as e:  # nothing to record it on: the worker says it (decision 54, item 8: by the one rule)
+    except (Exception, SystemExit) as e:  # nothing to record it on: the worker says it (decision 54, item 8: by the
+        # one rule), also what connect() refuses, such as a schema version another program's init brought
         say(error="connection to the target lost" if lost(e) else reason_line(target_secrets(), e, "claiming"))
         raise SystemExit(1) from None
     if t is None:
