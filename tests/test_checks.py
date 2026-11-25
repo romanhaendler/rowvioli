@@ -562,6 +562,24 @@ def test_values_two_rows_swap_stop_on_a_consumers_unique_index_with_the_way_out_
     log_replays(erp)
 
 
+def test_values_two_rows_swap_stop_on_a_consumers_exclusion_constraint_with_the_way_out_and_no_value(erp):
+    ok(erp)  # the same for an exclusion constraint, which Postgres checks row by row unless it is DEFERRABLE
+    erp.target("alter table raw_erp.customers add constraint city_x exclude using btree (city with =)")
+    erp.source("update customers set city = case customer_no when 1 then 'Essen' else 'Bonn' end "
+               "where customer_no in (1, 2)")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == (
+        'conflicting key value violates exclusion constraint "city_x": Postgres checks an exclusion constraint on the '
+        "mirror row by row, so it refuses a value that moves from one row to another within a run, as well as one the "
+        "source holds twice; drop it, or put it in again so that Postgres checks it at the end of the statement: "
+        "ALTER TABLE <the mirror> ADD EXCLUDE (<its elements>) DEFERRABLE")
+    erp.target("alter table raw_erp.customers drop constraint city_x; "
+               "alter table raw_erp.customers add constraint city_x exclude using btree (city with =) deferrable")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
+
+
 def test_a_source_table_created_anew_with_other_columns_says_what_it_may_be_and_the_setting_for_one_run(erp):  # H2
     ok(erp)
     erp.source("drop table customers; create table customers (customer_no int primary key, label text);"
