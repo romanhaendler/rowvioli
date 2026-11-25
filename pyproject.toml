@@ -19,7 +19,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 requires-python = ">=3.11"
-dependencies = ["pyarrow>=19", "adbc-driver-postgresql>=1.13", "pynacl>=1.5"]
+dependencies = ["pyarrow>=19", "adbc-driver-postgresql>=1.13,<2", "adbc-driver-manager>=1.13,<2", "pynacl>=1.5"]
 
 [project.urls]
 Homepage = "https://github.com/romanhaendler/rowvioli"

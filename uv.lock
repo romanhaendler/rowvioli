@@ -546,6 +546,7 @@ name = "rowvioli"
 version = "0.4.1"
 source = { editable = "." }
 dependencies = [
+    { name = "adbc-driver-manager" },
     { name = "adbc-driver-postgresql" },
     { name = "pyarrow" },
     { name = "pynacl" },
@@ -573,7 +574,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "adbc-driver-postgresql", specifier = ">=1.13" },
+    { name = "adbc-driver-manager", specifier = ">=1.13,<2" },
+    { name = "adbc-driver-postgresql", specifier = ">=1.13,<2" },
     { name = "arrow-odbc", marker = "extra == 'odbc'", specifier = ">=9.3.0" },
     { name = "duckdb", marker = "extra == 'file'", specifier = ">=1.5" },
     { name = "httpx", marker = "extra == 'rest'", specifier = ">=0.28" },

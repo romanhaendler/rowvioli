@@ -17,6 +17,7 @@ Added:
 
 Changed (a working set-up can notice these):
 
+- `adbc-driver-postgresql` and `adbc-driver-manager` stay below 2: the `postgres` connector reads the driver manager's reader through a private attribute, which keeps the SQLSTATE of a source's error and so decides what of its message a reason shows.
 - **After `rowvioli init` brings a target to version 4, a worker's role needs `GRANT SELECT, INSERT, UPDATE, DELETE ON _rowvioli.columns` and `GRANT SELECT, INSERT ON _rowvioli.columns__log`** (`init` prints them on that upgrade). Without them every publish fails with `permission denied`. Auditors and consumers who read the columns need `SELECT` on `_rowvioli.columns__history` and nothing else. All workers of a target run the same drivers. A worker of 0.4.1 refuses version 4, and every command of this version but `init` and `status` refuses version 3: stop the old workers, run `init`, grant, start the new ones (docs/operation.md).
 - A change log is complete from its last change of key: replaying it from there gives the mirror.
 - A timestamp or time finer than a microsecond, the finest the target holds, fails the run and names the column: `ns.parquet: column t has a time finer than a microsecond, which the target does not hold; columns = { t = "timestamp" } reads it rounded to microseconds`; from another connector, cut it in a view of the source. Before, the driver cut it with the run `ok`. Whole microseconds load as before, also from a Parquet column of nanoseconds.
