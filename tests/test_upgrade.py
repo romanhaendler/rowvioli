@@ -264,3 +264,51 @@ def test_a_worker_role_of_least_rights_loads_under_0_4_1_and_after_init_with_the
     finally:
         rv.target("drop schema if exists raw_erp cascade")
         rv.target(f"drop owned by {worker} cascade; drop role {worker}")
+
+
+@pytest.mark.parametrize("hand", ["k2"])
+def test_a_primary_key_changed_by_hand_on_a_mirror_of_0_4_1_stops_and_the_key_it_says_changes_it_as_the_definition_would(
+        rv, released, hand):
+    """Ticket 19: 0.4.1 wrote the change log under (k), under which k2 was not unique; the definition changes the key
+    to (k2), and a person changes the primary key by hand to it, or to a third (k3), before the first run of 0.5."""
+    for args in (["init"], ["key", "new"]):
+        assert old(rv, released, *args).returncode == 0
+    rv.source("create table t (k int primary key, k2 text not null, k3 int not null, v text)")
+    rv.source("insert into t values (1, 'a', 10, 'x'), (2, 'a', 20, 'y'), (3, 'c', 40, 'z')")
+    definition(rv, {"t": '{ key = ["k"] }'})
+    assert old(rv, released, "apply", "sources").returncode == 0
+    moments = []
+    for change in ("select", "update t set k2 = 'b', k3 = 30 where k = 2"):
+        rv.source(change)
+        rv.target("update _rowvioli.tables set requested_at = now()")
+        assert old(rv, released, "run").returncode == 0
+        moments.append((rv.target("select loaded_at from _rowvioli.tables")[0][0],
+                        rows(rv.target, "select * from raw_erp.t")))
+    assert rv.run("init").returncode == 0
+    definition(rv, {"t": '{ key = ["k2"] }'})
+    assert rv.run("apply", "sources").returncode == 0
+    rv.target(f"alter table raw_erp.t drop constraint t_pkey, add primary key ({hand})")
+    rv.target("update _rowvioli.tables set requested_at = now()")
+    assert rv.run("run").returncode == 1
+    say = ("say the key it was written under, the key the table had when its change log was written, and the next "
+           """run changes the key as the definition says: COMMENT ON COLUMN "raw_erp"."t__log"._op IS """
+           """'[{"key": ["<the key column>"]}]'""")
+    assert reasons(rv)["t"] == (
+        "the change log raw_erp.t__log was not written under (k2), the key of the definition and of the mirror's "
+        "primary key, so a person changed the primary key by hand before a run changed it: " + say if hand == "k2" else
+        "the primary key of raw_erp.t is (k3), the definition's key is (k2), and the change log raw_erp.t__log was "
+        "written under neither, so a person changed the primary key by hand before a run changed the key: " + say)
+    rv.target(say.split("says: ")[1].replace("<the key column>", "k"))
+    rv.target("update _rowvioli.tables set requested_at = now()")
+    assert rv.run("run").returncode == 0, reasons(rv)
+    moments.append((rv.target("select loaded_at from _rowvioli.tables")[0][0], rows(rv.target, "select * from raw_erp.t")))
+    assert rows(rv.target, "select * from raw_erp.t") == rows(rv.source, "select * from t")
+    assert rv.target("select a.attname from pg_index i join pg_attribute a on a.attrelid = i.indrelid and a.attnum = "
+                     "any(i.indkey) where i.indrelid = 'raw_erp.t'::regclass and i.indisprimary") == [("k2",)]
+    log_replays(rv, "raw_erp.t")
+    for moment, mirror in moments:
+        assert rows(lambda q: rv.target(q, [moment, moment]), "select k, k2, k3, v from raw_erp.t__history where "
+                    "_valid_from <= %s and (_valid_to > %s or _valid_to is null)") == mirror
+    rv.target("update _rowvioli.tables set requested_at = now()")
+    assert rv.run("run").returncode == 0
+    assert rv.target("select count(*) from raw_erp.t__log where _run = (select max(run) from _rowvioli.runs)") == [(0,)]

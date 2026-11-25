@@ -306,6 +306,14 @@ def check(conn, t, staged, mirror, log_columns, renamed):
             # a person changed the primary key by hand to the definition's new key before a run did: the change log is
             # written under the recorded one, so the run changes the key as the definition would (ticket 18)
             plan["key"] = {"was": was, "by": "definition", "log": True, "primary": primary_key}
+        elif log_columns and not sql(conn, "SELECT 1 FROM _rowvioli.columns WHERE id = $1 LIMIT 1", [t["id"]]):
+            # before the record (0.4.1, which wrote no comment on _op): the change log must fit the key, and the comment
+            # a person wrote at its stop says the key it was written under, which the run changes (ticket 19)
+            if not (keys := stretches(conn, t)):
+                before_the_record(conn, t, primary_key, key, log_columns, renamed)
+            elif {renamed_to.get(c, c) for c in keys[-1]["key"]} != set(key):
+                plan["key"] = {"was": [renamed_to.get(c, c) for c in keys[-1]["key"]], "by": "definition", "log": True,
+                               "primary": primary_key}
         # the diff joins the mirror by the definition's key, or where it replaces it writes its old rows' D by the old
         # one into a change log: a key column it lacks went by hand
         by = plan["key"].get("by") == "definition"
@@ -386,7 +394,7 @@ def before_the_record(conn, t, primary_key, key, log_columns, renamed):
     under the definition's key then, so the same definition now says a person changed it. Otherwise the change log,
     written under one of the two keys, says which: under the other a key value has two rows at one moment, an I while
     it lives or a U or D while it does not. Stops where neither tells: the program never guesses what identifies a
-    row (story 22)."""
+    row (story 22). Where the primary key is the definition's, the change log must fit it (ticket 19)."""
     [(same,)] = sql(conn, """SELECT definition = (SELECT definition FROM _rowvioli.runs WHERE "table" = r."table"
                                                      AND status = 'ok' ORDER BY run DESC LIMIT 1)
                                FROM _rowvioli.runs r WHERE run = $1""", [t["run"]])
@@ -395,6 +403,7 @@ def before_the_record(conn, t, primary_key, key, log_columns, renamed):
     if not log_columns:  # replaced as a whole and under the definition's key either way, with no history to get wrong
         return False
     defined, primary = ([renamed.get(c, c) for c in k] for k in (key, primary_key))  # the change log's names
+    keys = [defined] if set(defined) == set(primary) else [defined, primary]  # one key is read once
     with long(f"reading the change log {t['name']}__log under the definition's key and the primary key, to tell which "
               "of them wrote it; raise max_seconds once, until a run has told it"):  # 0.6 s per million rows
         fits = [bool(k) and set(k) <= dict(log_columns).keys() and not sql(conn, f"""
@@ -402,7 +411,16 @@ def before_the_record(conn, t, primary_key, key, log_columns, renamed):
                            FROM ONLY {t['log_table']} WINDOW w AS (PARTITION BY {', '.join(quote(c) for c in k)}
                                                               ORDER BY _loaded_at)) l
              WHERE at = _loaded_at OR (_op = 'I') <> (before IS NULL OR before = 'D') LIMIT 1""")
-                for k in (defined, primary)]
+                for k in keys]
+    say = ("say the key it was written under, the key the table had when its change log was written, and the next run "
+           f"changes the key as the definition says: COMMENT ON COLUMN {t['log_table']}._op IS "
+           + literal(json.dumps([{"key": ["<the key column>"]}])))
+    if len(keys) == 1:
+        if fits[0]:
+            return True
+        raise Exception(f"the change log {t['name']}__log was not written under ({', '.join(key)}), the key of the "
+                        "definition and of the mirror's primary key, so a person changed the primary key by hand "
+                        f"before a run changed it: {say}")
     if fits[0] != fits[1]:
         return fits[0]
     comment = f"COMMENT ON COLUMN {t['log_table']}._op IS " + "{}"
