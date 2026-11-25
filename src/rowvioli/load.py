@@ -246,6 +246,13 @@ def check(conn, t, staged, mirror, log_columns, renamed):
                 raise Exception(f"{changed}, and no change log keeps its values, so a person drops it "
                                 f"and the next run adds it anew: ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
             plan["gone"].append(name)
+    # a column the last run recorded in the mirror that a person dropped from it, and the source too: its last values
+    # are closed in the change log, as for a column that goes (ticket 17, M3)
+    if t["key"] and t["log"] and log_columns:
+        plan["closed"] = [n for (n,) in sql(conn, 'SELECT "column" FROM _rowvioli.columns WHERE id = $1 AND '
+                                                  "target_schema = $2 AND target_table = $3 AND mirror",
+                                            [t["id"], t["schema"], t["table"]])
+                          if n in logged and n not in had and n not in types]
     said = comments(conn, t)  # decision 54: a retired column is known by its comment, never by its name
     retired = {n: was for n, text in said.items() if (was := retirement(text))}
     for name, type in staged:
@@ -701,7 +708,7 @@ def publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, 
     if t["key"] and plan["key"]:  # once the old rows are gone, which may hold the new key twice
         sql(conn, f"ALTER TABLE {t['mirror']} ADD PRIMARY KEY ({', '.join(quote(k) for k in t['key'])})")
     if t["key"] and t["log"]:  # the change log's columns under the names the plan gave them
-        write_log(conn, t, staged, [(moved.get(n, n), type) for n, type in log_columns], logged)
+        write_log(conn, t, staged, [(moved.get(n, n), type) for n, type in log_columns], logged, plan.get("closed"))
     if t["long"]:
         say(long=None)
     record_columns(conn, t, delivered, mirror, log_columns, changes)
@@ -1048,11 +1055,12 @@ def alter(conn, t, why, statement, table, columns=(), constraint=None, drop=True
     return done
 
 
-def write_log(conn, t, staged, log_columns, names):
+def write_log(conn, t, staged, log_columns, names, closed=None):
     """After the mirror is published, in the same transaction: a log that exists gets the diff, a new one begins
-    with the whole mirror, so that replaying a log from the last change of key always gives the mirror. The history
-    view is created when missing and replaced when the log got a column; otherwise it is not touched, so takes no
-    lock."""
+    with the whole mirror, so that replaying a log from the last change of key always gives the mirror; `closed`, the
+    columns a person dropped from the mirror, get a U for every row whose latest version has a value in one. The
+    history view is created when missing and replaced when the log got a column; otherwise it is not touched, so takes
+    no lock."""
     if log_columns:
         widened = add_columns(conn, t["log_table"], staged, log_columns)
         rows = f"SELECT _op, {names} FROM _diff"
@@ -1064,6 +1072,14 @@ def write_log(conn, t, staged, log_columns, names):
     # now() is the transaction's moment, the one that goes into tables.loaded_at
     sql(conn, f"INSERT INTO {t['log_table']} (_run, _loaded_at, _op, {names}) SELECT $1, now(), * FROM ({rows}) r",
         [t["run"]])
+    if closed:  # after this run's rows, which have none there, in one pass over the change log (ticket 17, M3)
+        key, mine, mirrored, gone = (", ".join(f"{a}{quote(c)}" for c in cs) for a, cs in (
+            ("", t["key"]), ("", dict(staged)), ("m.", dict(staged)), ("", closed)))
+        sql(conn, f"""INSERT INTO {t['log_table']} (_run, _loaded_at, _op, {mine})
+                       SELECT $1, now(), 'U', {mirrored} FROM ONLY {t['mirror']} m
+                         JOIN (SELECT DISTINCT ON ({key}) {key}, {gone} FROM ONLY {t['log_table']}
+                                ORDER BY {key}, _loaded_at DESC, _op = 'D') l USING ({key})
+                        WHERE {' OR '.join(f'l.{quote(c)} IS NOT NULL' for c in closed)}""", [t["run"]])
     if log_columns and not widened and sql(conn, "SELECT to_regclass($1) IS NOT NULL", [t["history"]])[0][0]:
         return
     columns = ", ".join(quote(c) for c, _ in sql(conn, COLUMNS, [t["log_table"]])

@@ -76,6 +76,7 @@ Fixed:
 - The stop for a column missing in the source, or of another family, without a change log says `and no change log keeps its values` instead of `without a change log its values are nowhere else`: it also fits the first run onto an existing table, whose change log only begins.
 - A key taken away while a change log exists says the least that works, the drop of the change log with its history view, as for `log = false`: the mirror stays and the next run loads it without a key. Before, the reason also told to drop the mirror, which consumers read.
 - The stop for a comment on `_op` that names another key last says its causes: the comment was changed, or the mirror's primary key was changed by hand to the definition's new key before a run changed it.
+- A column a person drops from the mirror while the source drops it too is closed in the change log by the next run, a `U` for every row that had a value. Before, the history view showed its last values as current for good.
 
 ## 0.4.1 (2026-11-23)
 

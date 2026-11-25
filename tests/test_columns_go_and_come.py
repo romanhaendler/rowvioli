@@ -63,6 +63,24 @@ def test_A5_a_column_gone_from_the_source_leaves_the_mirror_and_its_values_stay_
 COUNTS = "select inserted, updated, deleted from _rowvioli.runs order by run desc limit 1"
 
 
+def test_a_column_a_person_dropped_from_the_mirror_before_the_run_that_follows_the_source_is_closed_in_the_log(erp):
+    ok(erp)  # ticket 17, M3: the history showed its last values as current for good
+    first = erp.target(LOADED_AT)[0][0]
+    erp.source("alter table customers drop column city")
+    erp.target("alter table raw_erp.customers drop column city")
+    erp.source("update customers set name = 'Bert2' where customer_no = 2")  # a row this run writes anyway
+    second = again(erp)
+    assert erp.target(LOG) == [("U", 1, None), ("U", 2, None)]
+    assert erp.target(CITY) == [("Bonn", first, second), (None, second, None)]
+    assert erp.target("select count(*) from raw_erp.customers__history where _valid_to is null and city is not null") \
+        == [(0,)]
+    assert erp.target(COUNTS) == [(0, 1, 0)]
+    assert erp.target(LAST) == [("U", "city", False, "hand", None)]
+    log_replays(erp)
+    third = again(erp)  # once
+    assert erp.target("select count(*) from raw_erp.customers__log where _loaded_at = %s", [third]) == [(0,)]
+
+
 @pytest.mark.parametrize("table", ['{ key = ["customer_no"], log = false }', "{}", "begins"])
 def test_A5_without_a_change_log_a_gone_column_stops_the_run_and_says_how_to_drop_it(erp, table):
     if table == "begins":  # the first run onto a table it did not create, whose change log begins (ticket 17, M5)
