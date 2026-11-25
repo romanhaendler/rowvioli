@@ -267,6 +267,26 @@ Recommendation: the documentation (now `docs/target.md`, "History") names an ind
 
 Limitations: one pooler version, one pool size, a synthetic load. A pass is no proof that no pooler is in front; the check catches the case it is built for, a pooler whose server connections are shared between clients, with a chance that grows with their number. Session mode was found to work in the shakedown (`install-target.md`).
 
+**The check since ticket 12 of schema changes** (2026-11-24, PgBouncer 1.26.1, `edoburu/pgbouncer:v1.26.1-p0`, `POOL_MODE=transaction`, pool of 5, in front of `postgres:16-alpine`, scripts not kept). The control connection reads `pg_backend_pid()`, a second connection of the same process reads it once, and the control connection reads it again; a pooler is found when the second connection has the first one's server process, when the control connection's two differ, or when the driver's statement fails with `SQLSTATE 26000` or `08P01`. 100 checks in a row, each with its own two connections, with neighbours running `pg_sleep(0.05)`:
+
+| Neighbours | Second connection on the first's server process | Control connection moved | Driver's statement lost | Missed |
+|---|---|---|---|---|
+| 0 | 100 | 0 | 0 | 0 |
+| 2 | 72 | 25 | 6 | 0 |
+| 8 | 0 | 0 | 100 | 0 |
+| 16 | 0 | 0 | 100 | 0 |
+
+`rowvioli status` through the pooler said `a connection pooler in transaction mode is in front of the target` 20 times of 20 with 0, 2 and 8 neighbours. Postgres gives every connection a server process of its own for its life, and a pooler in session mode keeps one per client, so neither is ever taken for a pooler: in `tests/test_run_mistakes.py` an idle pooler in transaction mode is refused and one in session mode loads. In the review of ticket 12, idle, with `SERVER_ROUND_ROBIN=1` and `MIN_POOL_SIZE=5`, so that five server connections wait and each goes to the next client in turn: 20 of 20 refused. **Behind PgCat** (2026-11-24, review of ticket 14 of schema changes, `ghcr.io/postgresml/pgcat:v1.2.0`, 248 MB, pulled for the measurement and removed after; in front of `postgres:16-alpine` with `max_connections=200`; one pool of 5 server connections, `prepared_statements = true`, `query_parser_enabled = false`, `pool_mode` `transaction` or `session`). The check's three reads, as `target.connect()` makes them with the same driver, 100 times per row, each with its own two connections, beside neighbours running `pg_sleep(0.05)` through PgCat:
+
+| Mode | Neighbours | Second connection on the first's server process | Control connection moved | Driver's statement lost (`26000`) | Missed |
+|---|---|---|---|---|---|
+| transaction | 0 | 100 | 0 | 0 | 0 |
+| transaction | 2 | 53 | 15 | 32 | 0 |
+| transaction | 8 | 0 | 1 | 99 | 0 |
+| transaction | 16 | 0 | 0 | 100 | 0 |
+
+`rowvioli status` through PgCat in transaction mode said `a connection pooler in transaction mode is in front of the target` 20 times of 20 with 0, 2 and 8 neighbours. Idle, PgCat gives its one open server connection to every client, so the second connection lands on the first's server process, as behind PgBouncer. In session mode the check passed 100 of 100 with 0 and 2 neighbours (the second connection had a server process of its own, the first kept its own) and `status` worked 20 of 20; with 8 and 16 neighbours each holding one of the five server connections for its life, no further client got one (`could not get connection from the pool`), which is the pool's size and not the check. Limitations: two poolers, one pool size, one PgCat version. Supavisor's image is over 360 MB compressed and Odyssey publishes none, so neither was tried.
+
 ## 15. A whole run on a wide table
 
 2026-11-17, the program at commit 4705418 (`uv sync --locked`, then `uv run rowvioli run <source> <table> --slots 1` from the worktree), a real process per run, the seconds as the program reports them; the scripts are not in `experiments/`. Apple M2, 8 cores, 16 GB, macOS; Docker 29.3.1. Source and target are two containers of `postgres:16-alpine` (PostgreSQL 16.16), each `--cpus 2 --memory 4g --shm-size 1g -c work_mem=256MB`, so the numbers stand beside sections 1 to 3. Client and both servers on the same machine, no network between them. Beside the runs, one other agent's two idle-to-light containers ran (a PgBouncer experiment); the host's load average was 3 to 5 at the start. Docker's disk was at 36 to 63 % during the runs.
@@ -309,6 +329,37 @@ What the numbers say:
 
 Limitations: two runs per case, spread of the two up to 15 % (up to 30 % for the first load of the narrow table and the changed runs at 300,000 rows). The samples are one-second ones: a statement shorter than a second is counted by chance. Everything on one machine, no network, the source and the target competing for the same 8 cores. Not measured: 900 columns in a whole run, a million rows of this width (extrapolated about 2 minutes, not measured), the other connectors, a table that does not fit in the container's memory, a source on a real network, and the earlier staging step for comparison with the shakedown. The read alone at 300,000 rows was not timed.
 
+## 16. The first run after the upgrade on a large change log
+
+2026-11-24, the program at commit 037ff75 of `sc-14` (ticket 14 of schema changes, item 6), by hand, once per size; the script is not kept. Apple M2, 8 cores, 16 GB, macOS, Docker 29.3.1, one `postgres:16-alpine` (PostgreSQL 16.16, `shared_buffers = 512MB`) holding source and target, beside another agent's test containers.
+
+The case: a target as 0.4.1 leaves it (no columns table, no comment on `_op`), brought to version 4 by `init`; a mirror whose primary key a person changed by hand to `(id, v)`, and a definition changed since the table's last successful run, so that the run reads the change log once under each key to tell which wrote it (decision 54, ticket 11 item 1). The change log: a first fill of a quarter of its rows and three rounds of a `U` for every row, `(_run, _op, _loaded_at, id int, v text, w int)`, vacuumed and analysed. Both keys fit it, so the run reads it whole twice and stops to ask, the worst case of the step.
+
+| Log rows | Log size | The read under `(id)` | under `(id, v)` | The whole run (reported) |
+|---|---|---|---|---|
+| 500,000 | 33 MB | 0.56 s | 0.57 s | 2.8 s |
+| 2,000,000 | 130 MB | 1.25 s | 1.37 s | 3.7 s |
+
+The read is a window over the log sorted by key and `_loaded_at`, about 0.6 s per million rows, linear. Against the default `max_seconds = 3600` it would need billions of log rows; a table given a small `max_seconds` can outlast it, and then the reason says so and names the step (`while reading the change log raw_erp.t__log under the definition's key and the primary key, to tell which of them wrote it; raise max_seconds once, until a run has told it`), tested in `tests/test_init.py`. It happens once: the run that tells records the key.
+
+Limitations: one series, one key shape, a log that fits in memory, the read alone timed by `EXPLAIN ANALYZE`; a log larger than memory sorts on disk and was not measured.
+
+## 17. How long a change of columns locks out readers
+
+Two series from the shakedown of schema changes, by its agents, with the program as a real process; the machine is not recorded and the scripts are not kept.
+
+The time a mirror of 500,000 rows with a change log is locked (2026-11-24, persona H4 of the shakedown, the wheel of the branch `schema-changes`; `.scratch/shakedown/eighth-run.md`), the whole publishing and the longest wait of a reader of the mirror beside it:
+
+| Change of the run | Publishing | Readers locked out |
+|---|---|---|
+| a column the source dropped (a `U` per row in the change log) | 3.2 s | 1.4 s |
+| a `numeric` widened in mirror and change log | 4.7 s | 2.4 s |
+| both in one run | 6.8 s | 3.4 s |
+
+Under load (2026-11-24, the review of ticket 15 of schema changes at commit 894610b): 3 workers, `apply` in a loop, readers of the mirrors and consumers with foreign keys onto them, for 3 minutes. 0 of 281 runs that took the publishing lock failed, and no reader waited longer than 0.32 s; before the run tried its publishing again after meeting a lock, 2 of 265 had failed.
+
+Limitations: one series each, one table shape, one size; how the lock grows with the rows was not measured.
+
 ## Summary
 
 | Claim | Evidence |
@@ -324,5 +375,7 @@ Limitations: two runs per case, spread of the two up to 15 % (up to 30 % for the
 | Connections cannot be read without the private key, and tampering is detected | experiment 7. The prototype sealed whole blocks and rejected a copied ciphertext and a wrong private key. |
 | A killed process cannot publish | prototype: killed while filling, at the diff and while publishing, the mirror stayed unchanged |
 | A process per run costs 0.1 to 0.2 s | prototype |
-| A transaction-mode pooler shared with other clients is caught by two `pg_backend_pid()` reads; an idle one is not | experiment 14 |
+| A transaction-mode pooler is caught, idle or busy, by `pg_backend_pid()` read on the control connection twice and on a second connection once, and by the driver's statement it loses | experiment 14 |
 | A whole run on 300 columns costs no more per cell than on 8; 100,000 rows take about 11 s, three times the rows 3.5 times as long, and the read from the source is most of it | experiment 15 |
+| The first run after the upgrade reads a change log under two keys at about 0.6 s per million rows | experiment 16 |
+| A change of columns of a mirror of 500,000 rows locks out its readers for 1.4 to 3.4 s; under load no run failed on a lock and no reader waited longer than 0.32 s | experiment 17 |

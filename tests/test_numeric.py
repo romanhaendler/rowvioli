@@ -1,9 +1,11 @@
 """A numeric keeps its precision and scale, and a target column's own precision and scale are taken over (ticket 14)."""
+import pytest
+
 from test_checks import failed
+from test_columns_go_and_come import log_replays
 from test_run import apply, column_types, definition, erp, ok, run  # noqa: F401 (erp is a fixture)
 
 UNCHANGED = {"status": "ok", "inserted": 0, "updated": 0, "deleted": 0}
-HOLDS = "column price holds a value that its type numeric({}) in raw_erp.prices{} does not hold"
 
 
 def prices(rv, columns, values):
@@ -13,6 +15,8 @@ def prices(rv, columns, values):
 
 
 def test_a_new_mirror_has_the_sources_precision_and_scale_and_a_second_run_finds_no_change(erp):
+    if int(erp.source("show server_version_num")[0][0]) < 150000:
+        pytest.skip("a numeric's scale below 0 or above its precision needs Postgres 15 in the source")
     prices(erp, "a numeric(12, 2), b numeric(38, 10), c numeric(50, 5), d numeric, e numeric(5, 0), f numeric(5, -2),"
                 " g numeric(3, 5)",
            "(1, 137.00, 1.5, 123.45, 1.10, 5, 12345, 0.00123), (2, null, null, null, null, null, null, null),"
@@ -47,15 +51,15 @@ def test_an_existing_numeric_10_2_table_with_a_view_takes_an_unconstrained_numer
     assert erp.target("select price::text from public.priced where id = 2") == [("2.25",)]
 
 
-def test_a_value_the_target_column_cannot_hold_fails_naming_the_column_and_its_type(erp):
+def test_a_value_the_target_column_cannot_hold_widens_it_to_the_type_that_holds_both(erp):
     prices(erp, "price numeric", "(1, 137)")
     erp.target("create schema raw_erp; create table raw_erp.prices (id int primary key, price numeric(10, 2))")
     ok(erp)
     erp.source("insert into prices values (2, 1.005)")
-    assert failed(erp, "erp") == HOLDS.format("10,2", "") + " (1.005)"
-    erp.source("update prices set price = 123456789 where id = 2")
-    assert failed(erp, "erp").startswith(HOLDS.format("10,2", ""))
-    assert erp.target("select id, price::text from raw_erp.prices") == [(1, "137.00")]
+    assert run(erp, "erp")[1]["tables"]["raw_erp.prices"] == {**UNCHANGED, "inserted": 1}
+    assert column_types(erp, "raw_erp.prices") == [("id", "integer"), ("price", "numeric")]
+    assert erp.target("select id, price::text from raw_erp.prices order by id") == [(1, "137.00"), (2, "1.005")]
+    log_replays(erp, "raw_erp.prices")
 
 
 def test_a_mirror_made_by_0_1_0_with_numeric_keeps_loading_and_its_type(erp):
@@ -74,31 +78,98 @@ def test_a_mirror_made_by_0_1_0_with_numeric_keeps_loading_and_its_type(erp):
         erp.target("select price from raw_erp.prices__log where id = 2 order by _run")
 
 
-def test_a_wider_scale_in_the_source_loads_while_the_values_fit_and_the_readme_recipe_carries_it(erp):
+def test_a_view_on_the_mirror_lets_values_that_fit_load_and_stops_the_widening_one_that_does_not_needs(erp):
     prices(erp, "price numeric(12, 2)", "(1, 137.00)")
     ok(erp)
+    erp.target("create view public.priced as select * from raw_erp.prices")
     erp.source("alter table prices alter price type numeric(12, 4)")
-    assert run(erp, "erp")[1]["tables"]["raw_erp.prices"] == UNCHANGED
-    erp.source("insert into prices values (2, 1.2345)")
-    assert failed(erp, "erp") == HOLDS.format("12,2", "") + " (1.2345)"
-    # the recipe in docs/loading.md "What a person does by hand": the history view is created anew by the next run
-    erp.target("drop view raw_erp.prices__history; alter table raw_erp.prices alter price type numeric(12, 4);"
-               "alter table raw_erp.prices__log alter price type numeric(12, 4)")
+    erp.source("insert into prices values (2, 1.5)")
     assert run(erp, "erp")[1]["tables"]["raw_erp.prices"] == {**UNCHANGED, "inserted": 1}
-    assert erp.target("select price::text from raw_erp.prices__history where id = 2") == [("1.2345",)]
+    erp.source("insert into prices values (3, 1.2345)")
+    reason = failed(erp, "erp")
+    assert reason.startswith('"raw_erp"."prices" would be widened for values of the source, column price to '
+                             'numeric(14,4), but view public.priced depends on column price of table raw_erp.prices: '
+                             "change or drop that, and the ne"), reason
+    assert erp.target("select id, price::text from public.priced order by id") == [(1, "137.00"), (2, "1.50")]
+    erp.target("drop view public.priced")  # the way out
+    assert run(erp, "erp")[1]["tables"]["raw_erp.prices"] == {**UNCHANGED, "inserted": 1}
+    assert erp.target("select price::text from raw_erp.prices__history where id = 3") == [("1.2345",)]
+    log_replays(erp, "raw_erp.prices")
 
 
-def test_a_change_log_narrower_than_its_mirror_fails_instead_of_rounding(erp):
+def test_a_consumers_check_that_a_widening_breaks_is_named_and_one_whose_function_needs_the_search_path_holds(erp):
+    prices(erp, "price numeric(12, 2), cost numeric(12, 2)", "(1, 137.00, 1.00)")
+    ok(erp)
+    # a function that finds its table on the search path, as a consumer writes it; Postgres checks it again on a widening
+    erp.target("create table public.allowed (n int); insert into public.allowed values (1);"
+               "create function public.known(numeric) returns boolean language plpgsql as "
+               "$$ begin return exists (select from allowed); end $$;"
+               "alter table raw_erp.prices add constraint k check (known(price))")
+    erp.source("alter table prices alter price type numeric(12, 4)")
+    erp.source("insert into prices values (2, 1.2345, 1.00)")
+    assert run(erp, "erp")[1]["tables"]["raw_erp.prices"] == {**UNCHANGED, "inserted": 1}
+    erp.target("alter table raw_erp.prices add constraint c check (scale(cost) = 2)")
+    erp.source("alter table prices alter cost type numeric(12, 4)")
+    erp.source("insert into prices values (3, 1.00, 1.2345)")
+    assert failed(erp, "erp") == 'check constraint "c" of relation "prices" is violated by some row'
+    erp.target("alter table raw_erp.prices drop constraint c")  # the way out
+    assert run(erp, "erp")[1]["tables"]["raw_erp.prices"] == {**UNCHANGED, "inserted": 1}
+    log_replays(erp, "raw_erp.prices")
+
+
+def test_a_widening_names_every_view_on_the_column_and_on_those_views_where_postgres_names_one(erp):  # P20
+    prices(erp, "price numeric(12, 2)", "(1, 137.00)")
+    ok(erp)
+    erp.target("create view public.w1 as select id, price from raw_erp.prices;"
+               "create view public.w2 as select price from raw_erp.prices; create view public.w3 as select * from public.w1;"
+               "create materialized view public.m as select price from raw_erp.prices")
+    erp.source("alter table prices alter price type numeric(12, 4)")
+    erp.source("insert into prices values (2, 1.2345)")
+    reason = failed(erp, "erp")
+    assert reason.endswith("would be widened for values of the source, column price to numeric(14,4), but materialized "
+                           "view public.m depends on column price of table raw_erp.prices; view public.w1 depends on "
+                           "column price of table raw_erp.prices; view public.w2 depends on column price of table "
+                           "raw_erp.prices; view public.w3 depends on view public.w1: change or drop that, and the "
+                           "next run goes on"), reason
+    erp.target("drop view public.w3, public.w2, public.w1; drop materialized view public.m")  # one round
+    assert run(erp, "erp")[1]["tables"]["raw_erp.prices"] == {**UNCHANGED, "inserted": 1}
+    log_replays(erp, "raw_erp.prices")
+
+
+@pytest.mark.parametrize("consumer, named", [
+    ("create policy p on raw_erp.prices using (price > 0)", "policy p on table raw_erp.prices"),
+    ("create table public.audit (price numeric); create rule r as on update to raw_erp.prices do also "
+     "insert into public.audit values (new.price)", "rule r on table raw_erp.prices"),
+    ("create function public.f() returns trigger language plpgsql as $$ begin return new; end $$;"
+     "create trigger t before update on raw_erp.prices for each row when (new.price > 0) execute function public.f()",
+     "trigger t on table raw_erp.prices")])
+def test_a_widening_names_a_policy_a_rule_or_a_trigger_on_the_column_beside_a_view_on_another(erp, consumer, named):
+    prices(erp, "price numeric(12, 2), cost numeric(12, 2)", "(1, 137.00, 1.00)")
+    ok(erp)
+    erp.target(f"create view public.w as select cost from raw_erp.prices; {consumer}")
+    erp.source("alter table prices alter price type numeric(12, 4), alter cost type numeric(12, 4)")
+    erp.source("insert into prices values (2, 1.2345, 1.2345)")
+    assert failed(erp, "erp").endswith(
+        "would be widened for values of the source, column price to numeric(14,4), column cost to numeric(14,4), but "
+        f"{named} depends on column price of table raw_erp.prices; view public.w depends on column cost of table "
+        "raw_erp.prices: change or drop that, and the next run goes on")
+
+
+def test_a_change_log_narrower_than_its_mirror_is_widened_instead_of_rounding(erp):
     prices(erp, "price numeric(12, 4)", "(1, 1.25)")
     ok(erp)
     # half the recipe: the mirror was altered, the change log not
     erp.target("drop view raw_erp.prices__history; alter table raw_erp.prices__log alter price type numeric(12, 2)")
     erp.source("update prices set price = 1.2345")
-    assert failed(erp, "erp") == HOLDS.format("12,2", "__log") + " (1.2345)"
+    ok(erp, "erp")
+    assert column_types(erp, "raw_erp.prices__log")[-1] == ("price", "numeric(14,4)")
+    assert erp.target("select price::text from raw_erp.prices__log order by _run desc limit 1") == [("1.2345",)]
+    log_replays(erp, "raw_erp.prices")
 
 
-def test_a_real_change_of_type_is_still_caught(erp):
+def test_a_numeric_that_becomes_an_integer_is_of_the_same_family_and_keeps_the_mirrors_type(erp):  # cases B4
     prices(erp, "price numeric(12, 2)", "(1, 137.00)")
     ok(erp)
     erp.source("alter table prices alter price type integer")
-    assert failed(erp, "erp") == "column price has changed its type from numeric(12,2) to integer"
+    assert run(erp, "erp")[1]["tables"]["raw_erp.prices"] == UNCHANGED
+    assert column_types(erp, "raw_erp.prices") == [("id", "integer"), ("price", "numeric(12,2)")]

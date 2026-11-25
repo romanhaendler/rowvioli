@@ -1,12 +1,15 @@
 """The `file` connector: CSV, Excel, Parquet and JSON files and patterns from a directory (spec test 15)."""
+import importlib.metadata
 import json
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+
+from test_columns_go_and_come import log_replays
 
 CUSTOMERS = [(1, "Anna", 2.5), (2, "Ben", None), (3, "Cleo", 10.0)]
 
@@ -63,6 +66,8 @@ def test_a_csv_an_excel_and_a_parquet_file_are_mirrored(files):
     assert files.target("select * from raw_files.customers_csv order by 1") == as_text
     assert files.target("select * from raw_files.customers_xlsx order by 1") == as_text
     assert files.target("select * from raw_files.customers_parquet order by 1") == CUSTOMERS
+    assert files.target("select distinct driver_version from _rowvioli.runs") == [
+        (f"duckdb {importlib.metadata.version('duckdb')}",)]  # story 38
 
 
 def test_csv_and_excel_arrive_as_text_and_parquet_keeps_its_types(files):
@@ -88,6 +93,19 @@ def test_columns_names_types_for_csv_and_excel(files):
                             f" and attrelid = 'raw_files.{table}'::regclass") == [("numeric(10,2)",)]
         assert files.target(f"select customer_no, balance from raw_files.{table} order by 1") == [
             (1, Decimal("2.5")), (2, None), (3, Decimal("10"))]
+
+
+def test_an_excel_date_a_datetime_and_a_boolean_arrive_as_such_where_columns_names_their_type(files):
+    """Excel keeps a date as a number of days with a format; read as text it is that number (46023)."""
+    db = duckdb.connect()
+    db.execute("LOAD excel")
+    db.execute(f"COPY (SELECT 1 AS id, DATE '2026-01-01' AS d, TIMESTAMP '2026-01-01 03:04:05.123' AS ts, true AS b, "
+               f"'2026-01-02' AS t) TO '{files.dir / 'files' / 'dates.xlsx'}' (FORMAT xlsx, HEADER true)")
+    pins = 'd = "date", ts = "timestamp", b = "bool", t = "date"'
+    code, answer = load(files, f'"dates.xlsx" = {{ columns = {{ {pins} }} }}\n')
+    assert code == 0, answer
+    assert files.target("select d, ts, b, t from raw_files.dates") == [
+        (date(2026, 1, 1), datetime(2026, 1, 1, 3, 4, 5, 123000), True, date(2026, 1, 2))]
 
 
 def test_the_separator_option_is_passed_to_duckdb(files):
@@ -231,16 +249,115 @@ def test_a_pattern_that_matches_nothing_fails(files):
     assert "orders_*.csv: no file in" in answer["raw_files.orders"]["reason"]
 
 
-@pytest.mark.parametrize("other, says", [("orders_3.json", "orders_*: matches .csv and .json files"),
-                                         ("orders_3.csv", "orders_3.csv has the columns order_no VARCHAR, "
-                                                          "amount VARCHAR, note VARCHAR")])
-def test_files_of_a_pattern_of_different_kinds_or_columns_fail_naming_the_file(files, other, says):
+def test_files_of_a_pattern_of_different_kinds_fail_naming_them(files):
     orders(files, 1, 2)
-    (files.dir / "files" / other).write_text('[{"order_no": 3}]' if other.endswith(".json")
-                                             else "order_no;amount;note\n3;30;x\n")
+    (files.dir / "files" / "orders_3.json").write_text('[{"order_no": 3}]')
     code, answer = load(files, '"orders_*" = { key = ["order_no"], sep = ";", target_table = "orders" }\n')
     assert code == 1
-    assert says in answer["raw_files.orders"]["reason"]
+    assert "orders_*: matches .csv and .json files" in answer["raw_files.orders"]["reason"]
+
+
+def test_F1_F6_files_with_more_or_fewer_columns_load_and_a_column_missing_from_a_file_or_a_run_is_empty(files):
+    orders(files, 1, 2)
+    d = files.dir / "files"
+    (d / "orders_3.csv").write_text("order_no;amount;note\n3;30;n3\n")  # F6: one more column
+    code, answer = load(files, '"orders_*.csv" = { key = ["order_no"], sep = ";", target_table = "orders" }\n')
+    assert code == 0, answer
+    mirror = "select * from raw_files.orders order by 1"
+    assert files.target(mirror) == [("1", "10", None), ("2", "20", None), ("3", "30", "n3")]
+    (d / "orders_2.csv").write_text("order_no;note\n2;n2\n")  # F1: one file without amount
+    assert files.run("run", "files", "orders_*.csv").returncode == 0
+    assert files.target(mirror) == [("1", "10", None), ("2", None, "n2"), ("3", "30", "n3")]
+    for n in (2, 3):  # F1: no file has note in this run
+        (d / f"orders_{n}.csv").write_text(f"order_no;amount\n{n};{n}0\n")
+    assert files.run("run", "files", "orders_*.csv").returncode == 0
+    assert files.target(mirror) == [("1", "10", None), ("2", "20", None), ("3", "30", None)]
+    log_replays(files, "raw_files.orders")
+
+
+@pytest.mark.parametrize("kind", ["csv", "xlsx", "parquet", "jsonl"])
+@pytest.mark.parametrize("table", ["orders_1.{}", "orders_*.{}"])
+def test_a_field_named_under_columns_that_the_files_lack_is_empty_in_every_reader(files, kind, table):  # as REST
+    for n in (1, 2):
+        rows = pa.table({"order_no": [n], "amount": [n * 10]})
+        path = files.dir / "files" / f"orders_{n}.{kind}"
+        if kind == "parquet":
+            pq.write_table(rows, path)
+        elif kind == "xlsx":
+            db = duckdb.connect()
+            db.execute("INSTALL excel; LOAD excel")
+            db.register("rows", rows)
+            db.execute(f"COPY rows TO '{path}' (FORMAT xlsx, HEADER true)")
+        else:
+            path.write_text(f"order_no,amount\n{n},{n * 10}\n" if kind == "csv" else json.dumps(rows.to_pylist()[0]))
+    named = 'columns = { order_no = "integer", note = "integer", amount = "integer" }'
+    code, answer = load(files, f'"{table.format(kind)}" = {{ key = ["order_no"], target_table = "orders", {named} }}\n')
+    assert code == 0, answer
+    assert types(files, "orders")[-1] == ("note", "integer")
+    assert files.target("select order_no, amount, note from raw_files.orders order by 1") == [
+        (1, 10, None), (2, 20, None)][:1 if "_1" in table else 2]
+
+
+def test_a_key_column_named_under_columns_that_no_file_has_stops_the_run_as_null(files):  # as REST
+    orders(files, 1, 2)
+    code, answer = load(files, '"orders_*.csv" = { key = ["order_id"], sep = ";", target_table = "orders", '
+                               'columns = { order_id = "integer" } }\n')
+    assert (code, answer["raw_files.orders"]["reason"]) == (1, 'a key column of ("order_id") is null in a row of the '
+                                                            "source or missing from its data, where it may be named "
+                                                            "otherwise, also in case: give it a value there, or give "
+                                                            "the table a key whose columns always have one")
+    assert files.target("select to_regclass('raw_files.orders')") == [(None,)]
+
+
+def test_a_column_gone_from_the_files_for_good_leaves_the_mirror_by_hand_and_keeps_its_history(files):  # H2
+    orders(files, 1, 2)
+    d = files.dir / "files"
+    (d / "orders_3.csv").write_text("order_no;amount;note\n3;30;n3\n")
+    assert load(files, '"orders_*.csv" = { key = ["order_no"], sep = ";", target_table = "orders" }\n')[0] == 0
+    [(before,)] = files.target("select loaded_at from _rowvioli.tables")
+    (d / "orders_3.csv").write_text("order_no;amount\n3;30\n")  # note is gone from every file
+    assert files.run("run", "files").returncode == 0  # a run empties it
+    files.target('ALTER TABLE "raw_files"."orders" DROP COLUMN "note"')  # the way docs/loading.md gives
+    assert files.run("run", "files").returncode == 0
+    assert files.target("select * from raw_files.orders order by 1") == [("1", "10"), ("2", "20"), ("3", "30")]
+    assert files.target("select note from raw_files.orders__history where order_no = '3' and _valid_from <= %s "
+                        "and (_valid_to > %s or _valid_to is null)", [before, before]) == [("n3",)]
+    assert files.target("select _op, mirror, \"by\" from _rowvioli.columns__history where \"column\" = 'note' "
+                        "order by _valid_from") == [("I", True, "found"), ("U", False, "hand")]
+    assert files.run("run", "files").returncode == 0  # and it does not come back
+    assert files.target("select count(*) from raw_files.orders__log where note is not null") == [(1,)]
+    log_replays(files, "raw_files.orders")
+
+
+@pytest.mark.parametrize("table", ['key = ["order_no"], log = false, ', ""])
+def test_without_a_change_log_a_column_missing_from_the_files_stops_and_says_how_to_drop_it(files, table):  # story 8
+    orders(files, 1, 2)
+    tables = f'"orders_*.csv" = {{ {table}sep = ";", target_table = "orders" }}\n'
+    assert load(files, tables)[0] == 0
+    for n in (1, 2):
+        (files.dir / "files" / f"orders_{n}.csv").write_text(f"order_no\n{n}\n")
+    code, answer = load(files, tables)
+    assert code == 1
+    assert answer["raw_files.orders"]["reason"] == (
+        "column amount is missing in the source, and no change log keeps its values, so a person drops "
+        'it: ALTER TABLE "raw_files"."orders" DROP COLUMN "amount"')
+    assert files.target("select amount from raw_files.orders order by 1") == [("10",), ("20",)]
+    files.target('ALTER TABLE "raw_files"."orders" DROP COLUMN "amount"')  # the way out
+    assert load(files, tables)[0] == 0
+    assert files.target("select * from raw_files.orders order by 1") == [("1",), ("2",)]
+
+
+def test_a_column_a_person_added_to_the_mirror_of_a_file_is_not_emptied_and_stops_the_run(files):  # story 8, G1
+    orders(files, 1, 2)
+    code, answer = load(files, '"orders_*.csv" = { key = ["order_no"], sep = ";", target_table = "orders" }\n')
+    assert code == 0, answer
+    files.target("alter table raw_files.orders add column memo text")
+    files.target("update raw_files.orders set memo = 'mine'")
+    r = files.run("run", "files", "orders_*.csv")
+    assert r.returncode == 1
+    assert json.loads(r.stdout)["tables"]["raw_files.orders"]["reason"].startswith(
+        "column memo of the mirror is not in the change log")
+    assert files.target("select distinct memo from raw_files.orders") == [("mine",)]
 
 
 def test_a_pattern_without_target_table_fails_apply(files):
@@ -301,6 +418,53 @@ def test_columns_casts_a_json_value_from_its_text(files):
         (2, date(2024, 2, 3), "two", Decimal("3.00"), 1)]
 
 
+@pytest.mark.parametrize("name, content, table", [
+    ("pins.csv", "id;n;d\n1;42;2024-01-01\n2;secret-value;2024-01-02\n", '{ key = ["id"], sep = ";", columns = '
+                                                                          '{ d = "date", n = "integer" } }'),
+    ("pins.json", '{"id": 1, "n": 42}\n{"id": 2, "n": "secret-value"}\n',
+     '{ key = ["id"], columns = { n = "integer" } }'),
+])
+def test_a_value_a_type_under_columns_does_not_take_names_table_column_and_type_but_not_the_value(
+        files, name, content, table):
+    (files.dir / "files" / name).write_text(content)
+    code, answer = load(files, f'"{name}" = {table}\n')
+    assert code == 1
+    assert answer["raw_files.pins"]["reason"] == (
+        f"{name}: column n is not integer in every row; change the value in the file, or its type under columns")
+    r = files.run("run", "files")
+    assert "secret-value" not in r.stdout + r.stderr + str(files.target(
+        "select reason from _rowvioli.tables union all select reason from _rowvioli.runs"))
+
+
+def test_a_value_a_type_under_columns_does_not_take_in_a_later_read_of_a_pattern_is_named_the_same(files):
+    # among several files of the second read (50 files are read at once), where DuckDB fails only once batches are read
+    for i in range(60):
+        (files.dir / "files" / f"o_{i:02}.csv").write_text(f"id;n\n{i};{'secret-value' if i == 55 else i}\n")
+    code, answer = load(files, '"o_*.csv" = { sep = ";", columns = { n = "integer" }, target_table = "o" }\n')
+    assert code == 1
+    [(reason,)] = files.target("select reason from _rowvioli.status")
+    assert reason == (  # the error crosses Arrow's stream, and the run gives it as the connector raised it
+        "o_*.csv: column n is not integer in every row; change the value in the file, or its type under columns")
+
+
+def test_a_name_with_a_line_break_in_a_reason_that_crosses_arrows_stream_is_not_cut_there(files):
+    # ticket 11 left it untried: the file connector's own reason, raised while the driver reads the stream
+    for i in range(60):
+        (files.dir / "files" / f"o_{i:02}.csv").write_text(f'id;"n\nx"\n{i};{"secret-value" if i == 55 else i}\n')
+    code, answer = load(files, '"o_*.csv" = { sep = ";", columns = { "n\\nx" = "integer" }, target_table = "o" }\n')
+    assert code == 1
+    assert files.target("select reason from _rowvioli.status") == [(
+        "o_*.csv: column n?x is not integer in every row; change the value in the file, or its type under columns",)]
+
+
+def test_a_value_a_reader_option_of_duckdb_does_not_take_is_named_without_the_value(files):
+    (files.dir / "files" / "o.csv").write_text("id;n\n1;secret-value\n")
+    code, answer = load(files, '"o.csv" = { sep = ";", column_types = { n = "INTEGER" } }\n')
+    assert code == 1
+    assert files.target("select reason from _rowvioli.status") == [
+        ("o.csv: a value in the file does not convert to the type its column is read as",)]
+
+
 def test_a_json_file_whose_later_rows_differ_from_its_first_arrives_whole(files):
     # beyond the 20480 rows DuckDB looks at first: other types, and a key that was not there before
     rows = [{"id": i, "v": i} for i in range(25000)] + [{"id": 25000, "v": "x", "late": True}]
@@ -353,3 +517,210 @@ def test_a_nul_byte_in_a_text_value_is_removed_and_a_second_run_changes_nothing(
     assert files.target("select * from raw_files.nul order by 1") == [(1, "ab"), (2, "c")]
     code, answer = load(files, '"nul.parquet" = { key = ["id"] }\n')
     assert answer["raw_files.nul"] == {"status": "ok", "inserted": 0, "updated": 0, "deleted": 0}
+
+
+def test_a_value_the_target_refuses_while_rows_are_staged_is_the_targets_in_the_reason(files):
+    """A NUL inside a list reaches the target (decision 51's shortcut), which refuses it: an error of the target, not
+    of the source, which names the column Postgres names and not the value (decision 54, item 8)."""
+    pq.write_table(pa.table({"id": [1], "tags": [["Secret\x00"]]}), files.dir / "files" / "nul.parquet")
+    code, answer = load(files, '"nul.parquet" = { key = ["id"] }\n')
+    assert code == 1
+    assert answer["raw_files.nul"]["reason"] == (
+        "nul.parquet: column tags has a value its type in the target, text[], cannot hold (SQLSTATE 22021); cast it "
+        "in a view of the source or change it there")
+
+
+def test_a_csv_header_with_one_name_twice_arrives_with_the_second_numbered(files):  # cases A22, as it is today
+    (files.dir / "files" / "twice.csv").write_text("a;a;b\n1;2;3\n")
+    code, answer = load(files, '"twice.csv" = {}\n')
+    assert code == 0, answer
+    assert types(files, "twice") == [("a", "text"), ("a_1", "text"), ("b", "text")]
+    assert files.target("select * from raw_files.twice") == [("1", "2", "3")]
+
+
+@pytest.mark.parametrize("long", ["c" * 64, "ä" * 32])  # bytes, not characters
+def test_A20_a_column_name_longer_than_63_bytes_fails_the_run_and_names_the_column(files, long):
+    (files.dir / "files" / "long.csv").write_text(f"{'d' * 63};{long}\n1;2\n")
+    code, answer = load(files, '"long.csv" = {}\n')
+    assert code == 1
+    assert answer["raw_files.long"]["reason"] == (
+        f"column {long} of the source is longer than 63 bytes, the most Postgres keeps of a name: give it a shorter "
+        "name in the source")
+    assert files.target("select to_regclass('raw_files.long')") == [(None,)]
+    # a name of 63 bytes, also of characters of two bytes, loads whole
+    (files.dir / "files" / "long.csv").write_text(f"{'d' * 63};{'ä' * 31}d\n1;2\n")
+    code, answer = load(files, '"long.csv" = {}\n')
+    assert code == 0, answer
+    assert [c for c, _ in types(files, "long")] == ["d" * 63, "ä" * 31 + "d"]
+
+
+def test_A20_two_names_equal_in_their_first_63_bytes_fail_and_name_both(files):
+    (files.dir / "files" / "long.csv").write_text(f"k;{'c' * 63}y;{'c' * 63}z\n0;1;2\n")
+    code, answer = load(files, '"long.csv" = {}\n')
+    assert code == 1
+    assert answer["raw_files.long"]["reason"] == (
+        f"columns {'c' * 63}y and {'c' * 63}z of the source are equal in their first 63 bytes, the most Postgres "
+        "keeps of a name: give them names in the source that differ there")
+
+
+def test_a_csv_without_a_header_gets_column0_and_up_and_keeps_its_first_line(files):  # cases F8, as it is today
+    (files.dir / "files" / "nohead.csv").write_text("1;Anna\n2;Ben\n")
+    code, answer = load(files, '"nohead.csv" = {}\n')
+    assert code == 0, answer
+    assert types(files, "nohead") == [("column0", "text"), ("column1", "text")]
+    assert files.target("select * from raw_files.nohead order by 1") == [("1", "Anna"), ("2", "Ben")]
+
+
+def test_a_time_finer_than_microseconds_fails_naming_the_column_and_a_type_under_columns_rounds_it(files):  # cases B16
+    """The driver cut it to microseconds, the finest Postgres holds, with the run ok. Whole microseconds load."""
+    pq.write_table(pa.table({"k": [1], "w": pa.array([1767225600123456000], pa.timestamp("ns")),
+                             "t": pa.array([1767225600123456789], pa.timestamp("ns")),
+                             "z": pa.array([1767225600123456789], pa.timestamp("ns", tz="UTC")),
+                             "h": pa.array([3_600_000_000_001], pa.time64("ns"))}), files.dir / "files" / "ns.parquet")
+    code, answer = load(files, '"ns.parquet" = {}\n')
+    assert answer["raw_files.ns"]["reason"] == (
+        'ns.parquet: column t has a time finer than a microsecond, which the target does not hold; columns = '
+        '{ t = "timestamp" } reads it rounded to microseconds')
+    code, answer = load(files, '"ns.parquet" = { columns = { t = "timestamp", z = "timestamptz", h = "time" } }\n')
+    assert code == 0, answer
+    assert files.target("select w, t, z::text, h::text from raw_files.ns") == [
+        (datetime(2026, 1, 1, 0, 0, 0, 123456), datetime(2026, 1, 1, 0, 0, 0, 123457), "2026-01-01 00:00:00.123457+00",
+         "01:00:00")]
+
+
+@pytest.mark.parametrize("before", [0, 100_000])  # the first character not in UTF-8 in the sample, or after it
+def test_a_csv_not_in_utf8_fails_without_its_text_saying_its_encoding_and_loads_with_it(files, before):
+    rows = "".join(f"{i};Anna\n" for i in range(before))
+    (files.dir / "files" / "l1.csv").write_bytes(f"id;name\n{rows}{before};Müller\n".encode("latin-1"))
+    code, answer = load(files, '"l1.csv" = { sep = ";" }\n')
+    assert answer["raw_files.l1"]["reason"] == (  # DuckDB's message gave the line, and the next its text
+        'l1.csv: the file is not UTF-8; give its encoding to the table, such as encoding = "latin-1"')
+    code, answer = load(files, '"l1.csv" = { sep = ";", encoding = "latin-1" }\n')
+    assert code == 0, answer
+    assert files.target(f"select name from raw_files.l1 where id = '{before}'") == [("Müller",)]
+
+
+def test_an_unsigned_integer_of_a_parquet_file_arrives_whole(files):
+    """The driver wrote a uint64 as bigint, 2**64 - 1 as -1 with the run ok; the smaller ones it widens itself."""
+    pq.write_table(pa.table({"id": [1, 2], "u64": pa.array([2**64 - 1, 2**63], pa.uint64()),
+                             "u32": pa.array([2**32 - 1, 0], pa.uint32()), "u16": pa.array([2**16 - 1, 0], pa.uint16()),
+                             "u8": pa.array([255, 0], pa.uint8())}), files.dir / "files" / "u.parquet")
+    for _ in range(2):  # the second run changes nothing
+        code, answer = load(files, '"u.parquet" = { key = ["id"] }\n')
+        assert code == 0, answer
+    assert answer["raw_files.u"] == {"status": "ok", "inserted": 0, "updated": 0, "deleted": 0}
+    assert types(files, "u") == [("id", "bigint"), ("u64", "numeric"), ("u32", "bigint"), ("u16", "integer"),
+                                 ("u8", "smallint")]
+    assert files.target("select u64, u32, u16, u8 from raw_files.u order by id") == [
+        (2**64 - 1, 2**32 - 1, 2**16 - 1, 255), (2**63, 0, 0, 0)]
+
+
+@pytest.mark.parametrize("type, value, reason", [
+    ("hugeint", 2**127 - 1, "column h has a value its type in the target, numeric(38,0), cannot hold (SQLSTATE 22003); "
+                            "cast it in a view of the source or change it there"),
+    ("UHUGEINT", 2**128 - 1, "column h as uhugeint would arrive wrapped above 2^127 - 1; use hugeint, or text for "
+                             "more than 38 digits")])
+def test_an_integer_of_39_digits_under_columns_fails_naming_the_column(files, type, value, reason):
+    """DuckDB hands both to Arrow as a decimal of 38 digits; its uhugeint above 2**127 - 1 arrived as -1, run ok."""
+    (files.dir / "files" / "h.csv").write_text(f"id;h\n1;{value}\n2;1\n")
+    code, answer = load(files, f'"h.csv" = {{ key = ["id"], sep = ";", columns = {{ h = "{type}" }} }}\n')
+    assert code == 1, files.target("select h from raw_files.h")
+    assert answer["raw_files.h"]["reason"] == f"h.csv: {reason}"
+
+
+def test_a_parquet_decimal_of_more_than_38_digits_fails_naming_the_column(files):
+    """DuckDB reads it as a double: 10**39 + 1 arrived as 1e39 with the run ok."""
+    pq.write_table(pa.table({"id": [1], "ok": pa.array([Decimal(1)], pa.decimal128(38, 2)),
+                             "big": pa.array([Decimal(10**39 + 1)], pa.decimal256(40, 0))}),
+                   files.dir / "files" / "big.parquet")
+    code, answer = load(files, '"big.parquet" = { key = ["id"] }\n')
+    assert answer["raw_files.big"]["reason"] == (
+        "big.parquet: column big is a decimal of 40 digits, more than the 38 DuckDB reads exactly; write it into the "
+        "file as text or as a decimal of at most 38 digits")
+
+
+def test_a_struct_or_a_map_of_a_parquet_file_arrives_as_jsonb_as_a_nested_value_of_a_json_file(files):
+    """One rule for the nested values of a file; the target has no type for a struct or a map."""
+    pq.write_table(pa.table({
+        "id": [1, 2], "s": [{"a": "x", "b": 1}, None], "ls": [[{"a": "y"}], []], "l": [["a"], []],
+        "m": pa.array([[("k", 1)], []], pa.map_(pa.string(), pa.int64())), "ll": [[[1, 2]], []]}),
+        files.dir / "files" / "nested.parquet")
+    for _ in range(2):  # the second run changes nothing
+        code, answer = load(files, '"nested.parquet" = { key = ["id"] }\n')
+        assert code == 0, answer
+    assert answer["raw_files.nested"] == {"status": "ok", "inserted": 0, "updated": 0, "deleted": 0}
+    assert types(files, "nested") == [("id", "bigint"), ("s", "jsonb"), ("ls", "jsonb"), ("l", "ARRAY"),
+                                      ("m", "jsonb"), ("ll", "jsonb")]
+    assert files.target("select s, ls, l, m, ll from raw_files.nested order by id") == [
+        ({"a": "x", "b": 1}, [{"a": "y"}], ["a"], {"k": 1}, [[1, 2]]), (None, [], [], {}, [])]
+
+
+def write(rv, name, rows):
+    """A JSON or an Excel file of `rows`, dicts of text; a key a row lacks is a field the file lacks."""
+    path = rv.dir / "files" / name
+    if name.endswith(".json"):
+        return path.write_text(json.dumps(rows))
+    columns = list(dict.fromkeys(k for r in rows for k in r))
+    db = duckdb.connect()
+    db.execute("LOAD excel")
+    db.register("t", pa.table({c: [r.get(c) for r in rows] for c in columns}))
+    db.execute(f"COPY t TO '{path}' (FORMAT xlsx, HEADER true)")
+
+
+@pytest.mark.parametrize("kind, unpinned", [("xlsx", "text"), ("json", "jsonb")])
+def test_excel_and_json_go_through_every_change_of_shape_a_csv_goes_through(files, kind, unpinned):  # ticket 14
+    """A pattern whose files differ, a header renamed, a pin set, changed and taken out, a field missing
+    (decision 54)."""
+    from test_columns_go_and_come import columns
+    table = f'"t_*.{kind}" = {{{{ key = ["id"], target_table = "t"{{}} }}}}\n'
+    text = "#>> '{}'" if kind == "json" else ""  # a JSON value as its text
+    type = "select format_type(atttypid, atttypmod) from pg_attribute where attname = 'amount' and attrelid in " \
+           "('raw_files.t'::regclass, 'raw_files.t__log'::regclass)"
+    write(files, f"t_1.{kind}", [{"id": "1", "amount": "10", "note": "a"}, {"id": "2", "amount": "20", "note": "b"}])
+    write(files, f"t_2.{kind}", [{"id": "3", "amount": "30"}])  # a file without note
+    code, answer = load(files, table.format(""))
+    assert code == 0, answer
+    assert files.target(f"select id {text}, amount {text}, note {text} from raw_files.t order by 1") == [
+        ("1", "10", "a"), ("2", "20", "b"), ("3", "30", None)]
+    write(files, f"t_1.{kind}", [{"id": "1", "amount": "10", "memo": "a"}, {"id": "2", "amount": "20", "memo": "b"}])
+    code, answer = load(files, table.format(', renamed = { memo = "note" }'))  # the header renamed
+    assert code == 0, answer
+    assert columns(files, "raw_files.t") == ["id", "amount", "memo"]
+    for pin, expected in [("integer", "integer"), ("bigint", "integer"), (None, unpinned)]:  # set, widened, taken out
+        code, answer = load(files, table.format(f', columns = {{ amount = "{pin}" }}' if pin else ""))
+        assert code == 0, answer
+        assert files.target(type) == [(expected,), (expected,)], pin
+    write(files, f"t_2.{kind}", [{"id": "3", "memo": "c"}])  # a field missing
+    code, answer = load(files, table.format(""))
+    assert code == 0, answer
+    assert files.target(f"select amount {text}, memo {text} from raw_files.t order by id {text}") == [
+        ("10", "a"), ("20", "b"), (None, "c")]
+    log_replays(files, "raw_files.t")
+
+
+def test_without_its_extra_the_file_connector_says_which_to_install(files):
+    """A package that stands for DuckDB's absence, as on a worker installed without `rowvioli[file]`."""
+    missing = files.dir / "missing" / "duckdb"
+    missing.mkdir(parents=True)
+    (missing / "__init__.py").write_text("raise ModuleNotFoundError(\"No module named 'duckdb'\", name='duckdb')\n")
+    env = {"PYTHONPATH": str(missing.parent)}
+    load(files, '"customers_csv.csv" = { sep = ";" }\n')
+    files.target("update _rowvioli.tables set requested_at = now()")
+    said = "No module named 'duckdb'; pip install \"rowvioli[file]\" installs it"
+    r = files.run("run", "files", env=env)
+    [reason] = [t["reason"] for t in json.loads(r.stdout)["tables"].values()]
+    assert reason.startswith('connector "file" cannot be loaded on worker ') and reason.endswith(said), reason
+    r = files.run("list", "files", env=env)
+    assert r.returncode == 1 and r.stderr == f'connector "file" cannot be loaded: {said}\n', r.stderr
+
+
+@pytest.mark.parametrize("type, module, connection", [("odbc", "arrow_odbc", 'string = "DSN=x"'),
+                                                       ("rest", "httpx", 'url = "http://127.0.0.1:9"')])
+def test_without_its_extra_the_odbc_and_the_rest_connector_say_which_to_install(rv, type, module, connection):
+    missing = rv.dir / "missing" / module
+    missing.mkdir(parents=True)
+    (missing / "__init__.py").write_text(f"raise ModuleNotFoundError(\"No module named '{module}'\", name='{module}')\n")
+    rv.definition({"s.toml": f'[s]\ntype = "{type}"\nmax_age = "1h"\n[s.connection]\n{connection}\n[s.tables]\n'})
+    r = rv.run("list", "s", env={"PYTHONPATH": str(missing.parent)})
+    assert r.returncode == 1 and r.stderr == (f'connector "{type}" cannot be loaded: No module named \'{module}\'; '
+                                              f'pip install "rowvioli[{type}]" installs it\n'), r.stderr

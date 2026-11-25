@@ -21,6 +21,8 @@ decides whether the program can do better.
   (`-p 127.0.0.1::5432`). Use `postgres:16-alpine` unless your task needs another version. Start containers with
   `--rm`, and remove only your own when you are done, with `docker rm -fv` and that label (`--filter label=rowvioli-shakedown=<your id>`), never by
   a name filter: `rv-shake-p1` also matches `rv-shake-p18`. Name in your report every image you pulled.
+- End only processes you started, by their PID (keep it when you start one in the background), never by
+  name: `pkill -f listen.py` also ends another agent's listener.
 - No global installs (`brew`, `pip install --user`, `uv tool install`). Keep data small: no table above a
   million rows, no volume above 1 GB. Check `df -h /` before anything large.
 - Be economical: build the smallest host that shows a case, and stop a line of inquiry once it has given

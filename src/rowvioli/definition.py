@@ -8,12 +8,16 @@ from pathlib import Path
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
+from .target import check_address
+
 UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days"}
 # a table may override these; its row carries them with the source's filled in
 TABLE_SETTINGS = {"max_age": str, "log": bool, "max_delete_share": (int, float), "max_seconds": int, "at": list,
                   "timezone": str, "target_schema": str}
-# settings of a table only, not of the source and not a connector option
-TABLE_ONLY = {"key": list, "target_table": str}
+# settings of a table only, not of the source and not a connector option; `renamed` travels with the options
+TABLE_ONLY = {"key": list, "target_table": str, "renamed": dict}
+# the columns a change log and its history view carry beside the table's (decision 54)
+RESERVED = ["_op", "_run", "_loaded_at", "_valid_from", "_valid_to"]
 DEFAULTS = {"log": True, "max_delete_share": 0.5, "max_seconds": 3600}
 SOURCE_SETTINGS = {"type": str, "connection": dict, "tables": dict, "parallel": int,
                    **TABLE_SETTINGS}
@@ -45,7 +49,8 @@ def read(directory, env=None, only=None):
     whole, sources, tables, names = {}, [], [], {}
     files = sorted(Path(directory).rglob("*.toml"))
     if not files:
-        raise SystemExit(f"{directory} holds no source files (*.toml); applying it would disable every table")
+        raise SystemExit(f"{directory} holds no source files (*.toml): write one, as the README shows with "
+                         "sources/erp.toml; applying none would disable every table")
     for path in files:
         label = path.relative_to(directory).as_posix()
         try:
@@ -86,6 +91,15 @@ def read(directory, env=None, only=None):
                     raise SystemExit(f"{spot}: key must be a list of column names")
                 for c in key or []:
                     clean(spot, "key", c)
+                renamed = t.get("renamed", {})  # new name = "old name" (decision 54)
+                if not all(isinstance(old, str) and old and new for new, old in renamed.items()) \
+                        or len(set(renamed.values())) < len(renamed):
+                    raise SystemExit(f'{spot}: renamed must be a table of new = "old" column names, each old one once')
+                for c in [*renamed, *renamed.values()]:
+                    clean(spot, "renamed", c)
+                if reserved := [n for n in renamed if n in RESERVED]:
+                    raise SystemExit(f"{spot}: renamed {reserved[0]}: the program keeps this name for the change log "
+                                     "and the history view")
                 # a file's extension is not a name part: `customers.csv` becomes `customers`
                 target = t["target_table"] if "target_table" in t else (
                     Path(table).stem if s["type"] == "file" else table.rsplit(".", 1)[-1]).lower()
@@ -119,8 +133,8 @@ def read(directory, env=None, only=None):
                                "max_age": interval(t.get("max_age", s["max_age"]), spot),
                                **{k: t.get(k, s.get(k, DEFAULTS[k])) for k in DEFAULTS},
                                **times,
-                               "options": ordered({k: v for k, v in t.items()
-                                                   if k not in TABLE_SETTINGS and k not in TABLE_ONLY})})
+                               "options": ordered({k: v for k, v in t.items() if k not in TABLE_SETTINGS
+                                                   and (k not in TABLE_ONLY or k == "renamed")})})
     # of the text as written: placeholders stay unfilled, so the hash says nothing about a secret
     digest = hashlib.sha256(json.dumps(whole, sort_keys=True, default=str).encode()).hexdigest()
     return sources, tables, digest
@@ -223,4 +237,7 @@ def fill(template, where, env):
         if m[1] not in env:
             raise SystemExit(f"{where}: variable {m[1]} is not set")
         return quote(env[m[1]], safe="") if m.start() < userinfo_end else env[m[1]]
-    return PLACEHOLDER.sub(sub, template)
+    filled = PLACEHOLDER.sub(sub, template)
+    if filled.startswith(("postgresql://", "postgres://")):  # a password that breaks it (ticket 17)
+        check_address(filled, where, ", or come from a variable ($NAME), which apply encodes")
+    return filled

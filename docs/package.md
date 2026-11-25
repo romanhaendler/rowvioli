@@ -41,6 +41,7 @@ Two points:
 |---|---|---|
 | `pyarrow` | core | Apache-2.0 |
 | `adbc-driver-postgresql` | core, `postgres` connector | Apache-2.0 |
+| `adbc-driver-manager` | core, `postgres` connector: its reader keeps a source's SQLSTATE, read from a private attribute, so both stay below 2 | Apache-2.0 |
 | `pynacl` | core, encrypting connections | Apache-2.0 |
 | `duckdb` | extra `file` | MIT |
 | `arrow-odbc` | extra `odbc` | MIT |
@@ -52,7 +53,7 @@ All are compatible with an MIT project. The core does everything on the control 
 
 `run` and `work` are the same loop in `work.py`. `run` ends when nothing is due any more.
 
-`init` creates the schema `_rowvioli` and writes a schema version into it. The program refuses to start if the version does not match.
+`init` creates the schema `_rowvioli` and writes a schema version into it, and brings a target of an older version to the current one, one step per version from version 3 on. The program refuses to start if the version does not match.
 
 The first screen of the README shows the whole usage: one source file, the target's address, four commands and the status view. Whatever a user needs a drawing for to understand is cut or hidden.
 

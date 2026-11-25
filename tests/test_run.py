@@ -1,4 +1,5 @@
 """`rowvioli run`: one table from the source to its mirror (spec tests 4 rest, 5, 6, 7, 8, 21)."""
+import importlib.metadata
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -97,6 +98,52 @@ def test_runs_has_one_row_per_run_with_worker_times_status_and_counts(erp):
     assert erp.target("select status, attempts from _rowvioli.status") == [("ok", 0)]
 
 
+def test_runs_record_the_version_of_the_program_and_of_the_driver_the_connector_reads_with(erp):  # story 38
+    ok(erp)
+    version = erp.run("--version").stdout.split()[-1]
+    assert erp.target("select program_version, driver_version from _rowvioli.runs") == [
+        (version, f"adbc-driver-postgresql {importlib.metadata.version('adbc-driver-postgresql')}")]
+
+
+def test_a_driver_installed_without_its_metadata_loads_and_its_version_is_none(erp):
+    (erp.dir / "site").mkdir()  # Python runs a sitecustomize it finds on the path at its start
+    (erp.dir / "site" / "sitecustomize.py").write_text(
+        "import importlib.metadata\nfound = importlib.metadata.version\n\n\ndef version(name):\n"
+        "    if name == 'adbc-driver-postgresql':\n        raise importlib.metadata.PackageNotFoundError(name)\n"
+        "    return found(name)\n\n\nimportlib.metadata.version = version\n")
+    r = erp.run("run", env={"PYTHONPATH": str(erp.dir / "site")})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert erp.target("select driver_version from _rowvioli.runs") == [(None,)]
+
+
+def test_a_postgres_source_cuts_a_name_longer_than_63_bytes_itself_and_a_key_naming_the_long_name_fails(erp):
+    long = "c" * 70  # cases A20: the source keeps 63 bytes of it, so a run never sees the long name (tests/test_file.py)
+    erp.source(f'create table wide (k int primary key, "{long}" int)')
+    erp.source("insert into wide values (1, 2)")
+    apply(erp, definition(erp, '"public.wide" = { key = ["k"] }\n'))
+    ok(erp, "erp", "public.wide")
+    assert erp.target("select column_name from information_schema.columns where table_name = 'wide' order by 1") == [
+        ("c" * 63,), ("k",)]
+    apply(erp, definition(erp, f'"public.wide" = {{ key = ["{long}"] }}\n'))
+    code, answer = run(erp, "erp", "public.wide")
+    assert code == 1 and f"has no column {long}" in answer["tables"]["raw_erp.wide"]["reason"]
+
+
+def test_an_enum_and_a_domain_arrive_as_text_and_as_their_base_type(erp):  # cases B14, as it is today
+    erp.source("create type mood as enum ('a', 'b')")
+    erp.source("create domain pos as int check (value > 0)")
+    erp.source("create table moods (k int primary key, m mood, p pos)")
+    erp.source("insert into moods values (1, 'a', 3)")
+    apply(erp, definition(erp, '"public.moods" = { key = ["k"] }\n'))
+    ok(erp, "erp", "public.moods")
+    assert erp.target("select column_name, data_type from information_schema.columns where table_name = 'moods' "
+                      "order by 1") == [("k", "integer"), ("m", "text"), ("p", "integer")]
+    erp.source("alter type mood add value 'c'")
+    erp.source("update moods set m = 'c'")
+    ok(erp, "erp", "public.moods")
+    assert erp.target("select m from raw_erp.moods") == [("c",)]
+
+
 NOTES = '"public.notes" = {}\n'
 
 
@@ -113,7 +160,7 @@ def test_a_table_without_a_key_is_replaced_as_a_whole_and_has_no_change_log(erp)
 
 def column_types(rv, table):
     return rv.target("""select attname, format_type(atttypid, atttypmod) from pg_attribute
-                         where attrelid = %s::regclass and attnum > 0 order by attnum""", [table])
+                         where attrelid = %s::regclass and attnum > 0 and not attisdropped order by attnum""", [table])
 
 
 FAITHFUL = {"b": "bytea", "u": "uuid", "ts": "timestamp without time zone", "tz": "timestamp with time zone",
@@ -189,8 +236,34 @@ def test_a_mirror_with_a_json_column_from_before_fails_naming_the_column_and_sta
     erp.target("alter table raw_erp.docs alter j type json")  # as an earlier build left it
     assert run(erp, "erp")[0] == 1
     assert erp.target("select reason from _rowvioli.status") == [
-        ("column j has changed its type from json to jsonb",)]
+        ("column j of the mirror has the type json, of another family than the jsonb it has in the change log, and a "
+         'run does not change it back; drop it from the mirror and the next run brings it again: ALTER TABLE "raw_erp".'
+         '"docs" DROP COLUMN "j"',)]
     assert erp.target("select j::text from raw_erp.docs") == [('{"a": 1}',)]
+    erp.target('ALTER TABLE "raw_erp"."docs" DROP COLUMN "j"')  # the way out
+    ok(erp, "erp")
+    assert erp.target("select pg_typeof(j)::text, j::text from raw_erp.docs") == [("jsonb", '{"a": 1}')]
+
+
+def test_a_json_column_from_before_in_mirror_and_change_log_goes_and_comes_back_as_jsonb(erp):  # ticket 15, P2
+    erp.source("""create table docs (id int primary key, j json, js json[]);
+                  insert into docs values (1, '{"a": 1}', array['{"b": 2}'::json]), (2, null, null)""")
+    apply(erp, definition(erp, '"public.docs" = { key = ["id"] }\n'))
+    ok(erp)
+    erp.target("drop view raw_erp.docs__history")  # as an earlier build left them; the run creates the view again
+    for table in ("raw_erp.docs", "raw_erp.docs__log"):
+        erp.target(f"alter table {table} alter j type json, alter js type json[]")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    assert column_types(erp, "raw_erp.docs") == [("id", "integer"), ("j", "jsonb"), ("js", "jsonb[]")]
+    assert rows(erp.target, "select id, j::text, js::text from raw_erp.docs") == [
+        (1, '{"a": 1}', '{"{\\"b\\": 2}"}'), (2, None, None)]
+    [(run_,)] = erp.target("select max(run) from _rowvioli.runs")  # the change log keeps the old values as they were
+    assert erp.target(f"select _run = {run_}, pg_typeof(j__{run_})::text, j__{run_}::text, j::text from "
+                      "raw_erp.docs__log where id = 1 order by _run") == [
+        (False, "json", '{"a": 1}', None), (True, "json", None, '{"a": 1}')]
+    assert run(erp, "erp")[1]["tables"]["raw_erp.docs"] == {"status": "ok", "inserted": 0, "updated": 0,
+                                                            "deleted": 0}
 
 
 def test_run_exits_1_when_a_table_fails_and_names_every_table_it_touched(erp):
@@ -258,11 +331,6 @@ def test_a_disabled_table_is_not_loaded_again_and_its_mirror_stays(erp):
     assert rows(erp.target, "select * from raw_erp.customers") == rows(erp.source, "select * from customers")
 
 
-def scrubbed(reason):
-    """A reason as a run stores it here: the test source's password is x, and a reason never holds the password."""
-    return reason.replace("x", "***")
-
-
 def applied_while_notes_loads(erp, tables):
     """Loads raw_erp.notes, then holds its next run at reading the source while `tables` is applied and the
     memos (same columns, other rows) are loaded. Returns that run's answer once the source lets it read on."""
@@ -291,7 +359,7 @@ def test_a_run_whose_target_name_apply_gave_to_another_table_publishes_nothing(e
     answer = applied_while_notes_loads(erp, tables)
     assert rows(erp.target, "select * from raw_erp.notes") == rows(erp.source, "select * from memos")
     if notes_now:  # the next run of notes loads its new name
-        assert answer["raw_erp.notes"] == {"status": "failed", "reason": scrubbed(
+        assert answer["raw_erp.notes"] == {"status": "failed", "reason": (
             f"the target name changed to {notes_now} while this run loaded raw_erp.notes; nothing was published, "
             f"the next run loads {notes_now}")}
         assert answer[notes_now]["status"] == "ok"
@@ -307,7 +375,7 @@ def test_a_run_whose_target_name_changes_while_it_loads_publishes_nothing_and_th
         erp, setting, now):
     before = rows(erp.source, "select * from notes")
     answer = applied_while_notes_loads(erp, f'"public.notes" = {{ {setting} }}\n')
-    assert answer == {"raw_erp.notes": {"status": "failed", "reason": scrubbed(
+    assert answer == {"raw_erp.notes": {"status": "failed", "reason": (
                           f"the target name changed to {now} while this run loaded raw_erp.notes; nothing was "
                           f"published, the next run loads {now}")},
                       now: {"status": "ok", "inserted": 4, "updated": 0, "deleted": 0}}

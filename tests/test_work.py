@@ -95,6 +95,35 @@ def test_one_slot_loads_the_tables_in_the_order_of_how_far_they_miss_their_maxim
                         "where r.run > %s order by r.run", [first]) == [("public.b",), ("public.a",), ("public.c",)]
 
 
+def loads_in_order(ready, settings):
+    """b, a, c loaded and then overdue by 2x, 1x and 0.5x of their max_age, d added after and never tried; returns the
+    order in which `ok --slots 1` loads the four."""
+    for name in "abcd":
+        ready.source(f"create table {name} (id int primary key)")
+        ready.source(f"insert into {name} values (1)")
+    tables = '"public.{}" = {{ key = ["id"]{} }}'
+    first = "\n".join(tables.format(n, ', max_age = "10m"' if n == "b" else "") for n in "abc")
+    apply(ready, source(ready, "erp", settings, first))
+    ok(ready)
+    for name, loaded in (("a", "2 hours"), ("b", "30 minutes"), ("c", "90 minutes")):
+        ready.target("update _rowvioli.tables set loaded_at = now() - %s::interval where source_table = %s",
+                     [loaded, f"public.{name}"])
+    apply(ready, source(ready, "erp", settings, first + "\n" + tables.format("d", "")))
+    before = ready.target("select max(run) from _rowvioli.runs")[0][0]
+    ok(ready, "--slots", "1")
+    return [t for (t,) in ready.target("select t.source_table from _rowvioli.runs r join _rowvioli.tables t on "
+                                       "t.id = r.table where r.run > %s order by r.run", [before])]
+
+
+def test_with_fewer_places_than_due_tables_the_never_tried_and_then_the_most_overdue_are_claimed(ready):
+    ready.target("update _rowvioli.meta set max_running = 1")  # the places cut the claimable set before the claim picks
+    assert loads_in_order(ready, "parallel = 4") == ["public.d", "public.b", "public.a", "public.c"]
+
+
+def test_with_parallel_1_a_never_tried_table_is_chosen_before_an_overdue_one_of_its_source(ready):
+    assert loads_in_order(ready, "parallel = 1") == ["public.d", "public.b", "public.a", "public.c"]
+
+
 HELD = """select s.name, count(*) from pg_locks l join _rowvioli.sources s on s.id = l.classid::int
            where l.locktype = 'advisory' and l.objsubid = 2 and l.granted and l.classid <> 0
              and l.database = (select oid from pg_database where datname = current_database()) group by s.name"""
@@ -175,33 +204,34 @@ def test_ctrl_c_ends_the_worker_with_one_line_130_and_no_run_process_left(ready,
 def test_with_the_limits_full_the_targets_connections_stay_at_the_running_tables_plus_one_per_worker(ready):
     tables = "\n".join(f'"public.slow{i}" = {{ key = ["id"] }}' for i in range(4))
     for i in range(4):
-        slow(ready, f"slow{i}", 30, 1)
+        slow(ready, f"slow{i}", 3600, 1)  # loading for longer than the test looks, however busy the machine
     apply(ready, source(ready, "erp", "parallel = 4", tables))
     ready.target("update _rowvioli.meta set max_running = 2")
-    for _ in range(3):
-        ready.start("work", "--slots", "4")
-    until(lambda: ready.target("select count(*) from _rowvioli.status where status = 'loading'") == [(2,)])
-    connections = """select count(*) from pg_stat_activity
-                      where datname = current_database() and pid <> pg_backend_pid()"""
-    # the start-up is over when the count has stayed at 2 + 3 for 2 s: run processes started before the first
-    # claims committed find nothing and end, and a slow worker may connect late
+    workers = [ready.start("work", "--slots", "4") for _ in range(3)]
+    # the clients' connections: an autovacuum worker on the test's database is one of the server's own
+    connections = """select count(*) from pg_stat_activity where datname = current_database()
+                      and backend_type = 'client backend' and pid <> pg_backend_pid()"""
+
+    def runs():  # the run processes of all three workers
+        return sum(len(subprocess.run(["pgrep", "-P", str(w.pid)], capture_output=True, text=True).stdout.split())
+                   for w in workers)
     # one connection for all the counting: ready.target opens one per query, and on a busy machine the backend of
     # the query before is still closing when the next one counts, which reads as a sixth connection
     with psycopg.connect(ready.target_url, autocommit=True) as counting:
         def count():
             return counting.execute(connections).fetchone()[0]
-        stable, deadline, values = time.monotonic(), time.monotonic() + 30, []
-        while time.monotonic() - stable < 2:
-            values.append(count())
-            if values[-1] != 2 + 3:
-                stable = time.monotonic()
-            assert time.monotonic() < deadline, f"the connections never settled at 5, seen {sorted(set(values))}"
-            time.sleep(0.05)
-        seen, end = set(), time.monotonic() + 8  # four polling intervals
+        # the start-up is over when two tables load, their two run processes alone are left (one started before the
+        # first claims committed finds nothing and ends) and every worker has connected
+        until(lambda: counting.execute("select count(*) from _rowvioli.status where status = 'loading'").fetchone()
+              == (2,) and runs() == 2 and count() == 2 + 3, timeout=60)
+        seen, end, other = set(), time.monotonic() + 8, set()  # four polling intervals
         while time.monotonic() < end:
             seen.add(count())
+            if seen != {2 + 3} and not other:  # which, for the message
+                other = set(counting.execute("select backend_type, application_name, state, left(query, 80) from "
+                                             "pg_stat_activity where datname = current_database()").fetchall())
             time.sleep(0.02)
-    assert seen == {2 + 3}
+    assert seen == {2 + 3}, other
 
 
 def test_a_worker_survives_an_unreachable_target_and_loads_again_once_it_accepts_connections(ready):
@@ -336,7 +366,34 @@ def test_a_run_process_dying_before_its_claim_gives_a_line_with_its_exit_code(re
     ready.source("create table customers (id int primary key)")
     apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
     ready.target("alter table _rowvioli.runs add constraint broken check (false) not valid")
-    assert re.search(r"✘ a run process ended with exit code 1 before it claimed", ready.run("run", timeout=20).stderr)
+    # ticket 15, I1: with its cause, by the one rule of a reason
+    assert re.search(r'✘ a run process ended with exit code 1 before it claimed anything: new row for relation "runs" '
+                     r'violates check constraint "broken"', ready.run("run", timeout=20).stderr)
+
+
+def test_work_says_a_failure_before_the_claim_once_with_its_cause_and_not_four_times_a_second(ready):  # ticket 15, I1
+    ready.source("create table customers (id int primary key)")
+    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
+    ready.target("alter table _rowvioli.runs add constraint broken check (false) not valid")
+    worker = ready.start("work")
+    time.sleep(5)  # shortcut: a time, not a condition: the lines that must not come have no condition to wait for
+    worker.send_signal(signal.SIGTERM)
+    lines = [line for line in worker.communicate(timeout=20)[1].splitlines() if "before it claimed" in line]
+    assert len(lines) == 1 and 'violates check constraint "broken"' in lines[0], lines
+
+
+def test_a_run_process_whose_target_the_program_refuses_says_why_before_its_claim(ready):  # ticket 15, I1
+    ready.source("create table customers (id int primary key)")
+    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
+    ok(ready)
+    worker = ready.start("work")
+    until(lambda: ready.target("select 1 from pg_stat_activity where datname = current_database() and query like "
+                               "'%The claimable tables%' and pid <> pg_backend_pid()"))  # it asks what is claimable
+    ready.target("update _rowvioli.meta set schema_version = 5; update _rowvioli.tables set requested_at = now()")
+    time.sleep(4)  # shortcut: a time, not a condition: the run process says it on the worker's stderr alone
+    worker.send_signal(signal.SIGTERM)
+    assert ("before it claimed anything: the target has schema version 5, this program works with version 4"
+            in worker.communicate(timeout=20)[1])
 
 
 def test_work_shows_the_mascot_before_its_start_line_at_a_terminal_and_nothing_that_moves_the_cursor(ready):
@@ -488,3 +545,39 @@ def test_the_target_table_of_a_run_line_is_padded_to_28_characters(monkeypatch, 
     monkeypatch.setattr(work, "colour", lambda: False)
     work.say_run({"claimed": "raw_erp.t", "started": time.monotonic()}, "started", "run 1")
     assert f"▶ {'raw_erp.t':<28} started " in capsys.readouterr().err
+
+
+def test_two_workers_and_a_run_on_a_table_whose_shape_changes_publish_each_change_once(ready):  # ticket 14, item 4
+    from test_columns import replays
+    from test_columns_go_and_come import columns, log_replays
+    ready.source("create table customers (id int primary key, v int, city text);"
+                 "insert into customers select g, g, 'c' || g from generate_series(1, 30) g")
+    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }').replace('"1h"', '"1s"'))
+    workers = [ready.start("work", "--slots", "2") for _ in range(2)]
+    shape = "select format_type(atttypid, atttypmod) from pg_attribute where attrelid = 'raw_erp.customers'::regclass" \
+            " and attname = 'v'"
+    until(lambda: ready.target("select status from _rowvioli.status") == [("ok",)], timeout=30)
+    for change, published in [
+            ("alter table customers drop column city", lambda: columns(ready) == ["id", "v"]),
+            ("alter table customers add column city text; update customers set city = 'x' || id",
+             lambda: "city" in columns(ready) and ready.target("select count(city) from raw_erp.customers") == [(30,)]),
+            ("alter table customers alter v type bigint; update customers set v = 10000000000 where id = 1",
+             lambda: ready.target(shape) == [("bigint",)]),
+            ("alter table customers alter v type text using v || 'x'", lambda: ready.target(shape) == [("text",)])]:
+        ready.source(change)
+        racing = [ready.start("run", "erp") for _ in range(2)]  # beside the workers, on the same table
+        until(published, timeout=30)
+        for r in racing:
+            assert r.wait(timeout=30) in (0, 1)
+    for w in workers:
+        w.send_signal(signal.SIGTERM)
+        assert w.wait(timeout=30) == 0
+    assert ready.target("select reason from _rowvioli.runs where status <> 'ok'") == []
+    # each change once in the columns table, in its order
+    assert [(c, op, type, mirror) for c, op, type, mirror in ready.target(
+        'select "column", _op, type, mirror from _rowvioli.columns__log where "column" in (\'city\', \'v\') '
+        'order by _loaded_at, "column"')] == [
+        ("city", "I", "text", True), ("v", "I", "integer", True), ("city", "U", "text", False),
+        ("city", "U", "text", True), ("v", "U", "bigint", True), ("v", "U", "text", True)]
+    replays(ready)
+    log_replays(ready)

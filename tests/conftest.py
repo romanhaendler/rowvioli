@@ -1,6 +1,7 @@
 """Test harness: two throwaway Postgres containers, the program as a real process.
 
-Tests never import the program. They use the `rv` fixture:
+Tests run the program as a process; a test calls a function of it only for a message that no server here can
+give (a driver's of another database, Arrow's of a value). They use the `rv` fixture:
   rv.run(*args, env={...})   runs `rowvioli` in rv.dir with ROWVIOLI_TARGET_URL and
                              ROWVIOLI_KEY_FILE (rv.dir/worker.key, from `key new`) set;
                              open_files=N limits the open files of the process, which its run processes inherit
@@ -10,7 +11,7 @@ Tests never import the program. They use the `rv` fixture:
   rv.start(*args)            like rv.run, in the background: a Popen (stdout/stderr piped), killed at test end
   rv.kill_runs(p)            kill -9 the run processes started by the worker process p
   until(check)               polls check() until it is truthy (10 s), returns its value
-Each test gets a fresh database in each container, so tests and worktrees do not collide.
+Each test gets a fresh database in each container, so tests and worktrees do not collide; it is dropped after the test.
 """
 import contextlib
 import os
@@ -26,7 +27,8 @@ from pathlib import Path
 import psycopg
 import pytest
 
-IMAGE = "postgres:16-alpine"
+# both containers on another Postgres: ROWVIOLI_TEST_IMAGE=postgres:14-alpine, or postgres:17
+IMAGE = os.environ.get("ROWVIOLI_TEST_IMAGE", "postgres:16-alpine")
 # where the containers' ports are reached: tests/odbc/run.sh runs the tests in a container and sets the Docker host
 HOST = os.environ.get("ROWVIOLI_TEST_HOST", "127.0.0.1")
 ROWVIOLI = shutil.which("rowvioli", path=os.path.dirname(sys.executable))
@@ -34,14 +36,14 @@ ROWVIOLI = shutil.which("rowvioli", path=os.path.dirname(sys.executable))
 
 def _start(name):
     subprocess.run(["docker", "run", "-d", "--name", name, "--label", "rowvioli-test",
-                    "-e", "POSTGRES_PASSWORD=x", "-p", "127.0.0.1::5432", IMAGE, "-c", "max_connections=500"],
+                    "-e", "POSTGRES_PASSWORD=harness-pw-7", "-p", "127.0.0.1::5432", IMAGE, "-c", "max_connections=500"],
                    check=True, capture_output=True)
 
 
 def _url(name, db="postgres"):
     port = subprocess.run(["docker", "port", name, "5432/tcp"], check=True, capture_output=True,
                           text=True).stdout.split()[0].rsplit(":", 1)[1]
-    return f"postgresql://postgres:x@{HOST}:{port}/{db}"
+    return f"postgresql://postgres:harness-pw-7@{HOST}:{port}/{db}"
 
 
 def _wait(url):
@@ -148,6 +150,9 @@ def rv(servers, tmp_path):
         rv.kill_runs(p)
         p.kill()
         p.wait()
+    # each database costs about 10 MB of the Docker disk with its WAL; kept, the suite fills it and Postgres PANICs
+    for name in servers.values():
+        _query(_url(name), f"DROP DATABASE {db} WITH (FORCE)")
 
 
 def until(check, timeout=10):

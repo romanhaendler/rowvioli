@@ -4,7 +4,7 @@ Every command, what it needs, and what it says and returns.
 
 | Command | Does | Needs |
 |---|---|---|
-| `rowvioli init` | Creates the schema `_rowvioli` in the target and says so: `the schema _rowvioli is ready in the target`. | target |
+| `rowvioli init` | Creates the schema `_rowvioli` in the target and says so: `the schema _rowvioli is ready in the target`. A target of version 3 is brought to version 4 and nothing else is changed; `init` then prints the `GRANT` statements a worker's role needs on the new objects ([upgrade](operation.md#deploying-while-loads-are-running)). A target of version 4 is left as it is. | target |
 | `rowvioli key new` | Creates a key pair in the current directory: `worker.key` for the workers and `worker.pub` for the definition, and says so: `created worker.key (keep it secret) and worker.pub`. Overwrites neither. | nothing |
 | `rowvioli list erp` | Prints the tables of a source with their keys, ready to paste into its `tables` block. Reads the source from the definition (`--definition <dir>`, or `sources/` here); where there is no `sources/`, from the target, as a worker would. | definition, environment, connector, source; or target, private key (`ROWVIOLI_KEY_FILE`, else `worker.key` here), connector, source applied |
 | `rowvioli apply --check` | Reads the definition and checks it. Writes nothing. Meant for a laptop and for the pipeline of a merge request. | definition |
@@ -45,7 +45,7 @@ the key file /srv/etl/worker.key: No such file or directory; copy worker.key fro
 
   ```
   erp.toml: erp: max_agee is not a setting; did you mean max_age? (other keys go to the connector as options)
-  empty/ holds no source files (*.toml); applying it would disable every table
+  empty/ holds no source files (*.toml): write one, as the README shows with sources/erp.toml; applying none would disable every table
   ```
 - **It says a changed name.** For every table that is already in the target and gets another target name, `apply` prints one line, after it has written the definition. A table that was disabled and comes back under another name gets it too:
 
@@ -62,7 +62,7 @@ Answer of `run` on stdout:
 {"seconds": 41.2,
  "tables": {
   "raw_erp.customers": {"status": "ok", "inserted": 12, "updated": 3, "deleted": 1},
-  "raw_erp.suppliers": {"status": "failed", "reason": "62 % of the rows would be deleted"}}}
+  "raw_erp.suppliers": {"status": "failed", "reason": "62 % of the rows would be deleted, more than max_delete_share = 0.5 allows: the source table may have been replaced or emptied; if so, max_delete_share = 1.0 on the table lets one run through"}}}
 ```
 
 | Exit code | Meaning |

@@ -90,6 +90,7 @@ def loop(slots, source="", table="", once=False):
     lost` (decision 7)."""
     worker = f"{socket.gethostname()}:{os.getpid()}"
     answers, runs, crashed = {}, {}, False  # runs: process -> what it said after its claim, None until then
+    said_crash = None
     ended = []  # runs killed after max_seconds whose reason is not yet recorded
     stopping, interrupted = [], []
     signal.signal(signal.SIGINT, lambda *_: interrupted.append(True))  # seen within two seconds, not mid-statement
@@ -117,6 +118,10 @@ def loop(slots, source="", table="", once=False):
                 down = None
         except adbc.Error as e:  # the target is unreachable: try again in two seconds (open point E11)
             if once:
+                try:  # a connection that still answers had another failure, said as the target says it
+                    sql(conn, "SELECT 1")
+                except adbc.Error:  # the driver says it in Postgres's words, `FATAL:  terminating connection ...`
+                    raise SystemExit("connection to the target lost") from None
                 raise
             if conn:
                 down = time.monotonic()
@@ -148,7 +153,12 @@ def loop(slots, source="", table="", once=False):
                                  process_group=0)
             runs[p] = None
             threading.Thread(target=pump, args=(p, lines), daemon=True).start()
-        crashed |= listen(runs, answers, ended, 2, lines)
+        if crash := listen(runs, answers, ended, 2, lines):
+            if crash != said_crash:  # a cause that stays is said once, not with every run process
+                say(crash, "✘")
+            said_crash, crashed = crash, True
+            if not once:  # and the next run process starts after the usual two seconds
+                time.sleep(2)
 
 
 def pump(p, lines):
@@ -168,13 +178,15 @@ def say_run(claim, outcome, text):
 
 def listen(runs, answers, ended, seconds, lines):
     """Reads what the run processes say, for `seconds` or until one ends, and kills a run that exceeds its
-    `max_seconds`; its claim goes to `ended`. Returns True if one died before it claimed anything."""
+    `max_seconds`; its claim goes to `ended`. Returns the line to say if one died before it claimed anything, with
+    the cause it said."""
     end = time.monotonic() + seconds
     while (now := time.monotonic()) < end:
         for p, claim in runs.items():
             if claim and claim["deadline"] <= now:
                 p.kill()  # docs/target.md "Order when finishing": kill first, write the reason afterwards
-                claim["deadline"], claim["reason"] = math.inf, f"ended after max_seconds = {claim['max_seconds']}"
+                claim["deadline"], claim["reason"] = math.inf, f"ended after max_seconds = {claim['max_seconds']}" + (
+                    f" while {claim['long']}" if claim.get("long") else "")
                 say_run(claim, "failed", claim["reason"])
                 answers[claim["claimed"]] = claim["answer"] = {"status": "failed", "reason": claim["reason"]}
                 ended.append(claim)
@@ -185,9 +197,13 @@ def listen(runs, answers, ended, seconds, lines):
             continue
         if line:
             said = json.loads(line)
-            if "claimed" in said:  # the clock for max_seconds starts here
+            if "error" in said:  # before its claim
+                p.error = said["error"]
+            elif "claimed" in said:  # the clock for max_seconds starts here
                 runs[p] = said | {"deadline": time.monotonic() + said["max_seconds"], "started": time.monotonic()}
                 say_run(runs[p], "started", f"run {said['run']}")
+            elif "long" in said:  # a step of a change that may outlast max_seconds, or its end (decision 54)
+                runs[p]["long"] = said["long"]
             elif "answer" not in runs[p]:  # a run killed after max_seconds may still have answered
                 answers[said.pop("table")] = runs[p]["answer"] = said
                 if said.get("reason") == "connection to the target lost":  # the run could not record it itself
@@ -204,9 +220,10 @@ def listen(runs, answers, ended, seconds, lines):
             answers[claim["claimed"]] = {"status": "failed", "reason": claim.get("reason", "worker lost")}
             say_run(claim, "failed", answers[claim["claimed"]]["reason"])
         if claim is None and p.returncode != 0:
-            say(f"a run process ended with exit code {p.returncode} before it claimed anything", "✘")
-        return claim is None and p.returncode != 0
-    return False
+            return f"a run process ended with exit code {p.returncode} before it claimed anything" + (
+                f": {p.error}" if hasattr(p, "error") else "")
+        return None
+    return None
 
 
 def end_lost(conn, runs):

@@ -36,10 +36,39 @@ def test_a_foreign_connector_installed_through_the_entry_point_loads_a_table(erp
     assert rows(erp.target, "select * from raw_lab.numbers") == [(7,), (8,)]
 
 
-def test_a_foreign_connector_gets_a_list_named_columns_as_written(erp):
-    lab(erp, 'columns = ["ab", "cd"]')
+@pytest.mark.parametrize("given, delivered", [('["ab", "cd"]', [("ab",), ("cd",)]), ("[7, 8, 9]", [(7,), (8,), (9,)])])
+def test_a_foreign_connector_gets_a_list_named_columns_as_written(erp, given, delivered):
+    lab(erp, f"columns = {given}")
     ok(erp, "lab")
-    assert rows(erp.target, "select * from raw_lab.numbers") == [("ab",), ("cd",)]
+    assert rows(erp.target, "select * from raw_lab.numbers") == delivered
+
+
+@pytest.mark.parametrize("version", ["1.2.3", None])
+def test_runs_record_the_version_a_connector_says_its_driver_has_and_none_for_one_that_says_nothing(erp, version):
+    lab(erp)
+    r = erp.run("run", "lab", env={"ROWVIOLI_TEST_DRIVER_VERSION": version} if version else None)
+    assert r.returncode == 0, r.stderr
+    assert erp.target("select driver_version from _rowvioli.runs") == [(version,)]
+
+
+@pytest.mark.parametrize("version", ["1.2\nx", "v" * 201, 2])  # 2: a number, no text
+def test_a_driver_version_that_is_not_one_short_line_fails_the_run_naming_the_connector(erp, version):
+    lab(erp)  # ticket 17, J2: it was stored with every run as given
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    r = erp.run("run", "lab", env={"ROWVIOLI_TEST_DRIVER_VERSION" + ("_INT" if version == 2 else ""): str(version)})
+    assert r.returncode == 1
+    assert erp.target("select reason, driver_version from _rowvioli.runs") == [(
+        'connector "testing" says a driver_version that is no text of one line and at most 200 characters, which every '
+        'run records: give it a short one, such as "mylib 2.3.1", or none', None)]
+
+
+@pytest.mark.parametrize("odd, delivered", [("list", "a list, not an Arrow record batch"),
+                                            ("schemas", "a batch of another schema than its first")])
+def test_a_connector_that_delivers_what_the_contract_does_not_allow_is_named(erp, odd, delivered):
+    lab(erp, f'odd = "{odd}"')  # ticket 17, J3: Arrow's own words, `'list' object has no attribute 'schema'`
+    assert erp.run("run", "lab").returncode == 1
+    assert erp.target("select reason from _rowvioli.runs") == [
+        (f'connector "testing" delivered {delivered}, which the contract does not allow',)]
 
 
 @pytest.mark.parametrize("fail", ["at_once", "deep"])
@@ -115,7 +144,7 @@ def test_the_lines_of_work_leak_no_connection_value(erp):
 @pytest.mark.parametrize("command", ["status", "run"])
 def test_an_error_of_the_target_shows_user_and_host_and_hides_only_the_password(rv, command):
     assert rv.run("key", "new").returncode == 0  # `run` checks the key file before it connects
-    url = rv.target_url.replace("postgres:x@", "postgres:zzzz@")
+    url = rv.target_url.replace("postgres:harness-pw-7@", "postgres:zzzz@")
     r = rv.run(command, env={"ROWVIOLI_TARGET_URL": url}, timeout=20)
     assert r.returncode == 1
     assert 'user "postgres"' in r.stderr, r.stderr

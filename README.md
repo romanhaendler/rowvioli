@@ -2,7 +2,7 @@
 
 <p align="center"><img src="https://raw.githubusercontent.com/romanhaendler/rowvioli/main/docs/mascot.svg" width="360" alt="Three ravioli in a chain hand little gift parcels from a source database to a sink database"></p>
 
-> **Version 0.4.1.** What is proven and what is not is listed in [docs/measurements.md](https://github.com/romanhaendler/rowvioli/blob/main/docs/measurements.md) and [docs/open-points.md](https://github.com/romanhaendler/rowvioli/blob/main/docs/open-points.md).
+> **Version 0.5.0.** What is proven and what is not is listed in [docs/measurements.md](https://github.com/romanhaendler/rowvioli/blob/main/docs/measurements.md) and [docs/open-points.md](https://github.com/romanhaendler/rowvioli/blob/main/docs/open-points.md).
 
 A program that mirrors tables from source systems into a PostgreSQL target. You say how old each table may be. Workers keep it that fresh, and consumers always see a complete state.
 
@@ -32,7 +32,7 @@ rowvioli status             # whenever you want to look
 ```
 $ rowvioli status
 source  table             target             max_age  age     due        status   reason
-crm     contacts          raw_crm.contacts   1d       3h      in 50s     failed   62 % of the rows would be deleted
+crm     contacts          raw_crm.contacts   1d       3h      in 50s     failed   62 % of the rows would be deleted, more than max_delete_share = 0.5 allows: the source table may have been replaced or emptied; if so, max_delete_share = 1.0 on the table lets one run through
 erp     public.customers  raw_erp.customers  1h       1h 3m   now        loading  485,000 of about 1,000,000 rows
 erp     public.items      raw_erp.items      1h       40m     in 20m     ok
 erp     public.orders     raw_erp.orders     5m       2m 14s  in 2m 46s  ok
@@ -151,14 +151,14 @@ One file per source under `sources/` names the connector, its connection and eve
 
 ## When a table is loaded
 
-A table is due when it is older than its `max_age`, at a load time it names with `at`, or when somebody asks for it: `rowvioli run erp`, or `requested_at` set in `_rowvioli.tables`. A worker takes the most overdue table, reads it into a staging table, checks it, compares it with the mirror inside Postgres and publishes the difference in one transaction. A run that fails changes nothing and is tried again after a pause of 1, 2, 4, 8 minutes and so on, up to `max_age`. Every table with a key also keeps a change log, unless it is switched off, and a view `<table>__history` with every version of a row.
+A table is due when it is older than its `max_age`, at a load time it names with `at`, or when somebody asks for it: `rowvioli run erp`, or `requested_at` set in `_rowvioli.tables`. A worker takes a table never tried first, then the most overdue one, reads it into a staging table, checks it, compares it with the mirror inside Postgres and publishes the difference in one transaction. A run that fails changes nothing and is tried again after a pause of 1, 2, 4, 8 minutes and so on, up to `max_age`. Every table with a key also keeps a change log, unless it is switched off, and a view `<table>__history` with every version of a row. When the source drops a column, changes a type or its key, a table with a change log follows it by itself and keeps what was in the change log; the run stops only where a person must decide or an object of a consumer depends on the change, and `_rowvioli.columns__history` says which columns a table had at any moment.
 
 - [docs/loading.md](https://github.com/romanhaendler/rowvioli/blob/main/docs/loading.md): when a table is due, a run step by step, the checks before publishing, what a person does by hand, and how workers share the work.
 - [docs/target.md](https://github.com/romanhaendler/rowvioli/blob/main/docs/target.md): the schema `_rowvioli`, the mirror with its change log and history, the comparison, how Postgres counts what is running, and what happens when something fails.
 
 ## Connectors
 
-Four connectors ship: `postgres` in the core, and `file` (CSV, Excel, Parquet, JSON), `odbc` (any ODBC source) and `rest` (flat JSON over HTTP) as extras of the same name. Any other source is a package of its own, and the whole contract is one function that yields Arrow batches:
+Four connectors ship: `postgres` in the core, and `file` (CSV, Excel, Parquet, JSON), `odbc` (any ODBC source) and `rest` (flat JSON over HTTP) as extras of the same name. Any other source is a package of its own, and the contract is one function that yields Arrow batches, with three optional names beside it (`tables`, `driver_version`, `catalog`):
 
 ```python
 def read(connection: dict, table: str, options: dict) -> Iterator[pyarrow.RecordBatch]:

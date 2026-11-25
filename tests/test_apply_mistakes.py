@@ -10,6 +10,7 @@ from test_apply import CRM, ENV, ERP, NO_TARGET, check
     ('parallel = 4', 'parallel = 4\ntimzone = "UTC"', "timezone"),
     ('"dbo.Notes"     = {}', '"dbo.Notes"     = { targt_table = "n" }', "target_table"),
     ('"dbo.Notes"     = {}', '"dbo.Notes"     = { max_agee = "5m" }', "max_age"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { rename = { a = "b" } }', "renamed"),
 ])
 def test_a_setting_one_or_two_edits_off_fails_apply_check_and_names_the_setting(rv, old, new, setting):
     r = check(rv, {"erp.toml": ERP.replace(old, new)})
@@ -21,6 +22,21 @@ def test_a_setting_one_or_two_edits_off_fails_apply_check_and_names_the_setting(
 def test_a_plural_of_a_setting_is_a_typo(rv, typo):
     r = check(rv, {"erp.toml": ERP.replace('"dbo.Notes"     = {}', f'"dbo.Notes"     = {{ {typo} }}')})
     assert r.returncode != 0 and "did you mean" in r.stderr, r.stderr
+
+
+@pytest.mark.parametrize("old, new, said", [
+    ('parallel = 4', 'parallel = 4\nrenamed = { a = "b" }', "renamed belongs to a table, not to the source"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { renamed = "a" }', "renamed must be a table"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { renamed = { a = 1 } }', 'renamed must be a table of new = "old"'),
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { renamed = { a = "c", b = "c" } }', "each old one once"),
+    ('"dbo.Notes"     = {}', '"dbo.Notes"     = { renamed = { a = "c\\u0007" } }', "renamed c\\x07 holds a control"),
+    *(('"dbo.Notes"     = {}', f'"dbo.Notes"     = {{ renamed = {{ {name} = "c" }} }}',
+       f"renamed {name}: the program keeps this name for the change log and the history view")
+      for name in ["_op", "_run", "_loaded_at", "_valid_from", "_valid_to"]),
+])
+def test_renamed_is_a_table_setting_of_new_and_old_column_names(rv, old, new, said):
+    r = check(rv, {"erp.toml": ERP.replace(old, new)})
+    assert r.returncode != 0 and said in r.stderr, r.stderr
 
 
 def test_a_short_option_is_no_typo(rv):
@@ -55,7 +71,8 @@ def test_apply_of_an_empty_directory_fails_and_disables_nothing(rv):
     (rv.dir / "empty").mkdir()
     r = rv.run("apply", "empty", env=ENV)
     assert r.returncode != 0
-    assert "empty" in r.stderr and "every table" in r.stderr
+    assert r.stderr.strip() == ("empty holds no source files (*.toml): write one, as the README shows with "
+                                "sources/erp.toml; applying none would disable every table")  # ticket 17, L4
     assert rv.target("select count(*) from _rowvioli.tables where enabled") == [(3,)]
     assert rv.run("apply", "--check", "empty", env=NO_TARGET).returncode != 0
 
@@ -163,8 +180,21 @@ def test_a_target_address_without_the_postgres_scheme_says_so_and_shows_no_part_
         assert "keepalives" not in r.stderr and "secret" not in r.stderr and "127.0.0.1" not in r.stderr, r.stderr
 
 
+@pytest.mark.parametrize("password, says", [
+    ("p@ss/w:rd#1", " has more than one @ after the scheme: a password with @, / or : must be percent-encoded"),
+    ("pa/ss", ": the password holds a / or ?, which must be percent-encoded (%2F, %3F)")])
+def test_a_source_url_whose_password_breaks_it_fails_apply_and_shows_no_part_of_it(rv, password, says):
+    for command in ("apply", "list"):  # ticket 17, L3: it applied, and the run gave a part of it as a host name
+        r = check(rv, {"erp.toml": ERP.replace("$ERP_PASSWORD", password)}) if command == "apply" else \
+            rv.run("list", "erp", env=NO_TARGET)
+        assert r.returncode != 0
+        assert r.stderr.strip() == (f"erp.toml: erp: connection.url{says}, or come from a variable ($NAME), which "
+                                    "apply encodes"), r.stderr
+        assert password not in r.stderr and "nowhere" not in r.stderr
+
+
 def test_a_target_address_with_several_hosts_and_a_query_string_is_no_slip(rv):
-    url = "postgresql://postgres:x@127.0.0.1:1,127.0.0.1:2/db?connect_timeout=1&application_name=a"
+    url = "postgresql://postgres:harness-pw-7@127.0.0.1:1,127.0.0.1:2/db?connect_timeout=1&application_name=a"
     r = rv.run("status", env={"ROWVIOLI_TARGET_URL": url}, timeout=20)
     assert "percent-encoded" not in r.stderr
 

@@ -42,7 +42,10 @@ def main():
     try:
         command(a)
     except adbc.Error as e:  # the target refused or is unreachable: its message in one line, not a traceback
-        stop(load.reason_line(load.target_secrets(), e, "asking the target"))
+        if a.command == "init" and e.sqlstate == "57014":  # Ctrl+C: the driver cancelled, the step is rolled back
+            stop("init was interrupted; nothing was changed")
+        stop("connection to the target lost" if load.lost(e) else
+             load.reason_line(load.target_secrets(), e, "asking the target"))
     except SystemExit as e:
         if not isinstance(e.code, str):
             raise

@@ -1,9 +1,11 @@
 """The file connector: expects `path`, a directory; a table is a file name in it, or a pattern with `*` or `?`
-(`orders_*.csv`) that reads every matching file as one table; they must be of one kind and have the same columns.
+(`orders_*.csv`) that reads every matching file as one table; they must be of one kind, and a column one of them
+lacks is empty in its rows.
 Every file must lie inside `path`, also through a symbolic link. Reads CSV, Excel, Parquet and JSON through DuckDB by
-extension (`.json`, `.jsonl` and `.ndjson` hold one object per row). Parquet keeps its own types; CSV and Excel
+extension (`.json`, `.jsonl` and `.ndjson` hold one object per row). Parquet keeps its own types (a struct or a map
+becomes jsonb, as a nested JSON value); CSV and Excel
 arrive as text and JSON as jsonb, a column per key, except the columns the option `columns` names with a DuckDB type
-(a JSON value is cast from its text, so `"Anna"` loses its quotes). Every other option is a named parameter of
+(a JSON value is cast from its text, so `"Anna"` loses its quotes); one it names that no file has is empty. Every other option is a named parameter of
 DuckDB's reader, such as `sep`, `skip` or `sheet`; a name that belongs to rowvioli, such as `parallel`, reaches no
 connector. A CSV skips no line before its header unless `skip` says so, and one that splits into a single column
 fails unless `sep` is given: that is how DuckDB reads lines with different numbers of fields. An empty file fails."""
@@ -16,7 +18,12 @@ from pathlib import Path
 import duckdb
 import pyarrow as pa
 
+from ..contract import OWN_TYPE, version
 from ..target import quote
+
+# the reader's version, so that columns another one delivers are recorded as by = reader (decision 54)
+driver_version = version("duckdb")
+catalog = "data"  # a file has no catalog: a column one file or one run lacks is empty (decision 54)
 
 READERS = {".csv": "read_csv", ".xlsx": "read_xlsx", ".parquet": "read_parquet", ".json": "read_json",
            ".jsonl": "read_json", ".ndjson": "read_json"}
@@ -24,6 +31,8 @@ READERS = {".csv": "read_csv", ".xlsx": "read_xlsx", ".parquet": "read_parquet",
 TYPE = re.compile(r"[A-Za-z][A-Za-z0-9_ ]*(\(\d+(,\s*\d+)?\))?")
 # the files of a pattern DuckDB reads at once; at most so many are open
 FILES_PER_READ = 50
+# a cast that fails: DuckDB's own error, or Arrow's with its message once batches are read
+CONVERSION = (duckdb.ConversionException, OSError)
 
 
 def read(connection, table, options):
@@ -60,52 +69,120 @@ def read(connection, table, options):
     for name in options:
         if not name.isidentifier():
             raise Exception(f"{table}: {name} is not an option of DuckDB's {reader}")
-    for type in columns.values():
+    for column, type in columns.items():
         if not TYPE.fullmatch(type):
             raise Exception(f"{table}: {type} is not a column type")
-    text = "->>'$'" if json else ""  # a JSON value is cast from its text, as in a CSV: "Anna" without the quotes
-    casts = ", ".join(f'CAST({quote(c)}{text} AS {t}) AS {quote(c)}' for c, t in columns.items())
+        if type.strip().lower() in ("uhugeint", "uint128"):  # DuckDB hands it to Arrow as a signed decimal, wrapped
+            raise Exception(f"{table}: column {column} as uhugeint would arrive wrapped above 2^127 - 1; use "
+                            "hugeint, or text for more than 38 digits")
+
+    def text(c, t):
+        """What a column under `columns` is cast from. A JSON value's text, as in a CSV: "Anna" without the quotes. An
+        Excel cell's date and time where it holds a number: Excel keeps a date as the days since 1899-12-30 (up to
+        9999-12-31), the time as their fraction, to the millisecond, and a format the text DuckDB reads leaves out."""
+        if json:
+            return f"{quote(c)}->>'$'"
+        if reader == "read_xlsx" and re.match(r"\s*(date|timestamp)", t, re.IGNORECASE):
+            days = f"TRY_CAST({quote(c)} AS DOUBLE)"
+            return (f"CASE WHEN {days} BETWEEN 0 AND 2958466 THEN strftime(TIMESTAMP '1899-12-30' + "
+                    f"to_milliseconds(round({days} * 86400e3)::BIGINT), '%Y-%m-%d %H:%M:%S.%f') ELSE {quote(c)} END")
+        return quote(c)
+    casts = ", ".join(f'CAST({text(c, t)} AS {t}) AS {quote(c)}' for c, t in columns.items())
     db = duckdb.connect()
 
     def relation(path, **extra):
         named = {**options, **extra}
-        return db.sql(f"SELECT * FROM {reader}(?" + "".join(f", {name} = ?" for name in named) + ")",
-                      params=[path, *named.values()])
+        try:
+            return db.sql(f"SELECT * FROM {reader}(?" + "".join(f", {name} = ?" for name in named) + ")",
+                          params=[path, *named.values()])
+        except duckdb.InvalidInputException as e:  # what DuckDB's sniffer read
+            raise encoding(e) from None
+        except duckdb.ConversionException:  # where DuckDB reads the sample while it binds; its message holds a row
+            raise Exception(f"{table}: a value in the file does not convert to the type its column is read as") \
+                from None
+
+    def encoding(e):
+        """DuckDB's message for a CSV that is not UTF-8 names a line, and its next line quotes it: the way out instead."""
+        return Exception(f'{table}: the file is not UTF-8; give its encoding to the table, such as encoding = "latin-1"') \
+            if "is not utf-8 encoded" in str(e) else e
     # escaped, since DuckDB would expand *, ? and [ in a name once more and read a file nobody checked
     paths = [glob.escape(str(f)) for f in files]
     # each file's columns; its relation goes at once, since it holds the file open
-    shapes = [list(zip(part.columns, part.types)) for part in map(relation, paths)]
-    first = dict(shapes[0])
-    for name, shape in zip(names[1:], shapes[1:]):
-        if dict(shape) != first:  # the read of the list would drop or null one file's other columns
-            have = [", ".join(f"{c} {t}" for c, t in s) for s in (shape, shapes[0])]
-            raise Exception(f"{table}: {name} has the columns {have[0]}, {names[0]} has {have[1]}")
+    shapes = {path: dict(zip(part.columns, map(str, part.types))) for path, part in zip(paths, map(relation, paths))}
+    first = {}  # the columns of all files, in the order they first appear; a file without one has it empty
+    for name, path in zip(names, paths):  # DuckDB reads a decimal of more than 38 digits as a double, rounded
+        if reader == "read_parquet" and (wide := db.sql("SELECT name, precision FROM parquet_schema(?) WHERE "
+                                                        "precision > 38 LIMIT 1", params=[path]).fetchall()):
+            raise Exception(f"{name}: column {wide[0][0]} is a decimal of {wide[0][1]} digits, more than the 38 DuckDB "
+                            "reads exactly; write it into the file as text or as a decimal of at most 38 digits")
+    for name, shape in zip(names, shapes.values()):
+        for column, type in shape.items():
+            if first.setdefault(column, type) != type:
+                raise Exception(f"{table}: {name} has the column {column} as {type}, an earlier file as "
+                                f"{first[column]}")
     if reader == "read_csv" and len(first) == 1 and not {"sep", "delim", "delimiter"} & options.keys():
         raise Exception(f"{table}: no separator splits every line into the same number of fields; fix the lines, "
                         "or set sep (also for a file of one column) and skip (for lines before the header)")
-    order = ", ".join(quote(c) for c in first)
+    for column in [c for c in columns if c not in first]:  # named and in no file: empty, as in REST (decision 54)
+        first[column] = "JSON" if json else "VARCHAR"
 
-    def rows(group):  # the columns by name, not by position, then the casts
+    # a struct or a map, also in a list, and a list of lists have no type the driver writes into the target: jsonb, as
+    # the JSON reader gives a nested value
+    nested = ", ".join(f"to_json({quote(c)}) AS {quote(c)}" for c, t in first.items()
+                       if c not in columns and re.search(r"\b(STRUCT|MAP)\(|\]\[", t))
+
+    def order(present):
+        return ", ".join(quote(c) if c in present else f"NULL::{t} AS {quote(c)}" for c, t in first.items())
+
+    def rows(group, cast=True):  # the columns by name, not by position, then the casts
         if reader == "read_xlsx":  # its reader takes no list
-            part = functools.reduce(lambda a, b: a.union(b), (relation(p).project(order) for p in group))
+            part = functools.reduce(lambda a, b: a.union(b), (relation(p).project(order(shapes[p])) for p in group))
         else:
-            part = relation(group).project(order)
-        return part.project(f"* REPLACE ({casts})") if casts else part
+            present = {c for p in group for c in shapes[p]}
+            # else the read of the list would drop or null one file's other columns
+            by_name = {"union_by_name": True} if any(shapes[p].keys() != present for p in group) else {}
+            part = relation(group, **by_name).project(order(present))
+        part = part.project(f"* REPLACE ({nested})") if nested else part
+        return part.project(f"* REPLACE ({casts})") if casts and cast else part
+
+    def uncast(e):
+        """DuckDB's message for a value a cast does not take holds the value, which would end up in the status view
+        and the log: the reason names the column instead, found by trying each cast whatever the message says. Any
+        other error as it is."""
+        if "is not utf-8 encoded" in str(e):  # read after the sniffer's lines
+            return encoding(e)
+        for group in groups:
+            part = rows(group, cast=False)
+            for c, t in columns.items():
+                if part.filter(f"{text(c, t)} IS NOT NULL AND TRY_CAST({text(c, t)} AS {t}) IS NULL").limit(1) \
+                        .fetchall():
+                    return Exception(f"{table}: column {c} is not {t} in every row; change the value in the file, or "
+                                     "its type under columns")
+        if isinstance(e, OSError) and not str(e).startswith("Conversion Error"):  # not a cast's, such as a lost file
+            return e
+        return Exception(f"{table}: a value in the file does not convert to the type its column is read as")
     # a few files per read, one read after the other: DuckDB opened up to 600 files of one list at once, and a
     # union of more than 333 files is too deep for it
     groups = [paths[i:i + FILES_PER_READ] for i in range(0, len(paths), FILES_PER_READ)]
     result = rows(groups[0])
-    batches = result.to_arrow_reader()
+    try:
+        batches = result.to_arrow_reader()
+    except CONVERSION as e:
+        raise uncast(e) from None
     # DuckDB hands JSON over as text; as Arrow's json it becomes jsonb. Not by arrow_lossless_conversion: that
     # turns a hugeint into bytes and a boolean into a number
-    schema = pa.schema([f.with_type(pa.json_()) if str(t) == "JSON" else f
-                        for f, t in zip(batches.schema, result.types)])
+    fields = [f.with_type(pa.json_()) if str(t) == "JSON" else f for f, t in zip(batches.schema, result.types)]
+    # a Parquet file's JSON is its own type too
+    schema = pa.schema([f.with_metadata(OWN_TYPE) if reader == "read_parquet" and f.name not in columns else f
+                        for f in fields])
 
     def keep_open():  # the reader needs the connection until the last batch
         try:
             for group in itertools.chain([batches], (rows(g).to_arrow_reader() for g in groups[1:])):
                 for batch in group:
                     yield batch.cast(schema)
+        except CONVERSION as e:
+            raise uncast(e) from None
         finally:
             db.close()
     return pa.RecordBatchReader.from_batches(schema, keep_open())

@@ -1,6 +1,6 @@
 [project]
 name = "rowvioli"
-version = "0.4.1"
+version = "0.5.0"
 description = "Mirrors tables from source systems into PostgreSQL, as fresh as each table's maximum age"
 readme = "README.md"
 license = "MIT"
@@ -19,7 +19,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 requires-python = ">=3.11"
-dependencies = ["pyarrow>=19", "adbc-driver-postgresql>=1.13", "pynacl>=1.5"]
+dependencies = ["pyarrow>=19", "adbc-driver-postgresql>=1.13,<2", "adbc-driver-manager>=1.13,<2", "pynacl>=1.5"]
 
 [project.urls]
 Homepage = "https://github.com/romanhaendler/rowvioli"
@@ -28,7 +28,7 @@ Issues = "https://github.com/romanhaendler/rowvioli/issues"
 Changelog = "https://github.com/romanhaendler/rowvioli/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-file = ["duckdb>=1.5"]
+file = ["duckdb>=2"]
 odbc = ["arrow-odbc>=9.3.0"]
 rest = ["httpx>=0.28"]
 
@@ -47,8 +47,9 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# four processes: measured fastest-safe on 8 shared cores; -n 0 runs serially
-addopts = "-n 4"
+# four processes: measured fastest-safe on 8 shared cores; -n 0 runs serially. -rs names every skipped test with its
+# reason at the end (the pooler's tests without its image, the ODBC tests outside their container)
+addopts = "-n 4 -rs"
 
 [project.entry-points."rowvioli.connectors"]
 postgres = "rowvioli.connectors.postgres"

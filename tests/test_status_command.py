@@ -91,7 +91,7 @@ def test_progress_shows_to_a_role_with_pg_read_all_stats_and_is_empty_without(rv
         rv.target(f"grant select on _rowvioli.status to {role}")
 
     def written(role):
-        url = rv.target_url.replace("postgres:x@", f"{role}:v@")
+        url = rv.target_url.replace("postgres:harness-pw-7@", f"{role}:v@")
         with psycopg.connect(url) as c:
             return c.execute("select status, rows_written from _rowvioli.status").fetchone()
     # a run's session as the worker's role: the table lock, then a COPY into staging that is still going on
@@ -110,7 +110,7 @@ def test_a_role_that_may_only_read_the_status_view_can_run_status(rv, add):
     rv.target("create role viewer login password 'v'")
     rv.target("grant usage on schema _rowvioli to viewer")
     rv.target("grant select on _rowvioli.status to viewer")
-    url = rv.target_url.replace("postgres:x@", "viewer:v@")
+    url = rv.target_url.replace("postgres:harness-pw-7@", "viewer:v@")
     r = rv.run("status", env={"ROWVIOLI_TARGET_URL": url})
     assert r.returncode == 0 and "erp" in r.stdout, r.stderr
     rv.target("drop schema _rowvioli cascade")

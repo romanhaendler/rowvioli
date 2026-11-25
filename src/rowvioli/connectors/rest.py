@@ -10,7 +10,11 @@ from urllib.parse import urlsplit
 import httpx
 import pyarrow as pa
 
-from ..contract import known_options
+from ..contract import known_options, version
+
+# the reader's version, so that columns another one delivers are recorded as by = reader (decision 54)
+driver_version = version("httpx")
+catalog = "definition"  # an API has no catalog: the columns are those named under `columns` (decision 54)
 
 TYPES = {"text": pa.string(), "int8": pa.int64(), "float8": pa.float64(), "bool": pa.bool_(), "date": pa.date32(),
          "timestamp": pa.timestamp("us"), "timestamptz": pa.timestamp("us", tz="UTC")}
@@ -73,10 +77,7 @@ def read(connection, table, options):
         if rows == previous:  # an API that ignores the page would otherwise be asked until max_seconds
             raise Exception(f"{table}: {path} answered page {page} like page {page - 1}, so it does not page")
         previous = rows
-        for name in columns:
-            if rows and not any(name in r for r in rows):
-                raise Exception(f"{table}: column {name} is absent from every row of the answer")
-        arrays = []
+        arrays = []  # a column absent from every row is empty, as an API that leaves out null fields means it
         for name, type in columns.items():
             try:
                 values = [r.get(name) for r in rows]
@@ -88,7 +89,8 @@ def read(connection, table, options):
                 arrays.append(pa.array([None if v is None else parse(v) for v in values] if parse else values,
                                        TYPES[type]))
             except Exception:  # the value stays out of the reason: it would end up in the status view and the log
-                raise Exception(f"{table}: column {name} is not {type}") from None
+                raise Exception(f"{table}: column {name} is not {type} in every row; change the value at the source, "
+                                "or its type under columns") from None
         yield pa.RecordBatch.from_arrays(arrays, schema=schema)
         if not paged:
             return

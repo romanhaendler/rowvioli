@@ -52,25 +52,22 @@ Unchanged from the first round:
 - **Removing secrets from error texts is best effort.** The program removes every value of a connection as written, stripped of surrounding whitespace and as Python quotes it, and a password in a URL or ODBC string as written and decoded; from the target's errors only the password of its address. A driver can still reformat a connection string or quote part of a value in another way. A secret of one or two characters may also be removed from inside other words of a reason, which makes it unreadable and hides nothing else; a rule for it is not worth its cost. Every value of a connection is removed, also a harmless one, except the `path` of a `file` connection (decision 47).
 - **The private key file has to reach every worker** once, by whatever the organisation uses for that.
 - **No common point in time in the source.** Two tables are not read at the same moment.
-- **A table with a key cannot have a column `_op`**, nor `_run`, `_loaded_at`, `_valid_from` or `_valid_to` with a change log. The diff, the change log and the history view use these names.
+- **A table with a key cannot have a column `_op`**, nor `_run`, `_loaded_at`, `_valid_from` or `_valid_to` with a change log. The diff, the change log and the history view use these names, and `renamed` cannot give them.
 - **Dropping a change log needs `CASCADE`**, or dropping the history view first.
 - **A clock set back between two runs of one table** by more than the time between them would put their rows in the wrong order in the history.
 - **A table that left the definition and the table that took over its name hold different locks** (a lock is the pair of source and table). A run of the first that is still loading while the second runs can meet it on one mirror: a primary-key failure, or a doubled row in the log, at worst.
 - **A change log left under a name the definition no longer has** keeps a history view that nobody updates.
 - **A history view left behind under a name a new change log takes** is replaced by the next run, or the run fails if its columns do not fit.
 - **An empty page in the middle of REST paging ends the load.** An empty page is how paging ends, so an API that answers one in the middle delivers a table that stops there. The limit on deletions catches a large cut, a small one passes.
-- **A REST column that is absent from every row of one page fails the run.** An API that leaves out null fields can therefore fail on a page where an optional column is null in every row.
-- **`timestamptz 'infinity'` from a Postgres source fails the run** with `Error occurred writing COPY data:` and nothing after it. The driver gives no cause.
+- **A `timestamp` or `timestamptz` of `infinity` from a Postgres source fails the run**, with a reason that names the column: the driver reads it but cannot write it into the target. A view of the source that casts it is the way out ([connectors](connectors.md)).
 - **A JSON number with a fraction passes through a 64-bit float** in the `file` connector: beyond 15 to 17 significant digits it is rounded. Whole numbers of any size and exponents arrive exactly.
 - **An unterminated quote in a CSV loads with the quote kept**: `1,"Anna` followed by more lines arrives as a row whose value is `"Anna`, without an error. Forcing `quote = '"'` would fail such a file, and also one with a literal `"` in an unquoted field, which loads right today. Whoever sets `quote = '"'` gets the failure.
 - **`columns` casts follow DuckDB**, for CSV and JSON: `1.7` cast to `integer` becomes `2`.
 - **A JSON file holds objects.** A file of other values (`[1, 2]`, or `[]`) fails with DuckDB's words (`json_read expected records, but got non-record JSON instead.`); a file of no bytes says that it is empty. A file that is one object is one row.
-- **The files of a pattern must all have the column**: a JSON key that one file lacks fails the run, while inside one file it is null. `*` does not match a name that starts with a dot, and `**` is one directory level, like `*`.
-- **DuckDB's messages can name a value of the file** (a record with an unknown key, a value that does not cast).
+- **`*` does not match a name that starts with a dot**, and `**` is one directory level, like `*`.
 - **Each file of a pattern is checked before it is read**, about 3 ms per file: 10,000 files take half a minute before the first row. A pattern reads 50 files at a time; open files under Linux were not measured.
 - **A JSON file is read twice**, once for its columns and once for its rows; so is every file of a pattern of JSON files.
 - **A REST field whose own name contains a dot cannot be named in `rows`**, and `apply` does not check `rows`: a value that is not text fails at the run.
-- **The pooler check has holes.** A control connection behind a pooler in transaction mode is caught by comparing `pg_backend_pid()` in two transactions. An idle pooler hands out the same server connection and passes it; a busy one was caught in 84 of 100 checks (PgBouncer 1.26.1, eight busy neighbours; [measurements](measurements.md#14-the-pooler-check-behind-pgbouncer-in-transaction-mode)). Session mode is the requirement, the check a net.
 - **Tables without a key** are replaced as a whole on every run, have no change log, and bloat until autovacuum has run.
 - **Advisory locks share one number space per database.** Another application using two-key advisory locks in the same database could collide.
 - **An idle worker keeps one connection to the target open**, with which it asks whether something is claimable.
@@ -80,13 +77,13 @@ Unchanged from the first round:
 - **A full disk on the target can read as `connection to the target lost`**. When the write-ahead log cannot grow, Postgres stops with a PANIC and restarts: the run has the message but can no longer store it. Elsewhere a full disk fails the run with Postgres's message, `could not extend file ...: No space left on device`.
 - **A claim finds a dead run by walking `runs` back from the newest row** to the table's own newest, under the lock all claims share: 1.3 ms when 24,000 runs came since, 11 ms at 200,000 (the whole table scanned took 8 ms). An index on the table and the run would bound it; it needs a migration of the schema, which is not built.
 - **The ADBC driver cannot run `SHOW`** and other statements that return rows but cannot be wrapped into `COPY`.
-- **The driver decides the types in the target** (decisions 28 and 49). `varchar(n)` arrives as `text`, so a change from `text` to `varchar(n)` passes the schema check and an existing `varchar(n)` target column fails it. A `numeric(p,s)` beyond 38 digits arrives as `numeric` in a new mirror. An unconstrained `numeric` beyond 38 digits, or `NaN`, fails the run. Through ODBC, psqlODBC describes an unconstrained `numeric` as `numeric(28,6)`, and the value arrives cut to six decimals.
+- **The driver decides the types in the target** (decisions 28 and 49). `varchar(n)` arrives as `text`, so a change from `text` to `varchar(n)` passes unseen, and an existing `varchar(n)` target column is of another family than `text`: with a change log it goes and comes back, without one it stops. A `numeric(p,s)` beyond 38 digits arrives as `numeric` in a new mirror. An unconstrained `numeric` beyond 38 digits, `NaN` or `Infinity` fails the run, and the reason says which. A column widened to plain `numeric` reads without trailing zeros (`3.00` reads `3`). Through ODBC, psqlODBC describes an unconstrained `numeric` as `numeric(28,6)`, and the value arrives cut to six decimals.
 
 ## Not built
 
 - The web UI.
 - The command `request`, reading only rows from a timestamp on, patterns for table names, and workers that serve only some sources.
-- Migrating the schema from one version to the next.
+- Migrating the schema from a version older than 3. `init` has one step, version 3 to 4 (decision 54); a target older than 3 is refused.
 
 The prototype's code is on branch `prototype-impl`.
 
