@@ -159,6 +159,29 @@ def test_A5_without_a_change_log_a_gone_column_stops_the_run_and_says_how_to_dro
     assert rows(erp.target, MIRROR) == before
 
 
+@pytest.mark.parametrize("gone", [False, True])  # with a column that goes, whose rows the update in place keeps
+def test_a_row_a_person_deletes_from_the_mirror_while_the_run_compares_is_back_with_its_update(erp, gone):
+    ok(erp)  # ticket 18: the update in place changed no row, the change log said U, and the mirror lacked the row
+    erp.source("update customers set city = 'Köln' where customer_no = 1")
+    if gone:
+        erp.source("alter table customers drop column name")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    with psycopg.connect(erp.target_url) as person:  # lets the run compare and holds it before it writes
+        person.execute("lock table raw_erp.customers in share row exclusive mode")
+        worker = erp.start("run")
+        until(lambda: erp.target("select 1 from pg_locks where not granted and mode = 'RowExclusiveLock' and relation "
+                                 "= 'raw_erp.customers'::regclass") if not gone else  # its own lock it tries again
+              erp.target("select 1 from pg_stat_activity where datname = current_database() "
+                         "and (query like 'LOCK TABLE%' or query = 'ROLLBACK')"))
+        # customer 2 differs only in the column that went, the change log's U alone
+        person.execute(f"delete from raw_erp.customers where customer_no in (1{', 2' * gone})")
+    assert worker.wait(timeout=30) == 0
+    assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
+    log_replays(erp)
+    assert erp.target("select inserted, updated, deleted from _rowvioli.runs order by run desc limit 1") == [
+        (0, 1 + gone, 0)]
+
+
 def test_a_column_goes_in_the_run_that_changes_deletes_and_inserts_rows(erp):  # story 4
     ok(erp)
     erp.source("alter table customers drop column city")

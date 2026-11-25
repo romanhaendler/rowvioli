@@ -753,9 +753,11 @@ def publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, 
         # cascaded the delete to its rows (ticket 17)
         values = ", ".join(f"{quote(c)} = d.{quote(c)}" for c, _ in staged)
         updated = rowcount(conn, f"UPDATE ONLY {t['mirror']} m SET {values} FROM _diff d WHERE d._op = 'U' AND {on}{kept}")
-        sql(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _diff WHERE _op = 'I'")
+        # with the row of a U a person deleted while the run compared, which the change log keeps (ticket 18)
+        inserted = rowcount(conn, f"""INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _diff d WHERE _op = 'I'
+                                       OR _op = 'U' AND NOT EXISTS (SELECT FROM ONLY {t['mirror']} m WHERE {on})""")
         # the counts are the mirror's: a U only the change log gets, for a column that went, updates no row of it
-        counts = {**counts, "updated": updated}
+        counts = {**counts, "updated": updated + inserted - counts["inserted"]}
     else:  # without a key, or under another key (decision 54): replaced as a whole
         deleted = rowcount(conn, f"DELETE FROM ONLY {t['mirror']}")
         counts = {"inserted": rowcount(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _stage"),
