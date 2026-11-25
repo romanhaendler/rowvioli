@@ -178,6 +178,43 @@ def test_a_target_of_the_released_0_4_1_with_every_stuck_state_is_upgraded_by_in
         log_replays(rv, f"raw_erp.{t}")
 
 
+@pytest.mark.parametrize("source", ["keeps", "drops"])
+def test_a_column_a_person_dropped_from_a_mirror_of_0_4_1_is_closed_in_its_change_log_by_the_first_run_after_init(
+        rv, released, source):
+    """Ticket 18, review: 0.4.1 left the last value of a column dropped by hand current in the change log, where the
+    source dropped it too, and where it kept it and 0.4.1 added it again, for a row whose value had become null."""
+    for args in (["init"], ["key", "new"]):
+        assert old(rv, released, *args).returncode == 0
+    rv.source(SOURCE.strip().split(";\n")[0])
+    rv.source(SOURCE.strip().split(";\n")[1])
+    definition(rv, {"customers": TABLES["customers"]})
+    assert old(rv, released, "apply", "sources").returncode == 0
+    assert old(rv, released, "run").returncode == 0
+    [(moment,)] = rv.target("select loaded_at from _rowvioli.tables")
+    history = at(rv, moment)
+    if source == "drops":  # 0.4.1 stops, and its way out is to drop the column from the mirror
+        rv.source("alter table customers drop column city")
+    rv.target("alter table raw_erp.customers drop column city")
+    rv.source("update customers set city = null where id = 1" if source == "keeps" else "select")
+    rv.target("update _rowvioli.tables set requested_at = now()")
+    assert old(rv, released, "run").returncode == 0
+    assert rv.run("init").returncode == 0
+    # a consumer's view on the history view, which a change of columns would stop at: closing changes none
+    rv.target("create view public.reader as select * from raw_erp.customers__history")
+    rv.target("update _rowvioli.tables set requested_at = now()")
+    assert rv.run("run").returncode == 0, reasons(rv)
+    assert rows(rv.target, "select * from raw_erp.customers") == rows(rv.source, "select * from customers")
+    log_replays(rv)
+    assert at(rv, moment) == history
+    city = "m.city" if source == "keeps" else "null"
+    assert rv.target("select count(*) from raw_erp.customers__history h join raw_erp.customers m using (id) "
+                     f"where _valid_to is null and h.city is distinct from {city}") == [(0,)]
+    rv.target("update _rowvioli.tables set requested_at = now()")
+    assert rv.run("run").returncode == 0
+    assert rv.target("select count(*) from raw_erp.customers__log where _run = (select max(run) from _rowvioli.runs)") \
+        == [(0,)]
+
+
 # the grants 0.4.1's docs/operation.md "The target" gives a worker's role
 OLD_WORKER = """GRANT USAGE ON SCHEMA _rowvioli TO {0};
 GRANT SELECT ON _rowvioli.sources, _rowvioli.tables, _rowvioli.meta, _rowvioli.status TO {0};

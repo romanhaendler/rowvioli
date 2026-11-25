@@ -251,13 +251,14 @@ def check(conn, t, staged, mirror, log_columns, renamed):
             plan["gone"].append(name)
     # a column the last run recorded in the mirror that a person dropped from it: its last values are closed in the
     # change log, as for a column that goes, and what the source delivers comes as a column that comes back (tickets
-    # 17, M3, and 18). Without a record (a table last loaded before version 4) every column the change log has and the
-    # mirror lacks, in this one run: write_log closes only a value still current
+    # 17, M3, and 18). Without a record (a table last loaded before version 4) every column of the change log, in this
+    # one run: write_log closes only a value that differs from the mirror's, which 0.4.1 left where a person dropped a
+    # column it added again and a row's value had become null
     if t["key"] and t["log"] and log_columns:
         recorded = sql(conn, 'SELECT "column", mirror FROM _rowvioli.columns WHERE id = $1 AND target_schema = $2 AND '
                              "target_table = $3", [t["id"], t["schema"], t["table"]])
-        unknown = [(n, True) for n in logged if n not in ("_run", "_op", "_loaded_at")]
-        plan["closed"] = [n for n, in_mirror in recorded or unknown if in_mirror and n in logged and n not in had]
+        plan["closed"] = [n for n, in_mirror in recorded if in_mirror and n in logged and n not in had] if recorded \
+            else [n for n in logged if n not in ("_run", "_op", "_loaded_at", *(renamed.get(k, k) for k in key))]
     said = comments(conn, t)  # decision 54: a retired column is known by its comment, never by its name
     retired = {n: was for n, text in said.items() if (was := retirement(text))}
     for name, type in staged:
@@ -737,7 +738,7 @@ def publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, 
             sql(conn, f"CREATE SCHEMA IF NOT EXISTS {quote(t['schema'])}")
         sql(conn, "SELECT pg_advisory_unlock(hashtext($1))", [t["schema"]])
     changes = {}
-    if any(plan.values()):  # anything but added columns
+    if any(v for k, v in plan.items() if k != "closed"):  # anything but added columns and closed ones, rows alone
         lock(conn, t)
         changes = carry_out(conn, t, plan)
     elif not new and dict(staged).keys() - {moved.get(n, n) for n, _ in mirror}:
