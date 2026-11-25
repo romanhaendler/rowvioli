@@ -305,8 +305,11 @@ def check(conn, t, staged, mirror, log_columns, renamed):
             # a person changed the primary key by hand to the definition's new key before a run did: the change log is
             # written under the recorded one, so the run changes the key as the definition would (ticket 18)
             plan["key"] = {"was": was, "by": "definition", "log": True, "primary": primary_key}
-        # the diff joins the mirror by the definition's key, unless it replaces it: a key column it lacks went by hand
-        if plan["key"].get("by") != "definition" and (lost := [k for k in key if renamed.get(k, k) not in had]):
+        # the diff joins the mirror by the definition's key, or where it replaces it writes its old rows' D by the old
+        # one into a change log: a key column it lacks went by hand
+        by = plan["key"].get("by") == "definition"
+        if lost := [k for k in (plan["key"]["was"] if by and plan["key"]["log"] else [] if by else key)
+                    if renamed.get(k, k) not in had]:
             raise Exception(f"key column {' and '.join(lost)} is missing in the mirror {t['name']}, dropped by hand, so "
                             "its rows cannot be told apart: give the table another target_table, which begins a new "
                             "mirror")
