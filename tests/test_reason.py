@@ -118,3 +118,15 @@ def test_an_odbc_drivers_message_is_shown_by_its_sqlstate_alone(state, message, 
         assert said == (f"a{' function' if state == 'P0001' else ' statement'} raised an error"
                         f"{f' (SQLSTATE {state})' if state.isalnum() else ''} in the source, reading dbo.orders; its "
                         "message may hold a row's values, so it is left out here: the source's server log has it")
+
+
+@pytest.mark.parametrize("message", [  # as the driver gives them, without a SQLSTATE (ticket 15, R1: tried by hand)
+    "IO: Failed to prepare query: FATAL:  terminating connection due to administrator command\nserver closed the "
+    "connection unexpectedly\n\tThis probably means the server terminated abnormally",
+    "IO: Failed to describe prepared statement: FATAL:  terminating connection due to administrator command",
+    "IO: Failed to prepare query: server closed the connection unexpectedly",
+    "IO: Failed to prepare query: no connection to the server\n\nQuery was: select 2"])
+def test_a_connection_the_target_ended_is_known_without_a_sqlstate(message):
+    from rowvioli.load import lost
+    assert lost(RuntimeError(message))
+    assert not lost(RuntimeError("IO: Failed to prepare query: ERROR:  relation \"x\" does not exist"))

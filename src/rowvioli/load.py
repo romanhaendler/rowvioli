@@ -1373,8 +1373,11 @@ def scrub(values, text):
 
 
 def lost(e):
-    """Whether Postgres ended the connection (a restart, pg_terminate_backend), which a reason says in our words."""
-    return getattr(e, "sqlstate", None) in ("57P01", "57P02")
+    """Whether Postgres ended the connection (a restart, pg_terminate_backend), which a reason says in our words. The
+    driver gives no SQLSTATE where the server ended it between two statements, only libpq's words."""
+    return getattr(e, "sqlstate", None) in ("57P01", "57P02") or not getattr(e, "sqlstate", None) and bool(re.search(
+        r"terminating connection due to administrator command|server closed the connection unexpectedly"
+        r"|no connection to the server", str(e)))
 
 
 def rowcount(conn, query):
