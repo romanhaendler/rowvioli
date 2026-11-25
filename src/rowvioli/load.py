@@ -330,7 +330,7 @@ def check(conn, t, staged, mirror, log_columns, renamed):
     # and one that names another key last than the one the change log is written under, before this run's renames
     last = [renamed.get(c, c) for c in (plan["key"]["was"] if plan["key"].get("by") == "definition" else key)]
     if log_columns and last and (keys := stretches(conn, t)) and set(keys[-1]["key"]) != set(last):
-        text = noted(conn, t) or json.dumps([{"key": last}])
+        text = (note := noted(conn, t)) or json.dumps([{"key": last}])
         way = f"put it back, COMMENT ON COLUMN {t['log_table']}._op IS {literal(text)}"
         # without a record under this target name (a mirror renamed by hand) a primary key changed by hand to the
         # definition's is the other cause, and the comment the program wrote is no way out (ticket 18)
@@ -340,7 +340,8 @@ def check(conn, t, staged, mirror, log_columns, renamed):
             back = (f"ALTER TABLE {t['mirror']} DROP CONSTRAINT {quote(name)}, ADD PRIMARY KEY "
                     f"({', '.join(quote(c) for c in keys[-1]['key'])})")
             way = (f"put the old primary key back, and the next run changes it as the definition says, {back}"
-                   if text == comments(conn, t)["_op"] else
+                   # without a note the text is built from the definition's key, never written under (ticket 19)
+                   if not note or text == comments(conn, t)["_op"] else
                    f"put back what was changed, the comment, COMMENT ON COLUMN {t['log_table']}._op IS "
                    f"{literal(text)}, or the old primary key, {back}")
         raise Exception(f"the comment on column _op of the change log {t['name']}__log, which says the keys it was "

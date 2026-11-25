@@ -40,4 +40,29 @@ in the session's scratch directory under `rv3/` (`test_c4_keys.py` cases `new-0.
 
 Built on `sc-19` from `schema-changes` 4eecd7e (Opus, 2026-11-25), one commit per item, each test seen red first.
 
+- 1: where no row of `_rowvioli.columns` has the table's id (before the record), with a change log and the primary
+  key the definition's, `check` asks `before_the_record`: no scan where the definition is that of the last successful
+  run, else one scan under the one key (in `long(...)`). Where the change log does not fit it: `the change log <t>__log
+  was not written under (<key>), the key of the definition and of the mirror's primary key, so a person changed the
+  primary key by hand before a run changed it: say the key it was written under, the key the table had when its
+  change log was written, and the next run changes the key as the definition says: COMMENT ON COLUMN ..._op IS
+  '[{"key": ["<the key column>"]}]'`. Before the record a readable comment on `_op` is what a person said (0.4.1 wrote
+  none), so where its last key is not the definition's the plan is the change of key by the definition from it.
+  Tested on a target of the released 0.4.1 (`tests/test_upgrade.py`), way out followed: mirror = source, primary key
+  (k2), replay = mirror, history right at every earlier moment, a quiet run writes nothing. An ordinary 0.4.1 table
+  (the existing upgrade tests) neither stops nor scans more than once: from that run on it has a record.
+- 2: where the change log fits neither key, `the primary key of <t> is (k3), the definition's key is (k2), and the
+  change log <t>__log was written under neither, so a person changed the primary key by hand before a run changed the
+  key: ` and item 1's way out; where it fits both, the reason is as before. Followed in the same test: the run changes
+  the key from the comment's (k) to (k2), and (k3) loses its primary key and NOT NULL as ticket 18 has it. Ticket
+  14's test of a log that fits neither key (`tests/test_init.py`) asserted the two comments, each false there too;
+  it now asserts this reason.
+- 3: without a note (`noted()` None) the stop gives the old primary key alone; ticket 18's test now asserts it for
+  both cases, with and without an earlier change of key, and follows it.
+- No reason shows a value of a row.
+- Not tested: a 0.4.1 mirror also renamed by hand (the same path, no record anywhere), and a composite or renamed key
+  in items 1 and 2 (the comment's placeholder names one
+  column; `renamed` is applied as for the other comments). The reviewer's scripts are not run as they are: their
+  scenarios are the tests above, and `test_c4_keys.py` follows the old two comments.
+
 **Status:** resolved
