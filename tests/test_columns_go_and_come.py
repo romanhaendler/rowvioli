@@ -82,6 +82,46 @@ def test_a_column_a_person_dropped_from_the_mirror_before_the_run_that_follows_t
     assert erp.target("select count(*) from raw_erp.customers__log where _loaded_at = %s", [third]) == [(0,)]
 
 
+@pytest.mark.parametrize("by_hand, source", [
+    ("retyped", "update customers set city = null where customer_no = 1"),  # the way out of G4 (ticket 18)
+    ("retyped", "update customers set city = 'Ulm' where customer_no = 1"),
+    ("retyped", None),
+    ("retyped", "alter table customers alter city type int using nullif(length(city), 4)"),
+    ("dropped", None),
+    ("dropped", "update customers set city = null where customer_no = 1"),
+    ("dropped before the record", "update customers set city = null where customer_no = 1"),
+    ("dropped before the record", "alter table customers alter city type int using nullif(length(city), 4)")])
+def test_a_column_a_person_dropped_from_the_mirror_that_the_source_keeps_is_closed_in_the_log_and_comes_back(
+        erp, by_hand, source):
+    ok(erp)  # ticket 18: the source's values came against null, and a null left the change log's last value current
+    moments = [(erp.target(LOADED_AT)[0][0], rows(erp.target, MIRROR))]
+    if by_hand == "retyped":
+        erp.target("alter table raw_erp.customers alter city type int using length(city)")
+        erp.target("update _rowvioli.tables set requested_at = now()")
+        drop = re.search(r"(ALTER TABLE .*)$", failed(erp))[1]
+    else:
+        drop = 'ALTER TABLE "raw_erp"."customers" DROP COLUMN "city"'
+    if source:
+        erp.source(source)
+    erp.target(drop)
+    if by_hand == "dropped before the record":  # a table last loaded by a program that kept none (before version 4)
+        erp.target("delete from _rowvioli.columns where target_table = 'customers'")
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
+    log_replays(erp)
+    retired = [c for c in columns(erp, "raw_erp.customers__log") if c.startswith("city__")]
+    for i, (moment, mirror) in enumerate(moments):  # the history at every moment is the mirror then
+        city = retired[0] if retired and not i else "city"
+        assert rows(lambda q: erp.target(q, [moment, moment]), f"select customer_no, name, {city} from "
+                    "raw_erp.customers__history where _valid_from <= %s and (_valid_to > %s or _valid_to is null)") \
+            == mirror, i
+    for c in retired:  # a retired column has no current value
+        assert erp.target(f'select count(*) from raw_erp.customers__history where _valid_to is null and "{c}" is not '
+                          "null") == [(0,)]
+    third = again(erp)  # once
+    assert erp.target("select count(*) from raw_erp.customers__log where _loaded_at = %s", [third]) == [(0,)]
+
+
 @pytest.mark.parametrize("table", ['{ key = ["customer_no"], log = false }', "{}", "begins"])
 def test_A5_without_a_change_log_a_gone_column_stops_the_run_and_says_how_to_drop_it(erp, table):
     if table == "begins":  # the first run onto a table it did not create, whose change log begins (ticket 17, M5)
