@@ -1352,6 +1352,12 @@ def reason_line(values, e, step, source=None, name=None):
                       r"\g<0>: the source deleted a row that table \1 refers to, or changed the value it refers to; "
                       "delete the rows there that refer to it, or give the constraint ON DELETE CASCADE or ON DELETE "
                       "SET NULL (ON UPDATE CASCADE for a changed value)", line)
+        # and the update checks a unique index per row, where values swapped between rows passed a delete and insert
+        line = re.sub(r'^duplicate key value violates unique constraint "[^"]*"$', r"\g<0>: Postgres checks a unique "
+                      "index on the mirror row by row, so it refuses a value that moves from one row to another within "
+                      "a run, as well as one the source holds twice; drop it, or put in its place a constraint that "
+                      "Postgres checks at the end of the statement: ALTER TABLE <the mirror> ADD UNIQUE (<its "
+                      "columns>) DEFERRABLE", line)
     if step != "reading the source":  # a source may have a table of that name
         line = re.sub(r"must be owner of table \S+$", r"\g<0>: the worker's role must own it, or be a member of the "
                       r"role that owns it, to change its columns with the mirror's (ALTER TABLE <it> OWNER TO <the "

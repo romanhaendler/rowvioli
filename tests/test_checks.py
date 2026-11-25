@@ -481,7 +481,7 @@ def test_postgres_own_constraint_messages_keep_their_names(erp, constraint, chan
     erp.target(f"alter table raw_erp.customers {constraint}")
     erp.source(f"update customers set {change} where customer_no = 1")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    assert failed(erp).endswith(says)
+    assert says in failed(erp)  # a unique constraint's with the way out (review of ticket 17)
 
 
 ORDERS = "create schema reporting; create table reporting.orders (id int, customer_no int references raw_erp.customers{})"
@@ -530,6 +530,25 @@ def test_a_value_the_source_changed_that_a_consumers_foreign_key_refers_to_is_no
     erp.target("update _rowvioli.tables set requested_at = now()")
     ok(erp)
     assert erp.target("select city from reporting.visits") == [("Köln",)]
+
+
+def test_values_two_rows_swap_stop_on_a_consumers_unique_index_with_the_way_out_and_no_value(erp):
+    ok(erp)  # review of ticket 17, M1: an update in place meets a unique index row by row, a delete and insert did not
+    erp.target("create unique index city_u on raw_erp.customers (city)")
+    erp.source("update customers set city = case customer_no when 1 then 'Essen' else 'Bonn' end "
+               "where customer_no in (1, 2)")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == (
+        'duplicate key value violates unique constraint "city_u": Postgres checks a unique index on the mirror row by '
+        "row, so it refuses a value that moves from one row to another within a run, as well as one the source holds "
+        "twice; drop it, or put in its place a constraint that Postgres checks at the end of the statement: ALTER TABLE "
+        "<the mirror> ADD UNIQUE (<its columns>) DEFERRABLE")
+    erp.target("drop index raw_erp.city_u; alter table raw_erp.customers add unique (city) deferrable")  # the way out
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
+    from test_columns_go_and_come import log_replays  # here: that module imports this one
+    log_replays(erp)
 
 
 def test_a_source_table_created_anew_with_other_columns_says_what_it_may_be_and_the_setting_for_one_run(erp):  # H2
