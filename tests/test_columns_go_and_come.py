@@ -577,6 +577,25 @@ def test_a_retired_name_longer_than_postgres_takes_stops_and_says_what_to_rename
     log_replays(erp)
 
 
+@pytest.mark.parametrize("size, stops", [(63, False), (64, True)])
+def test_a_retired_name_is_measured_in_bytes_63_pass_and_64_stop(erp, size, stops):
+    ok(erp)
+    retired = erp.target("select max(run) + 3 from _rowvioli.runs")[0][0]  # the run after: add, drop, add again
+    room = size - len(f"__{retired}")  # in bytes: é takes two, so a count of characters is another
+    long = "é" * (room // 2) + "y" * (room % 2)
+    erp.source(f'alter table customers add column "{long}" text')
+    again(erp)
+    erp.source(f'alter table customers drop column "{long}"')
+    again(erp)
+    erp.source(f'alter table customers add column "{long}" integer')
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    if stops:
+        assert "names longer than 63 bytes" in failed(erp)
+    else:
+        again(erp)
+        assert f"{long}__{retired}" in columns(erp, "raw_erp.customers__log")
+
+
 def test_retired_names_longer_than_postgres_takes_are_named_together_and_one_round_of_the_way_out_leads_out(erp):
     one, two = "y" * 62, "z" * 62  # P18 followed one column at a time into a second and a third stop
     erp.source(f"alter table customers add column {one} text, add column {two} text")
