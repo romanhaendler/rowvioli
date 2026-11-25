@@ -167,18 +167,20 @@ def test_a_type_of_any_family_widened_by_hand_in_the_mirror_is_followed_in_the_c
     log_replays(erp, "raw_erp.amounts")
 
 
-def test_G4_a_type_changed_by_hand_to_another_family_stops_and_says_the_way_out_which_works(erp):  # story 47
-    amounts(erp, "integer", "(1, 10), (2, null)")
+@pytest.mark.parametrize("source, values", [("integer", [(1, 10), (2, None)]), ("text", [(1, "10"), (2, None)])])
+def test_G4_a_type_changed_by_hand_to_another_family_stops_and_says_the_way_out_which_works(erp, source, values):
+    amounts(erp, "integer", "(1, 10), (2, null)")  # story 47; the source changing too is ticket 17, M4
     erp.target("alter table raw_erp.amounts alter a type text")
+    erp.source(f"alter table amounts alter a type {source}")
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert failed(erp) == (
-        "column a of the mirror has the type text, of another family than the integer the source delivers, and a run "
-        "does not change it back; drop it from the mirror and the next run brings it again: "
+        "column a of the mirror has the type text, of another family than the integer it has in the change log, and a "
+        "run does not change it back; drop it from the mirror and the next run brings it again: "
         'ALTER TABLE "raw_erp"."amounts" DROP COLUMN "a"')
     erp.target('ALTER TABLE "raw_erp"."amounts" DROP COLUMN "a"')
     again(erp)
-    assert types(erp, "a") == ["integer", "integer"]
-    assert erp.target("select id, a from raw_erp.amounts order by id") == [(1, 10), (2, None)]
+    assert types(erp, "a") == [source, source]
+    assert erp.target("select id, a from raw_erp.amounts order by id") == values
     log_replays(erp, "raw_erp.amounts")
 
 

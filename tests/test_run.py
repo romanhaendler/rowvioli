@@ -236,8 +236,8 @@ def test_a_mirror_with_a_json_column_from_before_fails_naming_the_column_and_sta
     erp.target("alter table raw_erp.docs alter j type json")  # as an earlier build left it
     assert run(erp, "erp")[0] == 1
     assert erp.target("select reason from _rowvioli.status") == [
-        ("column j of the mirror has the type json, of another family than the jsonb the source delivers, and a run "
-         'does not change it back; drop it from the mirror and the next run brings it again: ALTER TABLE "raw_erp".'
+        ("column j of the mirror has the type json, of another family than the jsonb it has in the change log, and a "
+         'run does not change it back; drop it from the mirror and the next run brings it again: ALTER TABLE "raw_erp".'
          '"docs" DROP COLUMN "j"',)]
     assert erp.target("select j::text from raw_erp.docs") == [('{"a": 1}',)]
     erp.target('ALTER TABLE "raw_erp"."docs" DROP COLUMN "j"')  # the way out

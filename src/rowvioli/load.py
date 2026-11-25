@@ -221,6 +221,12 @@ def check(conn, t, staged, mirror, log_columns, renamed):
                               "to be kept: CREATE TABLE <a table of yours> AS SELECT "
                               f"{', '.join(quote(c) for c in [*t['key'], name])} FROM {t['mirror']}; "
                               f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
+        # the mirror's type changed by hand (cases G4), whatever the source delivers (ticket 17, M4)
+        if name in logged and family(logged[name]) != family(type):
+            raise Exception(f"column {name} of the mirror has the type {type}, of another family than the "
+                            f"{logged[name]} it has in the change log, and a run does not change it back; drop it from "
+                            f"the mirror and the next run brings it again: "
+                            f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
         if name not in types:
             if not (t["key"] and t["log"] and log_columns):
                 raise Exception(f"column {name} is missing in the source; without a change log its values are nowhere "
@@ -243,11 +249,6 @@ def check(conn, t, staged, mirror, log_columns, renamed):
             if not (t["key"] and t["log"] and log_columns):
                 raise Exception(f"{changed}; without a change log its values are nowhere else, so a person drops it "
                                 f"and the next run adds it anew: ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
-            if family(logged[name]) != family(type):  # the mirror's type changed by hand (cases G4)
-                raise Exception(f"column {name} of the mirror has the type {type}, of another family than the "
-                                f"{types[name]} the source delivers, and a run does not change it back; drop it from "
-                                f"the mirror and the next run brings it again: "
-                                f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(name)}")
             plan["gone"].append(name)
     said = comments(conn, t)  # decision 54: a retired column is known by its comment, never by its name
     retired = {n: was for n, text in said.items() if (was := retirement(text))}
