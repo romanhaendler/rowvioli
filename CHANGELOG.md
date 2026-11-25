@@ -66,6 +66,7 @@ Fixed:
 - A `uint64`, of a Parquet file or any connector, arrives as `numeric(20,0)` and whole. Before, the driver wrote it as `bigint` and `18446744073709551615` arrived as `-1`, with the run `ok` (in 0.4.1 too).
 - A Parquet decimal of more than 38 digits fails the run and names the column. Before, DuckDB read it as a double and `10^39 + 1` arrived rounded, with the run `ok` (in 0.4.1 too).
 - `uhugeint` under `columns` is refused and names the column, with `hugeint` or `text` as the way out. Before, DuckDB handed a value above 2^127 − 1 over wrapped, and 2^128 − 1 arrived as `-1`, with the run `ok`.
+- A CSV file that is not UTF-8 fails with `orders.csv: the file is not UTF-8; give its encoding to the table, such as encoding = "latin-1"`, also where the first such character comes after the lines DuckDB samples. Before, the reason was `Invalid Input Error: CSV Error on Line: 2`, with no way out.
 - A shipped connector whose extra is not installed says which to install, in `run`, `work` and `list`: `connector "file" cannot be loaded: No module named 'duckdb'; pip install "rowvioli[file]" installs it`.
 
 ## 0.4.1 (2026-11-23)

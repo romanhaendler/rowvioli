@@ -92,8 +92,16 @@ def read(connection, table, options):
 
     def relation(path, **extra):
         named = {**options, **extra}
-        return db.sql(f"SELECT * FROM {reader}(?" + "".join(f", {name} = ?" for name in named) + ")",
-                      params=[path, *named.values()])
+        try:
+            return db.sql(f"SELECT * FROM {reader}(?" + "".join(f", {name} = ?" for name in named) + ")",
+                          params=[path, *named.values()])
+        except duckdb.InvalidInputException as e:  # what DuckDB's sniffer read
+            raise encoding(e) from None
+
+    def encoding(e):
+        """DuckDB's message for a CSV that is not UTF-8 names a line, and its next line quotes it: the way out instead."""
+        return Exception(f'{table}: the file is not UTF-8; give its encoding to the table, such as encoding = "latin-1"') \
+            if "is not utf-8 encoded" in str(e) else e
     # escaped, since DuckDB would expand *, ? and [ in a name once more and read a file nobody checked
     paths = [glob.escape(str(f)) for f in files]
     # each file's columns; its relation goes at once, since it holds the file open
@@ -138,6 +146,8 @@ def read(connection, table, options):
         """DuckDB's message for a value a cast does not take holds the value, which would end up in the status view
         and the log: the reason names the column instead, found by trying each cast whatever the message says. Any
         other error as it is."""
+        if "is not utf-8 encoded" in str(e):  # read after the sniffer's lines
+            return encoding(e)
         for group in groups:
             part = rows(group, cast=False)
             for c, t in columns.items():

@@ -588,13 +588,16 @@ def test_a_time_finer_than_microseconds_fails_naming_the_column_and_a_type_under
          "01:00:00")]
 
 
-def test_a_csv_not_in_utf8_fails_without_its_text_and_loads_with_its_encoding(files):
-    (files.dir / "files" / "l1.csv").write_bytes("id;name\n1;Müller\n".encode("latin-1"))
+@pytest.mark.parametrize("before", [0, 100_000])  # the first character not in UTF-8 in the sample, or after it
+def test_a_csv_not_in_utf8_fails_without_its_text_saying_its_encoding_and_loads_with_it(files, before):
+    rows = "".join(f"{i};Anna\n" for i in range(before))
+    (files.dir / "files" / "l1.csv").write_bytes(f"id;name\n{rows}{before};Müller\n".encode("latin-1"))
     code, answer = load(files, '"l1.csv" = { sep = ";" }\n')
-    assert answer["raw_files.l1"]["reason"] == "Invalid Input Error: CSV Error on Line: 2"
+    assert answer["raw_files.l1"]["reason"] == (  # DuckDB's message gave the line, and the next its text
+        'l1.csv: the file is not UTF-8; give its encoding to the table, such as encoding = "latin-1"')
     code, answer = load(files, '"l1.csv" = { sep = ";", encoding = "latin-1" }\n')
     assert code == 0, answer
-    assert files.target("select name from raw_files.l1") == [("Müller",)]
+    assert files.target(f"select name from raw_files.l1 where id = '{before}'") == [("Müller",)]
 
 
 def test_an_unsigned_integer_of_a_parquet_file_arrives_whole(files):
