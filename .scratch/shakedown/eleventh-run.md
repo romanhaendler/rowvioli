@@ -1,6 +1,6 @@
 # Shakedown 2026-11-25, fourth wave: the reviewers and the final check, before 0.5.0
 
-Status: resolved (every finding is in `.scratch/schema-changes/issues/18-fourth-round.md`, in the tests merged from
+Status: resolved (every finding is in `.scratch/schema-changes/issues/18-fourth-round.md` or `19-fifth-round.md`, in the tests merged from
 `sc-18`, or declined below with its reason)
 
 The three reviewers that had not run, on Sonnet, against the branch `sc-17` at 09eb9f7: P23 the maintainer's
@@ -19,6 +19,8 @@ and 17 (second wave).
 | Review ✓ | A key column dropped from the mirror by hand stops with a withheld SQLSTATE 42703 and no way out | ticket 18, item 3 |
 | Review | Leads: the note of the keys across target names A, B, A; a retired column's note of an old target name; a row deleted from the mirror between diff and publish | ticket 18, item 4 |
 | Review | README: "a worker takes the most overdue table" leaves out the tables never tried | ticket 18, item 5 |
+| Last check ✓ | After ticket 18, an Opus check of its code: a primary key changed by hand on a table of 0.4.1 with no record (to the definition's new key, to a third, with the mirror renamed) ends `ok` with a wrong history, or with a way out that gives one | ticket 19 |
+| CI | With `duckdb` 1.5, the floor, a Parquet `timestamptz` and `time` of nanoseconds are cut before the connector sees them | the floor is `duckdb>=2` (7ac0050) |
 | P24 | 11 of 38 mutations of `load.py` and `claimable.sql` survived the tests (`ONLY` of the publish's update and delete, the closing rows' tiebreak and `OR`, `noted()`'s `<=`, the lock's SQLSTATE, the retry's condition, 63 bytes, a `retired` that is no text, the order of the claim) | a test each, red under its mutation: merged from `sc-18`; one is an equivalent mutant |
 | P27 | A clause that cannot hold in the key's change (`not was or dropped`) | removed (1fdb4b3) |
 | Ticket 17's review | A consumer's exclusion constraint under a swap of values stops with no way out | merged from `sc-18` |
