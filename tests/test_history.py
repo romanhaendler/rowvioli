@@ -397,14 +397,13 @@ def test_a_source_column_with_a_name_of_the_log_or_the_view_fails_the_run(erp, n
     assert "log = false frees it" in reason
 
 
-def test_C2_a_key_taken_away_fails_naming_the_log_until_log_view_and_mirror_are_dropped(erp):
+def test_C2_a_key_taken_away_fails_naming_the_log_until_log_and_view_are_dropped(erp):
     ok(erp)
     apply(erp, definition(erp, '"public.customers" = {}\n'))
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
-    assert "no key any more" in reason and "raw_erp.customers__log" in reason and "DROP TABLE" in reason
-    erp.target("drop table raw_erp.customers__log cascade")
-    erp.target("drop table raw_erp.customers")
+    assert "no key" in reason and "raw_erp.customers__log" in reason and "DROP TABLE" in reason
+    erp.target("drop table raw_erp.customers__log cascade")  # the mirror stays (ticket 17, E2)
     again(erp)
 
 

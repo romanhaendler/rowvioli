@@ -63,33 +63,31 @@ def test_another_key_that_does_not_identify_a_row_fails_the_run_and_leaves_the_m
     assert rows(erp.target, MIRROR) == before
 
 
-def test_a_table_that_lost_its_key_in_the_definition_says_so_and_names_both_ways_out(erp):
-    ok(erp)
+def test_a_table_that_lost_its_key_in_the_definition_says_the_least_that_works_and_keeps_the_mirror(erp):
+    ok(erp)  # ticket 17, E2: the reason told to drop the mirror too, which consumers read
     apply(erp, definition(erp, '"public.customers" = {}\n'))
     erp.target("update _rowvioli.tables set requested_at = now()")
-    reason = failed(erp)
-    assert "no key any more" in reason and "['customer_no']" in reason, reason
-    assert "put the key back" in reason and "target_table" in reason, reason
-    assert "[] differs" not in reason, reason
+    assert failed(erp) == ("the change log raw_erp.customers__log exists and this run would not write to it (log = "
+                           'false or no key): drop it with its history view (DROP TABLE "raw_erp"."customers__log" '
+                           "CASCADE), or rename both with the mirror")
+    erp.target('DROP TABLE "raw_erp"."customers__log" CASCADE')
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
 
 
-@pytest.mark.parametrize("table, says", [('{ key = ["customer_no"], log = false }', "and this run would not "
-                                          "write to it"), ("{}", "no key any more")])
-def test_a_change_log_this_run_would_not_write_is_told_before_a_column_gone_from_the_source(erp, table, says):
+@pytest.mark.parametrize("table", ['{ key = ["customer_no"], log = false }', "{}"])
+def test_a_change_log_this_run_would_not_write_is_told_before_a_column_gone_from_the_source(erp, table):
     ok(erp)  # ticket 15, P3: the stop for the column said to drop it, and doing so led into this stop
     apply(erp, definition(erp, f'"public.customers" = {table}\n'))
     erp.source("alter table customers drop column city")
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
-    assert says in reason
+    assert "and this run would not write to it" in reason
     # its way out, followed as it says, leads into no second stop: the column's drop is said with the change log's
-    ways = ['DROP TABLE "raw_erp"."customers__log" CASCADE'] + (
-        ['ALTER TABLE "raw_erp"."customers" DROP COLUMN "city"'] if "log = false" in table else [])
-    for way in ways:
+    for way in ['DROP TABLE "raw_erp"."customers__log" CASCADE', 'ALTER TABLE "raw_erp"."customers" DROP COLUMN "city"']:
         assert way in reason, reason
         erp.target(way)
-    if "log = false" not in table:  # "and the mirror"
-        erp.target("drop table raw_erp.customers")
     erp.target("update _rowvioli.tables set requested_at = now()")
     ok(erp)
 

@@ -192,11 +192,7 @@ def check(conn, t, staged, mirror, log_columns, renamed):
         # without it, a column the source no longer has in its family stops with its drop: said here, so one round leads out
         drops = "; ".join(f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(n)}" for n, type in mirror
                           if n not in renamed.values() and (n not in types or family(types[n]) != family(type)))
-        raise Exception(f"the definition has no key any more, the mirror's primary key is {primary_key}: put the key "
-                        "back, or give the table another target_table; to load it without a key, drop the change log "
-                        f"{t['name']}__log with its history view (DROP TABLE {t['log_table']} CASCADE) and the mirror"
-                        if primary_key and not key else
-                        f"the change log {t['name']}__log exists and {why}: drop it with its history view "
+        raise Exception(f"the change log {t['name']}__log exists and {why}: drop it with its history view "
                         f"(DROP TABLE {t['log_table']} CASCADE)"
                         + (f", and with it the columns of the mirror the source no longer has, whose values are "
                            f"nowhere else then ({drops})" if drops else "")
