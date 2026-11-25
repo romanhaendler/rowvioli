@@ -42,6 +42,8 @@ A column that is renamed in the source and proven so by the data ([Columns](load
 
 **The mirror's rows are the program's.** A run writes the source's values into the mirror and compares the next source with what the mirror holds. A consumer's trigger on the mirror that changes a value the run writes (`NEW.name := upper(NEW.name)`) makes the mirror differ from the source and from the change log: every run finds the row changed and writes it again, with a row in the change log each time that holds the source's value while the mirror holds the trigger's, and after a change of key the history view shows two open versions of the row. Nothing stops it, since nothing cheap tells such a trigger from a source that changes. A value of one's own belongs in a view over the mirror or in a table of one's own, filled by a trigger on the mirror that writes there and leaves `NEW` as it is.
 
+**A consumer's foreign key onto a mirror holds.** A row the source changes is updated in place, so a table with a foreign key to the mirror keeps its rows, also one with `ON DELETE CASCADE` or `SET NULL`; a trigger on the mirror sees an `UPDATE`. A row the source deletes is deleted, and a foreign key that refers to it refuses that: the run stops with Postgres's message and the way out, `update or delete on table "customers" violates foreign key constraint "orders_customer_no_fkey" on table "orders": the source deleted a row that table "orders" refers to; delete the rows there that refer to it, or give the constraint ON DELETE CASCADE or ON DELETE SET NULL`. A change of a key value is a delete and an insert, and a change of key replaces the mirror (a foreign key stops it, above).
+
 Bookkeeping in the schema `_rowvioli`:
 
 ```
@@ -232,8 +234,10 @@ BEGIN;
 INSERT INTO raw_erp.customers__log (_run, _loaded_at, _op, customer_no, name, city)
 SELECT :run, now(), _op, customer_no, name, city FROM diff;                 -- unless log = false
 DELETE FROM ONLY raw_erp.customers m USING diff d
- WHERE d._op IN ('D','U') AND d.customer_no = m.customer_no;
-INSERT INTO raw_erp.customers SELECT customer_no, name, city FROM diff WHERE _op IN ('I','U');
+ WHERE d._op = 'D' AND d.customer_no = m.customer_no;
+UPDATE ONLY raw_erp.customers m SET customer_no = d.customer_no, name = d.name, city = d.city
+  FROM diff d WHERE d._op = 'U' AND d.customer_no = m.customer_no;
+INSERT INTO raw_erp.customers SELECT customer_no, name, city FROM diff WHERE _op = 'I';
 UPDATE _rowvioli.tables SET loaded_at = now(), attempts = 0 WHERE id = :table;
 UPDATE _rowvioli.runs SET status = 'ok', finished_at = now(), inserted = ..., updated = ..., deleted = ...
  WHERE run = :run;

@@ -17,6 +17,7 @@ Added:
 
 Changed (a working set-up can notice these):
 
+- A row the source changes is updated in the mirror, no longer deleted and inserted: a consumer's trigger on the mirror fires `ON UPDATE` for it, no longer `ON DELETE` and `ON INSERT`.
 - `adbc-driver-postgresql` and `adbc-driver-manager` stay below 2: the `postgres` connector reads the driver manager's reader through a private attribute, which keeps the SQLSTATE of a source's error and so decides what of its message a reason shows.
 - **After `rowvioli init` brings a target to version 4, a worker's role needs `GRANT SELECT, INSERT, UPDATE, DELETE ON _rowvioli.columns` and `GRANT SELECT, INSERT ON _rowvioli.columns__log`** (`init` prints them on that upgrade). Without them every publish fails with `permission denied`. Auditors and consumers who read the columns need `SELECT` on `_rowvioli.columns__history` and nothing else. All workers of a target run the same drivers. A worker of 0.4.1 refuses version 4, and every command of this version but `init` and `status` refuses version 3: stop the old workers, run `init`, grant, start the new ones (docs/operation.md).
 - A change log is complete from its last change of key: replaying it from there gives the mirror.
@@ -77,6 +78,7 @@ Fixed:
 - A key taken away while a change log exists says the least that works, the drop of the change log with its history view, as for `log = false`: the mirror stays and the next run loads it without a key. Before, the reason also told to drop the mirror, which consumers read.
 - The stop for a comment on `_op` that names another key last says its causes: the comment was changed, or the mirror's primary key was changed by hand to the definition's new key before a run changed it.
 - A column a person drops from the mirror while the source drops it too is closed in the change log by the next run, a `U` for every row that had a value. Before, the history view showed its last values as current for good.
+- A row the source changes is updated in place in the mirror. Before, an update was a delete and an insert: a consumer's foreign key onto the mirror failed every run that changed a row it refers to, and one with `ON DELETE CASCADE` or `SET NULL` deleted or emptied the consumer's rows (in 0.4.1 too). A row the source deletes that such a key refers to stops the run with the way out.
 
 ## 0.4.1 (2026-11-23)
 

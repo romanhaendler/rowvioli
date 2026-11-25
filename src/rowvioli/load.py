@@ -691,16 +691,18 @@ def publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, 
         add_columns(conn, t["mirror"], staged, [(moved.get(n, n), type) for n, type in mirror if n not in plan["gone"]])
     if t["key"] and plan["key"].get("by") != "definition":
         on = " AND ".join(f"d.{quote(k)} = m.{quote(k)}" for k in t["key"])
-        kept = only = ""
+        kept = ""
         if plan["gone"]:  # a row that differs only in a column that went keeps its place in the mirror (story 5)
             ds, ms = (", ".join(f"{a}.{quote(c)}" for c, _ in staged) for a in "dm")
-            kept = f" AND (d._op = 'D' OR ROW({ds}) IS DISTINCT FROM ROW({ms}))"
-            only = f" AND NOT EXISTS (SELECT FROM ONLY {t['mirror']} m WHERE {on})"
-        sql(conn, f"DELETE FROM ONLY {t['mirror']} m USING _diff d WHERE d._op IN ('D', 'U') AND {on}{kept}")
-        written = rowcount(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _diff d "
-                                 f"WHERE _op IN ('I', 'U'){only}")
+            kept = f" AND ROW({ds}) IS DISTINCT FROM ROW({ms})"
+        sql(conn, f"DELETE FROM ONLY {t['mirror']} m USING _diff d WHERE d._op = 'D' AND {on}")
+        # an update in place: as a delete and an insert, a consumer's foreign key onto the mirror refused it, or
+        # cascaded the delete to its rows (ticket 17)
+        values = ", ".join(f"{quote(c)} = d.{quote(c)}" for c, _ in staged)
+        updated = rowcount(conn, f"UPDATE ONLY {t['mirror']} m SET {values} FROM _diff d WHERE d._op = 'U' AND {on}{kept}")
+        sql(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _diff WHERE _op = 'I'")
         # the counts are the mirror's: a U only the change log gets, for a column that went, updates no row of it
-        counts = {**counts, "updated": written - counts["inserted"]}
+        counts = {**counts, "updated": updated}
     else:  # without a key, or under another key (decision 54): replaced as a whole
         deleted = rowcount(conn, f"DELETE FROM ONLY {t['mirror']}")
         counts = {"inserted": rowcount(conn, f"INSERT INTO {t['mirror']} ({names}) SELECT {names} FROM _stage"),
@@ -1315,6 +1317,10 @@ def reason_line(values, e, step, source=None, name=None):
     line = re.sub(r"canceling statement due to statement timeout$", rf"\g<0>: the statement_timeout of the role in the "
                   rf"{where} ended it; to let a run take longer, ALTER ROLE <its role> IN DATABASE <its database> SET "
                   "statement_timeout = 0", line)
+    if step == "publishing":  # rows of the mirror are deleted only where the source deleted them (ticket 17)
+        line = re.sub(r'^update or delete on table "[^"]*" violates foreign key constraint "[^"]*" on table ("[^"]*")$',
+                      r"\g<0>: the source deleted a row that table \1 refers to; delete the rows there that refer to "
+                      "it, or give the constraint ON DELETE CASCADE or ON DELETE SET NULL", line)
     if step != "reading the source":  # a source may have a table of that name
         line = re.sub(r"must be owner of table \S+$", r"\g<0>: the worker's role must own it, or be a member of the "
                       r"role that owns it, to change its columns with the mirror's (ALTER TABLE <it> OWNER TO <the "

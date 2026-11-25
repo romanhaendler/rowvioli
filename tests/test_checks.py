@@ -425,7 +425,7 @@ def test_a_message_a_consumers_trigger_raises_on_the_target_is_withheld_and_the_
     ok(erp)
     erp.target(f"create function public.guard() returns trigger language plpgsql as $$ begin {statement}; return NEW;"
                " end $$")
-    erp.target("create trigger g before insert on raw_erp.customers for each row execute function public.guard()")
+    erp.target("create trigger g before insert or update on raw_erp.customers for each row execute function public.guard()")
     erp.source("update customers set name = 'Anna2' where customer_no = 1")
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert withheld(erp) == (f"function guard() raised an error (SQLSTATE {sqlstate}) in the target; its message may "
@@ -478,6 +478,34 @@ def test_postgres_own_constraint_messages_keep_their_names(erp, constraint, chan
     erp.source(f"update customers set {change} where customer_no = 1")
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert failed(erp).endswith(says)
+
+
+ORDERS = "create schema reporting; create table reporting.orders (id int, customer_no int references raw_erp.customers{})"
+
+
+@pytest.mark.parametrize("action", ["", " on delete cascade", " on delete set null"])
+def test_a_consumers_foreign_key_onto_the_mirror_keeps_its_rows_when_a_row_it_refers_to_is_updated(erp, action):
+    ok(erp)  # ticket 17, M1: an update was a delete and an insert, which the key refused, cascaded or set null
+    erp.target(ORDERS.format(action) + "; insert into reporting.orders values (1, 1)")
+    erp.source("update customers set city = 'Köln' where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    assert erp.target("select * from reporting.orders") == [(1, 1)]
+    assert erp.target("select city from raw_erp.customers where customer_no = 1") == [("Köln",)]
+
+
+def test_a_row_the_source_deleted_that_a_consumers_foreign_key_refers_to_stops_with_the_way_out(erp):  # ticket 17, M1
+    ok(erp)
+    erp.target(ORDERS.format("") + "; insert into reporting.orders values (1, 1)")
+    erp.source("delete from customers where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == (
+        'update or delete on table "customers" violates foreign key constraint "orders_customer_no_fkey" on table '
+        '"orders": the source deleted a row that table "orders" refers to; delete the rows there that refer to it, or '
+        "give the constraint ON DELETE CASCADE or ON DELETE SET NULL")
+    erp.target("delete from reporting.orders")  # the way out
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
 
 
 def test_a_source_table_created_anew_with_other_columns_says_what_it_may_be_and_the_setting_for_one_run(erp):  # H2
@@ -553,7 +581,7 @@ def test_a_message_a_consumers_trigger_in_pl_perl_or_pl_python_raises_is_withhel
     language(erp.target, name)
     ok(erp)
     erp.target(f"create function public.guard() returns trigger language {name} as $${RAISES[name][0]}$$")
-    erp.target("create trigger g before insert on raw_erp.customers for each row execute function public.guard()")
+    erp.target("create trigger g before insert or update on raw_erp.customers for each row execute function public.guard()")
     erp.source("update customers set name = 'Anna2' where customer_no = 1")
     erp.target("update _rowvioli.tables set requested_at = now()")
     state = {"plperl": "38000", "plpython3u": "XX000"}[name]  # external_routine_exception, internal_error

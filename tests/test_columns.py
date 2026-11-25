@@ -259,7 +259,7 @@ def test_a_run_that_changes_columns_notifies_on_commit_and_one_that_fails_does_n
     # a consumer's check that Postgres runs at COMMIT, after the run has recorded fax and notified
     erp.target("create function no_koeln() returns trigger language plpgsql as "
                "$$ begin if new.city = 'Köln' then raise exception 'no Köln'; end if; return null; end $$")
-    erp.target("create constraint trigger no_koeln after insert on raw_erp.customers deferrable initially deferred "
+    erp.target("create constraint trigger no_koeln after insert or update on raw_erp.customers deferrable initially deferred "
                "for each row execute function no_koeln()")
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert erp.run("run").returncode == 1
