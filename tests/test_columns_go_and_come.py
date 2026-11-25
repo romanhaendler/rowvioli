@@ -323,6 +323,21 @@ def test_A10_a_gone_key_column_stops_the_run_as_before(erp):
     assert columns(erp) == ["customer_no", "name", "city"]
 
 
+@pytest.mark.parametrize("record", [True, False])
+def test_a_key_column_a_person_dropped_from_the_mirror_stops_and_another_target_table_leads_out(erp, record):
+    ok(erp)  # ticket 18: the run failed with SQLSTATE 42703, withheld
+    erp.target("alter table raw_erp.customers drop column customer_no")
+    if not record:  # a table last loaded by a program that kept none (before version 4)
+        erp.target("delete from _rowvioli.columns where target_table = 'customers'")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    assert reason == ("key column customer_no is missing in the mirror raw_erp.customers, dropped by hand, so its rows "
+                      "cannot be told apart: give the table another target_table, which begins a new mirror"), reason
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], target_table = "clients" }\n'))
+    ok(erp)
+    assert rows(erp.target, "select * from raw_erp.clients") == rows(erp.source, "select * from customers")
+
+
 def test_A11_A15_a_column_back_with_its_type_continues_its_log_column_and_the_record_shows_the_gap(erp):
     ok(erp)
     first = erp.target(LOADED_AT)[0][0]
