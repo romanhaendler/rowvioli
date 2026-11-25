@@ -11,6 +11,8 @@ from urllib.parse import unquote
 import pyarrow as pa
 
 driver_version = os.environ.get("ROWVIOLI_TEST_DRIVER_VERSION")  # what the contract's optional `driver_version` reports
+if "ROWVIOLI_TEST_DRIVER_VERSION_INT" in os.environ:  # one that is no text
+    driver_version = int(os.environ["ROWVIOLI_TEST_DRIVER_VERSION_INT"])
 catalog = os.environ.get("ROWVIOLI_TEST_CATALOG")  # what the contract's optional `catalog` says
 
 
