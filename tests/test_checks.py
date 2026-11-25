@@ -253,7 +253,11 @@ def test_the_password_appears_nowhere_when_a_run_fails(secret):
 def test_the_password_appears_nowhere_when_the_source_refuses_the_login(secret):
     out = [apply_with(secret, WRONG), secret.run("run", "erp")]
     assert out[-1].returncode == 1
-    assert "password authentication failed" in secret.target("select reason from _rowvioli.runs")[0][0]
+    [(reason,)] = secret.target("select reason from _rowvioli.runs")
+    assert "password authentication failed" in reason
+    # ticket 17, L1: a person fixes the variable and runs again, and meets the same reason
+    assert reason.endswith("; the connection is the one the last apply stored: after changing a variable it reads, "
+                           "run apply again"), reason
     assert leaks(secret, WRONG, *out) == []
 
 

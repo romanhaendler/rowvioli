@@ -32,11 +32,14 @@ def test_a_bare_traceback_gives_its_last_line():
     assert reason("Traceback (most recent call last):\n  File \"x.py\", line 1\nValueError: bad") == "ValueError: bad"
 
 
+AGAIN = "; the connection is the one the last apply stored: after changing a variable it reads, run apply again"
+
+
 def test_a_line_ending_in_a_colon_is_joined_with_the_next():
     message = ("ODBC emitted an error calling 'SQLDriverConnect':\nState: 08001, Native error: 101, Message: FATAL:  "
                "password authentication failed for user \"reader\"\nmore")
     assert reason(message) == ("ODBC emitted an error calling 'SQLDriverConnect': State: 08001, Native error: 101, "
-                               "Message: FATAL:  password authentication failed for user \"reader\"")
+                               "Message: FATAL:  password authentication failed for user \"reader\"" + AGAIN)
 
 
 def test_the_wrapper_of_a_failed_statement_goes_whatever_its_sql_holds():
@@ -114,7 +117,9 @@ ODBC = "ODBC emitted an error calling 'SQLFetch': State: {}, Native error: 1, Me
 def test_an_odbc_drivers_message_is_shown_by_its_sqlstate_alone(state, message, shown):  # decision 54, item 8
     odbc = ODBC.replace("SQLFetch", "SQLDriverConnect") if shown == "connect" else ODBC
     said = reason_line([], RuntimeError(odbc.format(state) + message), "reading the source", "dbo.orders", "erp")
-    if shown == "missing":
+    if shown == "connect":  # ticket 17, L1
+        assert said == odbc.format(state) + message + AGAIN
+    elif shown == "missing":
         assert said == MISSING.format(table="dbo.orders", state=state)
     elif shown:
         assert said == odbc.format(state) + message

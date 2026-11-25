@@ -108,7 +108,9 @@ def test_a_wrong_password_fails_the_run_and_appears_nowhere(ready):
     out = [erp(ready, '"public.customers" = {}', odbc_string(ready.source_url, "{$ERP_PASSWORD}"),
                {"ERP_PASSWORD": wrong}), ready.run("run")]
     assert out[-1].returncode == 1
-    assert "password authentication failed" in ready.target("select reason from _rowvioli.runs")[0][0]
+    [(reason,)] = ready.target("select reason from _rowvioli.runs")
+    assert "password authentication failed" in reason and reason.endswith("after changing a variable it reads, run "
+                                                                          "apply again"), reason  # ticket 17, L1
     for value in (wrong, "Falsch", "Kenn@wort42"):
         assert leaks(ready, value, *out) == [], value
 

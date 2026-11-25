@@ -25,7 +25,7 @@ flowchart LR
 ```
 
 - **A person** writes the block and makes sure the variables are set when `apply` runs. A secret manager holds plain values such as a token or a password. Nobody builds a connection string by hand in a variable, and nobody percent-encodes a value by hand.
-- **`apply`** fills in the placeholders, encrypts the block as a whole with the public key and stores one ciphertext per source. It aborts if a variable is missing.
+- **`apply`** fills in the placeholders, encrypts the block as a whole with the public key and stores one ciphertext per source. It aborts if a variable is missing. A run reads the connection `apply` stored, never the environment: a password changed in a variable reaches the runs with the next `apply`, and a source that refuses a connection says it in the reason (`...password authentication failed for user "reader"; the connection is the one the last apply stored: after changing a variable it reads, run apply again`).
 - **The connector** receives the decrypted block as a dict. Which fields it expects is part of its documentation: `url` for `postgres`, `string` for `odbc`, `url` and `token` for `rest`, `path` for `file`.
 
 The address of a source is visible in the definition and in its review, and still encrypted in the target. Someone who can only write to the target cannot point a password at another server. If the source is a cluster, that is part of the connection string and nothing rowvioli has to know.

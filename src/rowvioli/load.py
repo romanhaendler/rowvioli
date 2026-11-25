@@ -1342,6 +1342,11 @@ def reason_line(values, e, step, source=None, name=None):
     line = re.sub(r"canceling statement due to statement timeout$", rf"\g<0>: the statement_timeout of the role in the "
                   rf"{where} ended it; to let a run take longer, ALTER ROLE <its role> IN DATABASE <its database> SET "
                   "statement_timeout = 0", line)
+    # a failed connection to a source, through ADBC or ODBC: a variable changed since apply is not in it (ticket 17)
+    if step == "reading the source" and (re.search(r"\bFailed to connect\b|\bcalling 'SQLDriverConnect'", str(e))
+                                         or str(getattr(e, "sqlstate", None) or "").startswith("28")):
+        line += ("; the connection is the one the last apply stored: after changing a variable it reads, run apply "
+                 "again")
     if step == "publishing":  # rows of the mirror are deleted only where the source deleted them (ticket 17)
         line = re.sub(r'^update or delete on table "[^"]*" violates foreign key constraint "[^"]*" on table ("[^"]*")$',
                       r"\g<0>: the source deleted a row that table \1 refers to; delete the rows there that refer to "
