@@ -420,8 +420,8 @@ def before_the_record(conn, t, primary_key, key, log_columns, renamed):
         if fits[0]:
             return True
         raise Exception(f"the change log {t['name']}__log was not written under ({', '.join(key)}), the key of the "
-                        "definition and of the mirror's primary key, so a person changed the primary key by hand "
-                        f"before a run changed it: {say}")
+                        "definition and of the mirror's primary key, as after a primary key changed by hand before a run "
+                        f"changed it, or rows of the mirror deleted by hand: {say}")
     if fits[0] != fits[1]:
         return fits[0]
     if not fits[0]:  # each comment of the two would be false (ticket 19)

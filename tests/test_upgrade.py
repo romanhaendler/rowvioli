@@ -295,7 +295,8 @@ def test_a_primary_key_changed_by_hand_on_a_mirror_of_0_4_1_stops_and_the_key_it
            """'[{"key": ["<the key column>"]}]'""")
     assert reasons(rv)["t"] == (
         "the change log raw_erp.t__log was not written under (k2), the key of the definition and of the mirror's "
-        "primary key, so a person changed the primary key by hand before a run changed it: " + say if hand == "k2" else
+        "primary key, as after a primary key changed by hand before a run changed it, or rows of the mirror deleted by "
+        "hand: " + say if hand == "k2" else
         "the primary key of raw_erp.t is (k3), the definition's key is (k2), and the change log raw_erp.t__log was "
         "written under neither, so a person changed the primary key by hand before a run changed the key: " + say)
     rv.target(say.split("says: ")[1].replace("<the key column>", "k"))
