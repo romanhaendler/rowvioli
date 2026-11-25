@@ -310,6 +310,41 @@ def test_the_comment_on_op_removed_after_a_change_of_key_stops_the_run_with_the_
     log_replays(erp)
 
 
+@pytest.mark.parametrize("how", ["created again", "another target_table"])
+def test_a_lost_comment_on_op_of_a_change_log_begun_after_a_change_of_key_is_no_stop(erp, how):
+    ok(erp)  # ticket 17, V1: the text to put back was the note of an earlier change log under the same table
+    apply(erp, definition(erp, ANOTHER_KEY))
+    again(erp)
+    if how == "created again":
+        erp.target("drop table raw_erp.customers__log cascade")
+    else:
+        apply(erp, definition(erp, ANOTHER_KEY.replace("}", ', target_table = "clients" }')))
+    again(erp)  # a new change log under one key
+    table = "clients" if how == "another target_table" else "customers"
+    erp.target(f"comment on column raw_erp.{table}__log._op is null")
+    erp.source("update customers set city = 'Köln' where customer_no = 1")
+    again(erp)
+    log_replays(erp, f"raw_erp.{table}")
+
+
+def test_a_lost_comment_on_op_of_a_mirror_renamed_by_hand_gives_its_keys_to_put_back(erp):  # ticket 17, V1
+    ok(erp)
+    apply(erp, definition(erp, ANOTHER_KEY))
+    again(erp)
+    keys = comment(erp)
+    erp.target("alter table raw_erp.customers rename to clients; alter table raw_erp.customers__log rename to "
+               "clients__log; alter view raw_erp.customers__history rename to clients__history")
+    apply(erp, definition(erp, ANOTHER_KEY.replace("}", ', target_table = "clients" }')))
+    erp.target("comment on column raw_erp.clients__log._op is null")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    put_back = f"""COMMENT ON COLUMN "raw_erp"."clients__log"._op IS '{json.dumps(keys)}'"""
+    assert failed(erp) == ("the comment on column _op of the change log raw_erp.clients__log, which says the keys it "
+                           f"was written under, is missing or unreadable, and the key has changed: put it back, {put_back}")
+    erp.target(put_back)
+    again(erp)
+    log_replays(erp, "raw_erp.clients")
+
+
 def test_a_column_of_an_old_key_retired_in_the_change_log_is_renamed_in_the_comment_on_op_too(erp):  # decision 9
     ok(erp)
     first = erp.target(LOADED_AT)[0][0]
