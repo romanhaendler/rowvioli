@@ -499,8 +499,11 @@ def stage(conn, t):
     if t["catalog"] not in (None, "data", "definition"):  # else a rule would take it for neither and act by halves
         raise Exception(f'connector "{t["type"]}" says catalog = {t["catalog"]!r}, which is neither "data" nor '
                         '"definition"; without the entry the source has a catalog of its own')
-    sql(conn, "UPDATE _rowvioli.runs SET driver_version = $2 WHERE run = $1",
-        [t["run"], getattr(connector, "driver_version", None)])
+    version = getattr(connector, "driver_version", None)
+    if version is not None and not (isinstance(version, str) and len(version) <= 200 and not CONTROL.search(version)):
+        raise Exception(f'connector "{t["type"]}" says a driver_version that is no text of one line and at most 200 '
+                        'characters, which every run records: give it a short one, such as "mylib 2.3.1", or none')
+    sql(conn, "UPDATE _rowvioli.runs SET driver_version = $2 WHERE run = $1", [t["run"], version])
     try:
         connection = seal.unseal(os.environ["ROWVIOLI_KEY_FILE"], t["key_id"], t["source"], t["connection"])
     except Exception as e:

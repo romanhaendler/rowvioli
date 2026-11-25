@@ -51,6 +51,17 @@ def test_runs_record_the_version_a_connector_says_its_driver_has_and_none_for_on
     assert erp.target("select driver_version from _rowvioli.runs") == [(version,)]
 
 
+@pytest.mark.parametrize("version", ["1.2\nx", "v" * 201])
+def test_a_driver_version_that_is_not_one_short_line_fails_the_run_naming_the_connector(erp, version):
+    lab(erp)  # ticket 17, J2: it was stored with every run as given
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    r = erp.run("run", "lab", env={"ROWVIOLI_TEST_DRIVER_VERSION": version})
+    assert r.returncode == 1
+    assert erp.target("select reason, driver_version from _rowvioli.runs") == [(
+        'connector "testing" says a driver_version that is no text of one line and at most 200 characters, which every '
+        'run records: give it a short one, such as "mylib 2.3.1", or none', None)]
+
+
 @pytest.mark.parametrize("fail", ["at_once", "deep"])
 def test_a_connector_failing_with_connection_values_in_its_message_leaks_none_of_them(erp, fail):
     out = [lab(erp, f'fail = "{fail}"'), erp.run("run", "lab")]

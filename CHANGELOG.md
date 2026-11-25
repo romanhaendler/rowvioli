@@ -80,6 +80,7 @@ Fixed:
 - A column a person drops from the mirror while the source drops it too is closed in the change log by the next run, a `U` for every row that had a value. Before, the history view showed its last values as current for good.
 - A row the source changes is updated in place in the mirror. Before, an update was a delete and an insert: a consumer's foreign key onto the mirror failed every run that changed a row it refers to, and one with `ON DELETE CASCADE` or `SET NULL` deleted or emptied the consumer's rows (in 0.4.1 too). A row the source deletes that such a key refers to stops the run with the way out.
 - The text offered to put back a lost comment on `_op` is a note of this change log only, no older than its first row: a change log created again, or one under a new target name, no longer stops with the keys of an earlier one. A mirror renamed by hand still gets its own.
+- A connector's `driver_version` that is no text of one line and at most 200 characters fails the run naming the connector. Before, it was stored as given with every run: an integer as text, a line break, 100,000 characters. docs/connectors.md says the contract's three optional names in one place, and the README points to them.
 
 ## 0.4.1 (2026-11-23)
 

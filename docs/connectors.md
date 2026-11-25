@@ -2,7 +2,7 @@
 
 What a connector is, the four that ship with their options, licences, how to get one, a custom connector complete, and the column types in the target.
 
-The whole contract is one function:
+The contract is one function:
 
 ```python
 def read(connection: dict, table: str, options: dict) -> Iterator[pyarrow.RecordBatch]:
@@ -17,7 +17,11 @@ def read(connection: dict, table: str, options: dict) -> Iterator[pyarrow.Record
 
 Out come Arrow batches with a schema that stays the same, and nothing else. A connector never sees the target, a lock or another table. It has to keep two promises: deliver in chunks instead of all at once, and keep column types stable.
 
-A connector may offer a second function, `tables(connection)`, that lists the tables of the source with their keys. Only `rowvioli list` uses it, run by a person on a machine that has the connector. The worker process never calls it. A third, `driver_version`, is a string, not a function: the version of the library the connector reads with, which a run records ([connector guide](connector-guide.md)). The shipped connectors report their package and its version, `duckdb 1.5.0`, and none when the package has no metadata.
+Besides `read`, a connector module may have three names at its top, all optional, which the [connector guide](connector-guide.md) explains in full:
+
+- `tables(connection)`, a function that lists the tables of the source with their keys. Only `rowvioli list` uses it, run by a person on a machine that has the connector; the worker never calls it.
+- `driver_version`, a string of one line and at most 200 characters: the version of the library the connector reads with, which every run records, so that columns another reader delivers are recorded `by = reader`. The shipped connectors report their package and its version, `duckdb 1.5.0`, and none when the package has no metadata. Anything else fails the run naming the connector.
+- `catalog`, `"data"` or `"definition"`, for a source without a catalog of its own: its columns are what one run's data hold (`file`), or what the table names under `columns` (`rest`). Without it the source has a catalog, as a database has.
 
 | Connector | Covers | Built on | Needed on the worker |
 |---|---|---|---|
