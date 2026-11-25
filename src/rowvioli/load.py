@@ -284,11 +284,12 @@ def check(conn, t, staged, mirror, log_columns, renamed):
                             for kind, table in ([("TABLE", t["mirror"])] if n in had else [])
                             + [("TABLE", t["log_table"]), ("VIEW", t["history"])]))
     if mirror:
+        # decision 54: the key the last run recorded (this target name's: an old one that stays keeps the key it had)
+        recorded = sql(conn, 'SELECT "column", "key" FROM _rowvioli.columns WHERE id = $1 AND target_schema = $2 '
+                             'AND target_table = $3 ORDER BY "key"', [t["id"], t["schema"], t["table"]])
+        was = [renamed_to.get(c, c) for c, k in recorded if k is not None]
         if set(primary_key) != set(key):  # the same columns in another order are the same key (story 20)
-            # decision 54: the key the last run recorded is the definition's, so a person changed the primary key
-            # (this target name's: an old one that stays keeps the key it had)
-            recorded = sql(conn, 'SELECT "column", "key" FROM _rowvioli.columns WHERE id = $1 AND target_schema = $2 '
-                                 'AND target_table = $3', [t["id"], t["schema"], t["table"]])
+            # the key the last run recorded is the definition's, so a person changed the primary key
             # without a record (a program that kept none), the comment on _op names the key the change log was
             # written under, which is the definition's where a person changed the primary key
             keys = None if recorded or not log_columns else stretches(conn, t)
@@ -296,6 +297,10 @@ def check(conn, t, staged, mirror, log_columns, renamed):
                 {renamed_to.get(c, c) for c in keys[-1]["key"]} == set(key) if keys else \
                 before_the_record(conn, t, primary_key, key, log_columns, renamed)
             plan["key"] = {"was": primary_key, "by": "hand" if hand else "definition", "log": bool(log_columns)}
+        elif log_columns and was and set(was) != set(key):
+            # a person changed the primary key by hand to the definition's new key before a run did: the change log is
+            # written under the recorded one, so the run changes the key as the definition would (ticket 18)
+            plan["key"] = {"was": was, "by": "definition", "log": True}
     # decision 54: one branch over a change log written under two keys gives wrong rows, so the record says them
     if log_columns and stretches(conn, t) is None and (text := noted(conn, t)):
         raise Exception(f"the comment on column _op of the change log {t['name']}__log, which says the keys it was "

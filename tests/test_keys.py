@@ -272,19 +272,27 @@ def test_a_comment_on_op_that_names_another_key_than_the_change_logs_stops_with_
     log_replays(erp)
 
 
-def test_a_primary_key_changed_by_hand_to_the_definitions_new_key_before_the_run_is_named_as_the_cause(erp):
-    ok(erp)  # ticket 17, M7
-    erp.target("alter table raw_erp.customers drop constraint customers_pkey, add primary key (customer_no, name)")
-    apply(erp, definition(erp, ANOTHER_KEY))
-    erp.target("update _rowvioli.tables set requested_at = now()")
-    put_back = """COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '[{"key": ["customer_no", "name"]}]'"""
-    assert failed(erp) == (
-        "the comment on column _op of the change log raw_erp.customers__log, which says the keys it was written "
-        "under, names (customer_no) last, where the change log is written under (customer_no, name): the comment was "
-        "changed, or the mirror's primary key was changed by hand to the definition's new key before a run changed "
-        f"it; put it back, {put_back}")
-    erp.target(put_back)
-    again(erp)
+@pytest.mark.parametrize("earlier", [False, True])
+def test_a_primary_key_changed_by_hand_to_the_definitions_new_key_before_the_run_is_changed_as_the_definition_would(
+        erp, earlier):
+    ok(erp)  # tickets 17, M7, and 18: the stop gave the comment there already, or a key the log was not written under
+    moments = [(erp.target(LOADED_AT)[0][0], rows(erp.target, MIRROR))]
+    if earlier:  # a change of key by the definition before
+        apply(erp, definition(erp, ANOTHER_KEY))
+        moments.append((again(erp), rows(erp.target, MIRROR)))
+    erp.source("update customers set name = 'Bert' where customer_no = 2")
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    [(pk,)] = erp.target("select conname from pg_constraint where conrelid = 'raw_erp.customers'::regclass and "
+                         "contype = 'p'")
+    erp.target(f"alter table raw_erp.customers drop constraint {pk}, add primary key (name)")
+    apply(erp, definition(erp, '"public.customers" = { key = ["name"] }\n'))
+    erp.source("update customers set city = 'Kiel' where customer_no = 3")
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    assert primary_key(erp) == ["name"]
+    assert [k["key"] for k in comment(erp)] == [["customer_no"], *[["customer_no", "name"]] * earlier, ["name"]]
+    log_replays(erp)
+    for moment, mirror in moments:
+        assert at(erp, moment) == mirror
 
 
 @pytest.mark.parametrize("removal", ["is null", "is 'our customers'", "a key no list", "a from no moment",
