@@ -188,16 +188,22 @@ def test_a_grant_passed_on_with_the_grant_option_comes_back_from_its_grantor_whe
                 erp.target(f"drop owned by {role} cascade; drop role {role}")
 
 
+OWNED = ('the history view "raw_erp"."customers__history" is owned by {other}, which the run cannot keep as its owner '
+         "when it creates the view again for a change of columns: the worker's role must be a member of {other}, and "
+         '{other} needs CREATE on schema raw_erp and UPDATE on the change log "raw_erp"."customers__log"; or give it '
+         'back, ALTER VIEW "raw_erp"."customers__history" OWNER TO {worker}')
+
+
 @pytest.mark.parametrize("taken, says", [
     # ticket 15, X4: the history view, which the run creates again for a change of columns
-    ("alter view raw_erp.customers__history owner to {other}",
-     'the history view "raw_erp"."customers__history" is owned by {other}, a role the worker\'s role is not a member '
-     "of, so the run cannot create it again for the change of columns: give it back, ALTER VIEW "
-     '"raw_erp"."customers__history" OWNER TO {worker}'),
+    ("alter view raw_erp.customers__history owner to {other}", OWNED),
     # C3: a table that inherits from the mirror, which a change of the mirror's columns reaches
     ("create table raw_erp.vip () inherits (raw_erp.customers); alter table raw_erp.vip owner to {other}",
      "must be owner of table vip: the worker's role must own it, or be a member of the role that owns it, to change "
-     "its columns with the mirror's (ALTER TABLE <it> OWNER TO <the worker's role>)")])
+     "its columns with the mirror's (ALTER TABLE <it> OWNER TO <the worker's role>)"),
+    # B2: a role the worker's role is a member of that only reads: a lock of the view takes its owner's rights on the
+    # change log, and the view would be given back to it
+    ("grant {other} to {worker}; alter view raw_erp.customers__history owner to {other}", OWNED)])
 def test_an_object_of_another_role_that_a_change_of_columns_reaches_is_named_with_the_way_out(erp, taken, says):
     db = erp.target("select current_database()")[0][0]
     worker, other = f"worker_{db}", f"other_{db}"
@@ -209,7 +215,7 @@ def test_an_object_of_another_role_that_a_change_of_columns_reaches_is_named_wit
         assert erp.run("run", env=env).returncode == 0
         erp.target(f"grant usage, create on schema raw_erp to {other}; grant select on all tables in schema raw_erp "
                    f"to {other}")
-        erp.target(taken.format(other=other))
+        erp.target(taken.format(other=other, worker=worker))
         erp.source("alter table customers drop column city")
         erp.target("update _rowvioli.tables set requested_at = now()")
         r = erp.run("run", env=env)
@@ -232,19 +238,72 @@ def test_a_persons_comments_options_triggers_and_rules_on_the_history_view_are_c
                    alter view {view} set (security_barrier = true);
                    create function public.refuse() returns trigger language plpgsql as $$ begin return null; end $$;
                    create trigger refuse instead of insert on {view} for each row execute function public.refuse();
-                   create rule keep as on delete to {view} do instead nothing""")
+                   create rule keep as on delete to {view} do instead nothing;
+                   comment on trigger refuse on {view} is 'no inserts';
+                   comment on rule keep on {view} is 'no deletes';
+                   alter view {view} alter column city set default 'nowhere'""")
     on_the_view = f"""select obj_description('{view}'::regclass, 'pg_class'),
                              col_description('{view}'::regclass, (select attnum from pg_attribute
                                              where attrelid = '{view}'::regclass and attname = 'city')),
                              (select reloptions::text from pg_class where oid = '{view}'::regclass),
-                             (select string_agg(tgname, ',') from pg_trigger where tgrelid = '{view}'::regclass),
-                             (select string_agg(rulename, ',') from pg_rewrite where ev_class = '{view}'::regclass
-                                 and rulename <> '_RETURN')"""
+                             (select string_agg(tgname || ': ' || obj_description(oid, 'pg_trigger'), ',')
+                                from pg_trigger where tgrelid = '{view}'::regclass),
+                             (select string_agg(rulename || ': ' || obj_description(oid, 'pg_rewrite'), ',')
+                                from pg_rewrite where ev_class = '{view}'::regclass and rulename <> '_RETURN'),
+                             (select pg_get_expr(adbin, adrelid) from pg_attrdef where adrelid = '{view}'::regclass)"""
     before = erp.target(on_the_view)
     erp.source(change)
     again(erp)
     assert erp.target(on_the_view) == before == [
-        ("the customers as they were", "where they live", "{security_barrier=true}", "refuse", "keep")]
+        ("the customers as they were", "where they live", "{security_barrier=true}", "refuse: no inserts",
+         "keep: no deletes", "'nowhere'::text")]
+
+
+def test_the_owner_a_person_gave_the_history_view_is_given_back_after_the_run_creates_it_again(erp):
+    ok(erp)  # ticket 15, B2: the run's role, a superuser here, may act as the owner; created again it was the run's
+    other = "other_" + erp.target("select current_database()")[0][0]
+    try:
+        erp.target(f"create role {other}; grant usage, create on schema raw_erp to {other}; "
+                   f"grant select, update on raw_erp.customers__log to {other}; "
+                   f"alter view raw_erp.customers__history owner to {other}")
+        erp.source("alter table customers drop column name")
+        again(erp)
+        assert erp.target("select relowner::regrole::text from pg_class where oid = "
+                          "'raw_erp.customers__history'::regclass") == [(other,)]
+    finally:
+        erp.target(f"drop owned by {other} cascade; drop role {other}")
+
+
+def test_a_history_view_given_to_a_role_that_only_reads_stops_a_change_of_columns_with_the_way_out(erp):
+    ok(erp)  # ticket 15, B2: a lock of the view takes its owner's rights on the change log; it said permission denied
+    other = "other_" + erp.target("select current_database()")[0][0]
+    try:
+        erp.target(f"create role {other}; grant usage on schema raw_erp to {other}; "
+                   f"grant select on raw_erp.customers__log to {other}; "
+                   f"alter view raw_erp.customers__history owner to {other}")
+        erp.source("alter table customers drop column name")
+        erp.target("update _rowvioli.tables set requested_at = now()")
+        assert failed(erp).replace("***", "x") == OWNED.format(other=other, worker="postgres")
+        erp.target('ALTER VIEW "raw_erp"."customers__history" OWNER TO postgres')  # the way out
+        again(erp)
+    finally:
+        erp.target(f"drop owned by {other} cascade; drop role {other}")
+
+
+def test_a_rule_on_the_history_view_that_names_a_column_the_run_renames_stops_it_with_the_way_out(erp):
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], renamed = { town = "city" } }\n'))
+    ok(erp)  # ticket 15, B2: created again, the rule would name a column the view has no more, or another one
+    erp.target("create rule keep as on update to raw_erp.customers__history where old.city is null "
+               "do instead nothing")
+    erp.source("alter table customers rename column city to town")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp).replace("***", "x") == (
+        "the history view raw_erp.customers__history is created again for a change of columns, but rule keep on it "
+        "names column city of raw_erp.customers__history, which this run renames or drops, so it cannot be carried "
+        "over: change or drop that, and the next run goes on")
+    erp.target("drop rule keep on raw_erp.customers__history")  # the way out
+    again(erp)
+    assert erp.target("select town from raw_erp.customers order by customer_no") == [("Bonn",), ("Essen",), (None,)]
 
 
 def test_a_worker_with_usage_alone_on_a_schema_it_did_not_create_is_told_it_needs_create(erp):  # ticket 15, I3

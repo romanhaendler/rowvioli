@@ -718,12 +718,17 @@ def lock(conn, t):
     table's row while an apply holds it)."""
     objects = ", ".join(n for n in (t["mirror"], t["log_table"], t["history"])
                         if sql(conn, "SELECT to_regclass($1) IS NOT NULL", [n])[0][0])
-    # the history view is created again, which only its owner may; a lock of it would be refused first
-    for owner, me in sql(conn, "SELECT relowner::regrole::text, quote_ident(current_user) FROM pg_class WHERE oid = "
-                               "to_regclass($1) AND NOT pg_has_role(relowner, 'MEMBER')", [t["history"]]):
-        raise Exception(f"the history view {t['history']} is owned by {owner}, a role the worker's role is not a "
-                        "member of, so the run cannot create it again for the change of columns: give it back, "
-                        f"ALTER VIEW {t['history']} OWNER TO {me}")
+    # the history view is created again, which only a member of its owner may, and given back to its owner, which
+    # needs CREATE on the schema; a lock of a view takes its owner's rights on the change log (story 43, ticket 15)
+    for owner, me, schema in sql(conn, """
+            SELECT relowner::regrole::text, quote_ident(current_user), relnamespace::regnamespace::text FROM pg_class
+             WHERE oid = to_regclass($1) AND relowner <> current_user::text::regrole
+               AND NOT (pg_has_role(relowner, 'MEMBER') AND has_schema_privilege(relowner, relnamespace, 'CREATE')
+                        AND has_table_privilege(relowner, $2, 'UPDATE, DELETE, TRUNCATE'))""", [t["history"], t["log_table"]]):
+        raise Exception(f"the history view {t['history']} is owned by {owner}, which the run cannot keep as its owner "
+                        f"when it creates the view again for a change of columns: the worker's role must be a member of "
+                        f"{owner}, and {owner} needs CREATE on schema {schema} and UPDATE on the change log "
+                        f"{t['log_table']}; or give it back, ALTER VIEW {t['history']} OWNER TO {me}")
     end = time.monotonic() + 10
     while True:
         sql(conn, "BEGIN")
@@ -763,16 +768,40 @@ GRANTS = """
      ORDER BY c.attnum, a.ordinality"""
 
 
-# what a person put on a view besides grants and its options (OPTIONS), as the statements that put it there again: its
-# comment, its triggers and rules; the comments on its columns are (column, text)
+# what a person put on a view besides grants and its options (OPTIONS), as the statements that put it there again, in
+# this order: its comment, its triggers and rules with their comments, its owner; its columns' comments and defaults are
+# (column, comment, default)
 KEPT = """
-    SELECT format('COMMENT ON VIEW %s IS %L', $1, obj_description(to_regclass($1), 'pg_class'))
-     WHERE obj_description(to_regclass($1), 'pg_class') IS NOT NULL
-    UNION ALL SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgrelid = to_regclass($1) AND NOT tgisinternal
-    UNION ALL SELECT pg_get_ruledef(oid) FROM pg_rewrite WHERE ev_class = to_regclass($1) AND rulename <> '_RETURN'"""
-COLUMN_COMMENTS = """SELECT attname, col_description(attrelid, attnum) FROM pg_attribute WHERE attrelid = to_regclass($1)
-                        AND attnum > 0 AND col_description(attrelid, attnum) IS NOT NULL"""
+    SELECT s FROM (
+        SELECT 1, format('COMMENT ON VIEW %s IS %L', $1, obj_description(to_regclass($1), 'pg_class'))
+         WHERE obj_description(to_regclass($1), 'pg_class') IS NOT NULL
+        UNION ALL SELECT 2, pg_get_triggerdef(oid) FROM pg_trigger WHERE tgrelid = to_regclass($1) AND NOT tgisinternal
+        UNION ALL SELECT 2, pg_get_ruledef(oid) FROM pg_rewrite WHERE ev_class = to_regclass($1) AND rulename <> '_RETURN'
+        UNION ALL SELECT 3, format('COMMENT ON TRIGGER %I ON %s IS %L', tgname, $1, obj_description(oid, 'pg_trigger'))
+          FROM pg_trigger WHERE tgrelid = to_regclass($1) AND obj_description(oid, 'pg_trigger') IS NOT NULL
+        UNION ALL SELECT 3, format('COMMENT ON RULE %I ON %s IS %L', rulename, $1, obj_description(oid, 'pg_rewrite'))
+          FROM pg_rewrite WHERE ev_class = to_regclass($1) AND obj_description(oid, 'pg_rewrite') IS NOT NULL
+        UNION ALL SELECT 4, format('ALTER VIEW %s OWNER TO %s', $1, relowner::regrole) FROM pg_class
+         WHERE oid = to_regclass($1) AND relowner <> current_user::text::regrole) k(n, s) ORDER BY n"""
+ON_COLUMNS = """SELECT attname, col_description(attrelid, attnum), pg_get_expr(d.adbin, d.adrelid)
+                  FROM pg_attribute a LEFT JOIN pg_attrdef d ON (d.adrelid, d.adnum) = (a.attrelid, a.attnum)
+                 WHERE attrelid = to_regclass($1) AND attnum > 0
+                   AND (col_description(attrelid, attnum) IS NOT NULL OR d.oid IS NOT NULL)"""
 OPTIONS = "SELECT array_to_string(reloptions, ', ') FROM pg_class WHERE oid = to_regclass($1)"
+# a rule or trigger on the view $1 that names a column this run renames, retires ($3, $4: JSON lists) or drops from the
+# mirror ($2, whose dropped ones are in $4 too), of the view, of the change log $5 or of the mirror: created again from its
+# text, it would name another column or none
+BOUND = """
+    SELECT DISTINCT format('%s %s', CASE WHEN r.oid IS NULL THEN 'trigger' ELSE 'rule' END, coalesce(r.rulename, g.tgname)),
+           format('column %s of %s.%s', a.attname, n.nspname, c.relname)
+      FROM pg_depend d JOIN pg_attribute a ON (a.attrelid, a.attnum) = (d.refobjid, d.refobjsubid)
+      JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+      LEFT JOIN pg_rewrite r ON d.classid = 'pg_rewrite'::regclass AND r.oid = d.objid
+      LEFT JOIN pg_trigger g ON d.classid = 'pg_trigger'::regclass AND g.oid = d.objid
+     WHERE d.refclassid = 'pg_class'::regclass AND d.deptype = 'n' AND coalesce(r.ev_class, g.tgrelid) = to_regclass($1)
+       AND r.rulename IS DISTINCT FROM '_RETURN' AND c.oid IN (to_regclass($1), to_regclass($2), to_regclass($5))
+       AND a.attname IN (SELECT json_array_elements_text(CASE WHEN c.oid = to_regclass($2) THEN $4 ELSE $3 END::json))
+     ORDER BY 1, 2"""
 
 
 # the publications of a table's updates or deletes that need its primary key as its replica identity
@@ -791,10 +820,17 @@ def carry_out(conn, t, plan):
     54)."""
     renamed_to = {old: new for new, old in plan["renamed"].items()}
     t["grants"] = [(p, renamed_to.get(c, c), *rest) for p, c, *rest in sql(conn, GRANTS, [t["history"]])]
-    t["kept"] = [s for (s,) in sql(conn, KEPT, [t["history"]])] + [
-        f"COMMENT ON COLUMN {t['history']}.{quote(plan['moved'].get(c, c))} IS {literal(text)}"
-        for c, text in sql(conn, COLUMN_COMMENTS, [t["history"]])]
+    on_columns = [(quote(plan["moved"].get(c, c)), text, default)
+                  for c, text, default in sql(conn, ON_COLUMNS, [t["history"]])]
+    t["kept"] = [f"COMMENT ON COLUMN {t['history']}.{c} IS {literal(text)}" for c, text, _ in on_columns if text] + [
+        f"ALTER VIEW {t['history']} ALTER COLUMN {c} SET DEFAULT {default}" for c, _, default in on_columns if default] \
+        + [s for (s,) in sql(conn, KEPT, [t["history"]])]  # the owner last
     t["view_options"] = sql(conn, OPTIONS, [t["history"]])
+    for what, column in sql(conn, BOUND, [t["history"], t["mirror"], json.dumps(list(plan["moved"])),
+                                          json.dumps([*plan["moved"], *plan["gone"]]), t["log_table"]]):
+        t.setdefault("blocked", []).append(
+            f"the history view {t['name']}__history is created again for a change of columns, but {what} on it names "
+            f"{column}, which this run renames or drops, so it cannot be carried over")
     alter(conn, t, f"the columns of {t['name']} change", f"DROP VIEW IF EXISTS {t['history']}", t["history"])
     changes = {}
     logged = dict(sql(conn, COLUMNS, [t["log_table"]]))
