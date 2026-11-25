@@ -106,6 +106,15 @@ scratch directory given in the task (they may be gone; each item says enough to 
   family the values of earlier moments are under `<name>__<run>` (target.md:106 says it): one sentence beside the
   recipe.
 
+### From ticket 15's review
+- V1 the text offered to put back a lost comment on `_op` is the table's latest note in `_rowvioli.columns__log`,
+  even one written for an earlier change log under the same id (a change log created again, an old target name):
+  it could name stretches the new log never had. Scoping by target name alone would break a mirror renamed by
+  hand. Find the rule that is right for both (e.g. only notes not older than the change log's first row, or
+  checked against the log by `keys_of_log`), test both cases.
+- V2 a withheld reason of an ODBC source says "the source's server log has it", which SQL Server does not keep by
+  default: say "the source's server log or a trace has it" or what is true for every source.
+
 ## Acceptance criteria
 
 - [ ] Every item: a test seen red first, or a sentence under Comments why none and what was done instead.
