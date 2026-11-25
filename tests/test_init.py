@@ -325,9 +325,10 @@ def test_a_change_log_from_before_the_upgrade_that_fits_neither_key_stops_with_t
                "city from raw_erp.customers__log where customer_no = 1")
     erp.target("update _rowvioli.tables set requested_at = now()")
     reason = failed(erp)
+    # ticket 19: each of the two comments it gave was false, so it says that neither wrote it and asks for the key
     assert reason.startswith("the primary key of raw_erp.customers is (customer_no, name), the definition's key is "
-                             "(customer_no), and nothing in the target tells"), reason
-    assert """'[{"key": ["customer_no"]}]'""" in reason and """'[{"key": ["customer_no", "name"]}]'""" in reason
+                             "(customer_no), and the change log raw_erp.customers__log was written under neither"), reason
+    assert reason.endswith("""._op IS '[{"key": ["<the key column>"]}]'"""), reason
 
 
 WAITING = "select count(*) from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'"

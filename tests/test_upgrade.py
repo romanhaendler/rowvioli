@@ -266,7 +266,7 @@ def test_a_worker_role_of_least_rights_loads_under_0_4_1_and_after_init_with_the
         rv.target(f"drop owned by {worker} cascade; drop role {worker}")
 
 
-@pytest.mark.parametrize("hand", ["k2"])
+@pytest.mark.parametrize("hand", ["k2", "k3"])
 def test_a_primary_key_changed_by_hand_on_a_mirror_of_0_4_1_stops_and_the_key_it_says_changes_it_as_the_definition_would(
         rv, released, hand):
     """Ticket 19: 0.4.1 wrote the change log under (k), under which k2 was not unique; the definition changes the key

@@ -423,6 +423,10 @@ def before_the_record(conn, t, primary_key, key, log_columns, renamed):
                         f"before a run changed it: {say}")
     if fits[0] != fits[1]:
         return fits[0]
+    if not fits[0]:  # each comment of the two would be false (ticket 19)
+        raise Exception(f"the primary key of {t['name']} is ({', '.join(primary_key)}), the definition's key is "
+                        f"({', '.join(key)}), and the change log {t['name']}__log was written under neither, so a "
+                        f"person changed the primary key by hand before a run changed the key: {say}")
     comment = f"COMMENT ON COLUMN {t['log_table']}._op IS " + "{}"
     raise Exception(f"the primary key of {t['name']} is ({', '.join(primary_key)}), the definition's key is "
                     f"({', '.join(key)}), and nothing in the target tells which of them the change log {t['name']}__log "
