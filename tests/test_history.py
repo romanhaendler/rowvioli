@@ -1,4 +1,6 @@
 """A change log that exists is complete, and it says when; its history view (spec tests 10 to 20)."""
+import time
+
 import psycopg
 import pytest
 
@@ -223,6 +225,30 @@ def test_an_object_of_another_role_that_a_change_of_columns_reaches_is_named_wit
         assert erp.target("select reason from _rowvioli.runs order by run desc limit 1")[0][0] == says.format(other=other, worker=worker)
     finally:
         erp.target("drop table if exists raw_erp.vip; drop view if exists raw_erp.customers__history")
+        for role in (other, worker):
+            erp.target(f"drop owned by {role} cascade; drop role {role}")
+
+
+def test_a_lock_the_run_is_refused_fails_at_once_with_its_own_reason_not_after_10s_of_tries(erp):
+    db = erp.target("select current_database()")[0][0]
+    worker, other = f"worker_{db}", f"other_{db}"
+    try:
+        erp.target(f"create role {other}; create role {worker} login password 'w'")
+        for statement in WORKER.format(worker, db).split(";\n"):
+            erp.target(statement)
+        env = {"ROWVIOLI_TARGET_URL": erp.target_url.replace("postgres:harness-pw-7@", f"{worker}:w@")}
+        assert erp.run("run", env=env).returncode == 0
+        # the change log is another role's, which the worker may read but not lock
+        erp.target(f"alter table raw_erp.customers__log owner to {other}; grant select on raw_erp.customers__log to {worker}")
+        erp.source("alter table customers drop column city")
+        erp.target("update _rowvioli.tables set requested_at = now()")
+        started = time.monotonic()
+        assert erp.run("run", env=env).returncode == 1
+        assert time.monotonic() - started < 8
+        assert erp.target("select reason from _rowvioli.runs order by run desc limit 1") == [
+            ("permission denied for table customers__log",)]
+    finally:
+        erp.target("drop view if exists raw_erp.customers__history")
         for role in (other, worker):
             erp.target(f"drop owned by {role} cascade; drop role {role}")
 

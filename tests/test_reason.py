@@ -60,6 +60,12 @@ def test_a_password_with_a_line_break_is_scrubbed_before_the_reason_is_cut_there
     assert reason("cannot connect as Ge'he\nim, sorry", ["Ge'he\nim"]) == "cannot connect as ***, sorry"
 
 
+def test_a_connections_values_never_appear_in_a_reason_a_whole_url_before_its_parts():
+    url = "https://u:pw@h"
+    assert reason(f"cannot reach {url}/x as pw, with {{'t': 'tok'}}", [url, "pw", "tok"]) == (
+        "cannot reach ***/x as ***, with {'t': '***'}")
+
+
 def test_a_plain_exception_of_a_connector_of_ones_own_gives_its_first_line_as_a_drivers_does():
     try:  # raised outside the program, as a connector of one's own raises it; the next line may quote a row
         raise Exception("cannot read customers: duplicate key value\nDETAIL:  Key (id)=(42) already exists.")
