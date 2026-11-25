@@ -97,7 +97,7 @@ def read(connection, table, options):
                           params=[path, *named.values()])
         except duckdb.InvalidInputException as e:  # what DuckDB's sniffer read
             raise encoding(e) from None
-        except duckdb.ConversionException:  # DuckDB 1.5 reads the sample here, not 2.0 later; its message holds a row
+        except duckdb.ConversionException:  # where DuckDB reads the sample while it binds; its message holds a row
             raise Exception(f"{table}: a value in the file does not convert to the type its column is read as") \
                 from None
 

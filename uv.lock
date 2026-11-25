@@ -577,7 +577,7 @@ requires-dist = [
     { name = "adbc-driver-manager", specifier = ">=1.13,<2" },
     { name = "adbc-driver-postgresql", specifier = ">=1.13,<2" },
     { name = "arrow-odbc", marker = "extra == 'odbc'", specifier = ">=9.3.0" },
-    { name = "duckdb", marker = "extra == 'file'", specifier = ">=1.5" },
+    { name = "duckdb", marker = "extra == 'file'", specifier = ">=2" },
     { name = "httpx", marker = "extra == 'rest'", specifier = ">=0.28" },
     { name = "pyarrow", specifier = ">=19" },
     { name = "pynacl", specifier = ">=1.5" },

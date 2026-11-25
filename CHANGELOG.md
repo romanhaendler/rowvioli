@@ -17,6 +17,7 @@ Added:
 
 Changed (a working set-up can notice these):
 
+- **The `file` extra needs `duckdb>=2`** (was 1.5). DuckDB 1.5 reads a Parquet `timestamp` with a time zone and a `time` of nanoseconds cut to microseconds before the connector sees them, so the run could neither refuse nor round them; 2.0 delivers them whole.
 - A row the source changes is updated in the mirror, no longer deleted and inserted: a consumer's trigger on the mirror fires `ON UPDATE` for it, no longer `ON DELETE` and `ON INSERT`, so a trigger `BEFORE INSERT` alone that rewrites a value holds only until the next run updates the row to the source's value.
 - **A consumer's unique index on a column of a mirror that is not its key stops a run in which the source swaps values between two rows** (or moves them along a chain), which a delete and an insert let through: Postgres checks a unique index row by row in an update. The reason names the index and the way out, a constraint `UNIQUE ... DEFERRABLE`, which Postgres checks at the end of the statement, in its place; an exclusion constraint (`EXCLUDE`) likewise, `EXCLUDE ... DEFERRABLE` (docs/target.md).
 - `adbc-driver-postgresql` and `adbc-driver-manager` stay below 2: the `postgres` connector reads the driver manager's reader through a private attribute, which keeps the SQLSTATE of a source's error and so decides what of its message a reason shows.
