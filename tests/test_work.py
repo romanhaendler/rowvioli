@@ -337,7 +337,34 @@ def test_a_run_process_dying_before_its_claim_gives_a_line_with_its_exit_code(re
     ready.source("create table customers (id int primary key)")
     apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
     ready.target("alter table _rowvioli.runs add constraint broken check (false) not valid")
-    assert re.search(r"✘ a run process ended with exit code 1 before it claimed", ready.run("run", timeout=20).stderr)
+    # ticket 15, I1: with its cause, by the one rule of a reason
+    assert re.search(r'✘ a run process ended with exit code 1 before it claimed anything: new row for relation "runs" '
+                     r'violates check constraint "broken"', ready.run("run", timeout=20).stderr)
+
+
+def test_work_says_a_failure_before_the_claim_once_with_its_cause_and_not_four_times_a_second(ready):  # ticket 15, I1
+    ready.source("create table customers (id int primary key)")
+    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
+    ready.target("alter table _rowvioli.runs add constraint broken check (false) not valid")
+    worker = ready.start("work")
+    time.sleep(5)  # shortcut: a time, not a condition: the lines that must not come have no condition to wait for
+    worker.send_signal(signal.SIGTERM)
+    lines = [line for line in worker.communicate(timeout=20)[1].splitlines() if "before it claimed" in line]
+    assert len(lines) == 1 and 'violates check constraint "broken"' in lines[0], lines
+
+
+def test_a_run_process_whose_target_the_program_refuses_says_why_before_its_claim(ready):  # ticket 15, I1
+    ready.source("create table customers (id int primary key)")
+    apply(ready, source(ready, "erp", "", '"public.customers" = { key = ["id"] }'))
+    ok(ready)
+    worker = ready.start("work")
+    until(lambda: ready.target("select 1 from pg_stat_activity where datname = current_database() and query like "
+                               "'%The claimable tables%' and pid <> pg_backend_pid()"))  # it asks what is claimable
+    ready.target("update _rowvioli.meta set schema_version = 5; update _rowvioli.tables set requested_at = now()")
+    time.sleep(4)  # shortcut: a time, not a condition: the run process says it on the worker's stderr alone
+    worker.send_signal(signal.SIGTERM)
+    assert ("before it claimed anything: the target has schema version 5, this program works with version 4"
+            in worker.communicate(timeout=20)[1])
 
 
 def test_work_shows_the_mascot_before_its_start_line_at_a_terminal_and_nothing_that_moves_the_cursor(ready):

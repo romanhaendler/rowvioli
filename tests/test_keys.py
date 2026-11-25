@@ -139,6 +139,18 @@ def test_C15_a_primary_key_changed_by_hand_is_put_back_and_recorded_by_hand(erp)
     log_replays(erp)
 
 
+def test_a_primary_key_changed_by_hand_under_a_new_target_name_is_put_back_whatever_the_old_name_recorded(erp):
+    ok(erp)  # ticket 15, B3: the old target name, which stays, recorded the key that the hand now set
+    apply(erp, definition(erp, '"public.customers" = { key = ["name"], target_table = "clients" }\n'))
+    again(erp)
+    erp.target("alter table raw_erp.clients drop constraint clients_pkey, add primary key (customer_no)")
+    again(erp)
+    assert primary_key(erp, "raw_erp.clients") == ["name"]
+    assert erp.target("select count(*) from raw_erp.clients__log " + THIS_RUN) == [(0,)]
+    assert erp.target(f'select "column", "by" from _rowvioli.columns__log {THIS_RUN} order by 1') == [
+        ("customer_no", "hand"), ("name", "hand")]
+
+
 @pytest.mark.parametrize("consumer, named", [
     ("create table reporting.orders (id int, customer_no int references raw_erp.customers)",
      "constraint orders_customer_no_fkey on table reporting.orders depends on index raw_erp.customers_pkey"),
@@ -157,6 +169,22 @@ def test_C12_a_consumers_foreign_key_or_view_on_the_primary_key_stops_another_ke
                              f"but {named}"), reason
     assert (rows(erp.target, MIRROR), erp.target("select count(*) from raw_erp.customers__log")) == before
     assert primary_key(erp) == ["customer_no"]
+
+
+def test_a_publication_of_the_mirrors_deletes_stops_another_key_and_says_how_to_go_on(erp):  # ticket 15, C2
+    ok(erp)
+    erp.target("create publication feed for table raw_erp.customers")
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no", "name"] }\n'))
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp).replace("***", "x") == (
+        "the key of raw_erp.customers would change from (customer_no) to (customer_no, name), but publication feed "
+        "publishes its updates and deletes, for which the primary key is its replica identity: give it another for "
+        'the change, ALTER TABLE "raw_erp"."customers" REPLICA IDENTITY FULL: change or drop that, and the next run '
+        "goes on")
+    assert primary_key(erp) == ["customer_no"]
+    erp.target('ALTER TABLE "raw_erp"."customers" REPLICA IDENTITY FULL')  # the way out
+    again(erp)
+    assert primary_key(erp) == ["customer_no", "name"]
 
 
 def test_C12_a_consumers_foreign_key_on_a_key_column_that_leaves_the_key_is_named_with_a_view_in_the_way(erp):
@@ -222,6 +250,27 @@ def test_C13_a_key_value_that_changes_is_a_D_and_an_I(erp):
 ANOTHER_KEY = '"public.customers" = { key = ["customer_no", "name"] }\n'
 
 
+@pytest.mark.parametrize("changed_key", [False, True])
+def test_a_comment_on_op_that_names_another_key_than_the_change_logs_stops_with_the_text_to_put_back(erp, changed_key):
+    ok(erp)  # ticket 15, X5: a comment of the right shape was trusted, and the history view partitioned by its key
+    if changed_key:
+        apply(erp, definition(erp, ANOTHER_KEY))
+        again(erp)
+    keys = comment(erp)
+    erp.target("comment on column raw_erp.customers__log._op is "
+               f"""'{json.dumps(keys[:-1] + [{**keys[-1], "key": ["city"]}])}'""")
+    erp.source("alter table customers add column phone text")  # the history view is built anew
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    put_back = f"""COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '{json.dumps(keys)}'"""
+    assert failed(erp).replace("***", "x") == (
+        "the comment on column _op of the change log raw_erp.customers__log, which says the keys it was written "
+        f"under, names (city) last, where the change log is written under ({', '.join(keys[-1]['key'])}): put it "
+        f"back, {put_back}")
+    erp.target(put_back)
+    again(erp)
+    log_replays(erp)
+
+
 @pytest.mark.parametrize("removal", ["is null", "is 'our customers'", "a key no list", "a from no moment",
                                      "a column that does not exist"])
 def test_the_comment_on_op_removed_after_a_change_of_key_stops_the_run_with_the_text_to_put_back(erp, removal):
@@ -269,9 +318,14 @@ def test_a_column_of_an_old_key_retired_in_the_change_log_is_renamed_in_the_comm
     log_replays(erp)
 
 
-def test_a_column_of_the_old_key_retired_in_the_run_the_key_changes_keeps_its_values_and_frees_its_not_null(erp):
+# a change log of 0.4.1 has no comment on _op (ticket 15, B1: the old key was written with its name in the mirror)
+@pytest.mark.parametrize("of_0_4_1", [False, True])
+def test_a_column_of_the_old_key_retired_in_the_run_the_key_changes_keeps_its_values_and_frees_its_not_null(
+        erp, of_0_4_1):
     ok(erp)
     first = erp.target(LOADED_AT)[0][0]
+    if of_0_4_1:
+        erp.target("comment on column raw_erp.customers__log._op is null")
     apply(erp, definition(erp, '"public.customers" = { key = ["name"] }\n'))
     erp.source("alter table customers alter column customer_no type text")  # in the same run: goes and comes
     seam = again(erp)

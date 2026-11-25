@@ -25,7 +25,8 @@ def read(connection, table, options):
     columns = ", ".join(_read_as(f) for f in cur.adbc_execute_schema("SELECT * FROM " + name))
     cur.execute(f"SELECT {columns} FROM {name}")
     # the driver manager's own reader: an error while rows arrive keeps Postgres's SQLSTATE and fields, which decide
-    # what of its message a reason shows (decision 54, item 8); fetch_record_batch() gives Arrow's, with the text alone
+    # what of its message a reason shows (decision 54, item 8); fetch_record_batch() gives Arrow's, with the text alone,
+    # which a reason would show. A private attribute: pyproject.toml keeps the driver manager below 2
     reader = cur._results.reader
     schema = pa.schema([pa.field(f.name, _decimal(f)) if _is_numeric(f) else f for f in reader.schema])
 

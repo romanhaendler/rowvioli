@@ -84,10 +84,11 @@ def test_a_message_under_a_consumers_function_is_withheld_whatever_its_language(
         + WITHHELD
 
 
-def test_postgres_own_message_of_a_violated_constraint_under_a_function_keeps_its_names():
+def test_a_message_of_a_violated_constraint_under_a_function_is_withheld_since_its_code_may_have_written_it():
     assert reason('IO: [libpq] Execution error [PGRES_FATAL_ERROR]: ERROR:  duplicate key value violates unique '
                   'constraint "u"\nDETAIL:  Key (id)=(1) already exists.\nCONTEXT:  SQL function "f" statement 1') \
-        == 'duplicate key value violates unique constraint "u"'
+        == ('function "f" raised an error in the source; its message may hold a row\'s values, so it is left out here: '
+            "the source's server log has it")
 
 
 ODBC = "ODBC emitted an error calling 'SQLFetch': State: {}, Native error: 1, Message: "
@@ -100,15 +101,32 @@ ODBC = "ODBC emitted an error calling 'SQLFetch': State: {}, Native error: 1, Me
     ("HY000", "[MySQL][ODBC 9.1(w) Driver][mysqld-9.1.0]Incorrect integer value: 'Secret' for column 'n' at row 1", None),
     ("\0\0\0\0\0", "Secret is no number", None),
     ("P0001", "ERROR: bad row Secret;\nError while executing the query", None),
-    # names alone: a refused login, a table that is not there in SQL Server, the driver manager's own
+    # a table that is not there: of class 42 only a missing right is shown, and the reason names the table
+    ("42S02", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Invalid object name 'dbo.orders'.", None),
+    # names alone: a refused login, a missing right
     ("28000", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Login failed for user 'reader'.", True),
-    ("42S02", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Invalid object name 'dbo.orders'.", True),
-    ("IM002", "[unixODBC][Driver Manager]Data source name not found and no default driver specified", True)])
+    ("42501", "ERROR: permission denied for table orders", True),
+    # whatever its SQLSTATE, a failure to connect, before any row: the driver manager's own (ticket 15, D2)
+    ("IM002", "[unixODBC][Driver Manager]Data source name not found and no default driver specified", "connect"),
+    ("01000", "[unixODBC][Driver Manager]Can't open lib 'NoSuchDriver' : file not found", "connect")])
 def test_an_odbc_drivers_message_is_shown_by_its_sqlstate_alone(state, message, shown):  # decision 54, item 8
-    said = reason_line([], RuntimeError(ODBC.format(state) + message), "reading the source", "dbo.orders")
+    odbc = ODBC.replace("SQLFetch", "SQLDriverConnect") if shown == "connect" else ODBC
+    said = reason_line([], RuntimeError(odbc.format(state) + message), "reading the source", "dbo.orders")
     if shown:
-        assert said == ODBC.format(state) + message
+        assert said == odbc.format(state) + message
     else:
         assert said == (f"a{' function' if state == 'P0001' else ' statement'} raised an error"
                         f"{f' (SQLSTATE {state})' if state.isalnum() else ''} in the source, reading dbo.orders; its "
                         "message may hold a row's values, so it is left out here: the source's server log has it")
+
+
+@pytest.mark.parametrize("message", [  # as the driver gives them, without a SQLSTATE (ticket 15, R1: tried by hand)
+    "IO: Failed to prepare query: FATAL:  terminating connection due to administrator command\nserver closed the "
+    "connection unexpectedly\n\tThis probably means the server terminated abnormally",
+    "IO: Failed to describe prepared statement: FATAL:  terminating connection due to administrator command",
+    "IO: Failed to prepare query: server closed the connection unexpectedly",
+    "IO: Failed to prepare query: no connection to the server\n\nQuery was: select 2"])
+def test_a_connection_the_target_ended_is_known_without_a_sqlstate(message):
+    from rowvioli.load import lost
+    assert lost(RuntimeError(message))
+    assert not lost(RuntimeError("IO: Failed to prepare query: ERROR:  relation \"x\" does not exist"))

@@ -25,9 +25,11 @@ MIRROR = "select * from raw_erp.customers"
 
 @pytest.mark.parametrize("change, expected", [
     ("insert into customers values (4, 'Dora', null); alter table customers drop constraint customers_pkey;"
-     " insert into customers values (1, 'Anna2', null)", "occurs twice"),
+     " insert into customers values (1, 'Anna2', null)", 'a key combination of ("customer_no") occurs twice in the '
+     "source: make it unique there, or give the table a key that identifies a row"),
     ("alter table customers drop constraint customers_pkey; alter table customers alter customer_no drop not null;"
-     " insert into customers values (null, 'Nobody', null)", "is null"),
+     " insert into customers values (null, 'Nobody', null)", 'a key column of ("customer_no") is null in a row of the '
+     "source: give it a value there, or give the table a key whose columns always have one"),
     ("delete from customers", "zero rows"),
     ("delete from customers where customer_no <> 1", "67 % of the rows would be deleted"),
     ("alter table customers alter customer_no type text", "column customer_no has changed its type from integer to "
@@ -52,7 +54,8 @@ def test_another_key_that_does_not_identify_a_row_fails_the_run_and_leaves_the_m
     erp.source("insert into customers values (4, 'Anna', 'Ulm')")
     apply(erp, definition(erp, '"public.customers" = { key = ["name"] }\n'))
     erp.target("update _rowvioli.tables set requested_at = now()")
-    assert failed(erp) == 'a key combination of ("name") occurs twice'
+    assert failed(erp) == ('a key combination of ("name") occurs twice in the source: make it unique there, or give the '
+                           "table a key that identifies a row")
     assert rows(erp.target, MIRROR) == before
 
 
@@ -64,6 +67,27 @@ def test_a_table_that_lost_its_key_in_the_definition_says_so_and_names_both_ways
     assert "no key any more" in reason and "['customer_no']" in reason, reason
     assert "put the key back" in reason and "target_table" in reason, reason
     assert "[] differs" not in reason, reason
+
+
+@pytest.mark.parametrize("table, says", [('{ key = ["customer_no"], log = false }', "and this run would not "
+                                          "write to it"), ("{}", "no key any more")])
+def test_a_change_log_this_run_would_not_write_is_told_before_a_column_gone_from_the_source(erp, table, says):
+    ok(erp)  # ticket 15, P3: the stop for the column said to drop it, and doing so led into this stop
+    apply(erp, definition(erp, f'"public.customers" = {table}\n'))
+    erp.source("alter table customers drop column city")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    assert says in reason
+    # its way out, followed as it says, leads into no second stop: the column's drop is said with the change log's
+    ways = ['DROP TABLE "raw_erp"."customers__log" CASCADE'] + (
+        ['ALTER TABLE "raw_erp"."customers" DROP COLUMN "city"'] if "log = false" in table else [])
+    for way in ways:
+        assert way in reason.replace("***", "x"), reason
+        erp.target(way)
+    if "log = false" not in table:  # "and the mirror"
+        erp.target("drop table raw_erp.customers")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
 
 
 def test_a_new_source_column_appears_in_the_mirror_and_the_change_log_with_values(erp):
@@ -297,7 +321,17 @@ def test_a_table_without_a_key_is_emptied_the_same_way(erp):
     ('my "secret": value', "n::int", "22P02"), ("3000000000", "n::int", "22003"),
     # Postgres's own messages that show the value unquoted or as a name: date field value out of range: 2000-13-01,
     # relation "3000000000" does not exist
-    ("3000000000", "make_date(2000, length(n) + 3, 1)", "22008"), ("3000000000", "n::regclass", "42P01")])
+    ("3000000000", "make_date(2000, length(n) + 3, 1)", "22008"), ("3000000000", "n::regclass", "42P01"),
+    # a syntax error of a row's value, which Postgres quotes in class 42 too: syntax error in tsquery: "my secret 4711",
+    # syntax error at or near "4711", improper relation name (too many dotted names): a.b.c.secret.e, invalid name
+    # syntax; of class 42 only a missing right is shown
+    ("my secret 4711", "to_tsquery(n)", "42601"), ("secret 3000000000", "n::regtype::text", "42601"),
+    ("a.b.c.secret.e", "n::regclass", "42601"), ('"secret 3000000000', "n::regclass", "42602"),
+    # and in other classes: invalid configuration parameter name "…", could not open file "…", cross-database
+    # references are not implemented: …; so a message is shown by an allowlist of codes, not of classes
+    ("secret.3000000000", "set_config(n, 'x', true)", "42602"), ("secret 3000000000", "pg_read_file(n)", "58P01"),
+    ("a.secret.3000000000", "n::regclass", "0A000"),
+    ("my secret\n4711", "to_tsquery(n)", "42601")])  # a line break inside the value
 def test_a_value_in_the_sources_message_is_withheld_by_its_sqlstate(erp, value, column, state):  # decision 54, item 8
     erp.source("create table texts (k int, n text)")
     erp.source("insert into texts values (1, %s)", [value])
@@ -307,6 +341,17 @@ def test_a_value_in_the_sources_message_is_withheld_by_its_sqlstate(erp, value, 
     assert reason == (f"a statement raised an error (SQLSTATE {state}) in the source, reading public.quoting; its "
                       "message may hold a row's values, so it is left out here: the source's server log has it"), reason
     assert "secret" not in reason and "3000000000" not in reason and "2000-13" not in reason
+
+
+@pytest.mark.parametrize("where", ["target", "source"])
+def test_a_statement_timeout_that_ends_a_run_is_named_with_the_way_out(erp, where):  # ticket 15, I2
+    erp.source("create view many as select g as id from generate_series(1, 2000000) g")
+    apply(erp, definition(erp, '"public.many" = { key = ["id"] }\n'))
+    db = getattr(erp, f"{where}_url").rsplit("/", 1)[1]
+    getattr(erp, where)(f"alter role postgres in database {db} set statement_timeout = '300ms'")
+    assert failed(erp).replace("***", "x") == (
+        "canceling statement due to statement timeout: the statement_timeout of the role in the " + where + " ended it; "
+        "to let a run take longer, ALTER ROLE <its role> IN DATABASE <its database> SET statement_timeout = 0")
 
 
 def test_a_name_postgres_quotes_in_its_message_stays_in_the_reason(erp):
@@ -337,7 +382,11 @@ def withheld(rv):
     # not raised by the code but by Postgres inside it, with the row's value: whatever the language, a message under
     # a consumer's function is withheld
     ("execute format('select from %I', NEW.name)", "42P01"),  # relation "Anna2" does not exist
-    ("perform 1 / (length(NEW.name) - 5)", "22012")])
+    ("perform 1 / (length(NEW.name) - 5)", "22012"),
+    # in the words of Postgres's own message of a constraint (ticket 15, X2)
+    ("""raise exception 'new row for relation "customers" violates check constraint "%"', NEW.name""", "P0001"),
+    ("""raise exception using message = format('duplicate key value violates unique constraint "%s"', NEW.name), """
+     "errcode = 'unique_violation'", "23505")])
 def test_a_message_a_consumers_trigger_raises_on_the_target_is_withheld_and_the_reason_names_the_function(
         erp, statement, sqlstate):
     ok(erp)

@@ -2,7 +2,7 @@
 
 **Blocked by:** 14
 
-**Status:** claimed
+**Status:** resolved
 
 **Model:** Opus
 
@@ -81,10 +81,106 @@ reports of the wave are added below as they arrive.
 - B5 by reading: a first run that creates the schema and then fails leaves the schema (committed before the publish).
   Check; decide (document as intended, or make it part of the publish).
 
+### Shakedown P18b (Sonnet; scripts repro_newline.sh, repro_leaks.sh in scratchpad/shake/p18b)
+- X1 Leak (confirms and widens O1): a value in a shown SQLSTATE of other classes too: 42602 `invalid configuration
+  parameter name "…"` (set_config), 58P01 `could not open file "…"` (pg_read_file), 0A000 `cross-database references
+  are not implemented: …`, a line break inside a quoted value. An allowlist of SQLSTATE codes, not classes.
+- X2 a consumer's RAISE that copies the wording of a constraint's message is shown although under its function:
+  CONSTRAINT counts only with SQLSTATE class 23 and no function frame.
+- X3 the way out printed for a column whose name holds a control character does not work when pasted (written `?`):
+  write such a name so that it does, or say that it holds one and how to write it.
+- X4 = B2 side: a history view owned by another role: the reason names the view, its owner and the way out.
+- X5 a comment on `_op` of the right shape that names a wrong key is trusted silently: stop as for a damaged one.
+- X6 check only: `rowvioli run` without a table name and failing tables, against what the documents say.
+
+### Shakedown H2b (Sonnet; scripts in scratchpad/shake/h2b; the rest is ticket 16)
+- D1 a key column that changes family in an unpinned Parquet file gets the generic way out `DROP COLUMN "id"`, which
+  loses the key column for good: the key's stop (another target_table) comes first.
+- D2 a missing ODBC driver library (`Driver={NoSuchDriver}`, SQLSTATE 01000) is withheld: a failure to connect holds
+  no row's value and shows.
+- D3 with P1: a REST key field that differs in case (`ID` vs `id`): the null key's way out says the field may be
+  missing from the answer or named otherwise.
+
+### Shakedown H4b and H1b (Sonnet; scratchpad/shake/h4b, h1b; the connectors, `init` and `SESSION` are ticket 16)
+- R1 = I1 a failure before the claim never says its cause: the target restarted at the start gives Postgres's bare
+  `FATAL: terminating connection due to administrator command`; a role with `default_transaction_read_only` gives
+  `a run process ended with exit code 1 before it claimed anything` four times a second under `work`. The cause is
+  said (scrubbed, by the one rule of withheld) by `run` and `work`, and `work` does not repeat it four times a second.
+- I2 a role's `statement_timeout` ends a run with the COPY wrapper uncut and no way out: name the setting and the way
+  out (`ALTER ROLE … RESET statement_timeout`).
+- I3 only USAGE on a pre-created schema gives `permission denied for schema raw_src`: say that the worker's role needs
+  CREATE on it.
+
 ## Acceptance criteria
 
-- [ ] Every item: a test seen red first, or a sentence under Comments why none and what was done instead.
-- [ ] Documents (`docs/*.md`, decision 54/55, `CHANGELOG.md`) say what changed.
-- [ ] The whole suite passes.
+- [x] Every item: a test seen red first, or a sentence under Comments why none and what was done instead.
+- [x] Documents (`docs/*.md`, decision 54/55, `CHANGELOG.md`) say what changed.
+- [x] The whole suite passes.
 
 ## Comments
+
+Built on `sc-15` (2026-11-25), test first, one commit per item or per group of items that share their lines.
+
+- O1 and X1 are one rule: an allowlist of SQLSTATE codes, not classes (`SHOWN` in `load.py`, each group with the
+  reason its message holds no value). Classes 0A, 54 and 58 and every code of 42 but 42501 are withheld now; ODBC's
+  `IM` class went with D2 (a failure of `SQLDriverConnect` shows whatever its code). 55000 (C2's bare message) is
+  withheld too; the run names the publication itself. Tested against Postgres for 42601, 42602, 58P01, 0A000;
+  SQL Server's 42S02 is withheld by the unit test (the reason still names the table).
+- X2: Postgres's own message of a constraint raised inside a consumer's function is withheld now as well (the
+  earlier unit test that showed it changed), since its code may copy the words.
+- S5 and B4: one rule, `lock_timeout = 50ms` for the rest of the publishing transaction once `lock()` holds; a run
+  that meets a lock fails and publishes nothing. The price, in decision 53's note: an `apply` that holds the table's
+  row at that moment makes the run fail once instead of waiting; the next run publishes. A short step after a long
+  one that a consumer holds up now fails at once (the test of ticket 14 that expected `max_seconds` changed).
+- B2: carried over (comment, column comments, options, triggers, rules), not a stop; decision 54 says why. The
+  owner of the history view (X4) and of a child table (C3) are stops with the way out: carrying an owner over would
+  need rights the worker's role does not have.
+- C1, B5: documented, no test (no behaviour changed): `docs/target.md` and decision 54's price.
+- X6, checked: `run` ends after a failed table (every `failed()` of the suite runs `run` to its end, exit 1), and a
+  failed table waits its pause (`docs/loading.md` "Retry"); no fault.
+- R1: no test: a restart of the target in the 0.3 s between `run`'s start and its claim cannot be timed in the suite.
+  The run process and the CLI share `lost()` (57P01, 57P02), and I1's path, which carries it, is tested.
+- D2: tested in the ODBC container (`tests/odbc/run.sh`), the rule in `withheld()`, since the connectors are ticket
+  16's.
+- S1: the conftest docstring now says when a test calls a function of the program: six files already did (reason
+  lines from drivers not at hand, `work.say`, `definition.read`), so the rule was the untrue part.
+- S6 left: the inverse-rename dict built in `check`, `proven`, `fit` and `carry_out` (four contents, merging would
+  churn `load.py` for no reader); `connectors/file.py`'s long docstring line (the connectors are ticket 16's).
+- S7 left: every test with a Postgres source reads through `cur._results.reader`, so a driver that drops it fails
+  the suite at once and loudly; an upper bound in `pyproject.toml` would need a new lock while ticket 16 works on
+  the dependencies.
+- S2, S3, S4, S6, S8: no behaviour; the suite is the net.
+
+### Review (Opus, 2026-11-25)
+
+Every fix of O1/X1, S5+B4, P2, P3, P4, B1, B2, B3, D1, X5 and I1 taken out at the tip: each of their tests fails. Found
+and fixed, test first:
+
+- B2 incomplete: a history view given to another owner failed every change of columns with `permission denied for
+  table customers__log` also for a member or a superuser (a lock of a view takes its owner's rights on what it reads),
+  and an owner it could keep came back as the worker's role; its columns' defaults and the comments on its triggers
+  and rules were lost; a rule or trigger naming a column the run renames, retires or drops was created again from its
+  text, naming another column or failing with a withheld 42703 on every run. Now carried over, or one stop that says
+  what the owner needs and how to give it back, and one that names the rule (fc1275e).
+- S5+B4: under load (3 workers, `apply` in a loop, readers, FK consumers, 3 minutes) 2 of 265 runs that took `lock()`
+  failed on the table's row while `apply` held it up for 112 ms, with no reader of the mirror in the way. Rule now: a
+  run that meets a lock after `lock()` lets go of everything and tries its publishing again, as it tries the lock, for
+  up to ten seconds; measured again: 0 of 281 failed, readers waited at most 0.32 s (894610b).
+- P3's way out (drop the change log) led into the stop for the gone column; its drop is said with it (7810b3f).
+- I3 said CREATE alone: a role without USAGE granted it and met the same reason (568cbc4).
+- I1: what `connect()` refuses (`SystemExit`, such as another schema version) still came without its cause (437f471).
+- R1, tried by hand (20 runs, target restarted 0.1 to 0.5 s after the start): 12 gave Postgres's bare FATAL, none
+  `connection to the target lost`, since the driver gives no SQLSTATE between two statements. After 3152e49: 17 say
+  `connection to the target lost`, 3 that connected while it shut down `the database system is shutting down`.
+- S7: `adbc-driver-postgresql` and `adbc-driver-manager` bounded below 2; `uv lock` changed rowvioli's entries alone. A
+  fall back to the public reader was not taken: it gives no SQLSTATE, so a reason would show the message (6ac0e5e).
+- From ticket 16's review: a CSV that is not UTF-8 names the option `encoding` (8d07a96).
+
+Judged right as built: the allowlist `SHOWN` (of its codes only 42501 can carry a runtime string, and only the name
+of an existing object the role may not use, or a large object's number), P4's shared test, D1, X5, the worker's two
+seconds after a failure before the claim (SIGTERM is seen within two seconds as before). Left: the text to put back a
+lost comment on `_op` is the table's latest note, also one written for an earlier change log under the same id (a
+log dropped and created again, or an old target name), which may name stretches the new log never had.
+
+Resolved on branch `schema-changes`, from sc-15 (2583551). Review fixes: fc1275e, 8d07a96, 437f471, 894610b, 6ac0e5e,
+7810b3f, 568cbc4, 3152e49.

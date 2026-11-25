@@ -113,6 +113,14 @@ def test_a_wrong_password_fails_the_run_and_appears_nowhere(ready):
         assert leaks(ready, value, *out) == [], value
 
 
+@needs_driver
+def test_a_driver_that_is_not_installed_is_named_in_the_reason(ready):  # ticket 15, D2: SQLSTATE 01000
+    ready.source("create table customers (customer_no int primary key)")
+    erp(ready, '"public.customers" = {}', odbc_string(ready.source_url).replace(DRIVER, "NoSuchDriver"))
+    assert ready.run("run", env=ENV).returncode == 1
+    assert "Can't open lib 'NoSuchDriver'" in ready.target("select reason from _rowvioli.runs")[0][0]
+
+
 @pytest.mark.skipif(arrow_odbc is None, reason=HOW)
 @pytest.mark.parametrize("table", ["public.x'; drop table public.y; --", "public.x;drop table public.y", 'public."x"'])
 def test_a_table_name_with_a_quote_or_a_semicolon_is_refused_before_any_connection(ready, table):

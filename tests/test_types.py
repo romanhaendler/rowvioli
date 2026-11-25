@@ -259,6 +259,16 @@ def test_F4_a_guessed_type_that_flips_to_another_family_stops_with_the_hint_to_p
     assert files.target("select n from raw_files.counts order by id") == [(42,), (43,)]
 
 
+def test_a_parquet_key_column_that_flips_to_another_family_stops_with_the_way_out_of_a_key(files):  # ticket 15, D1
+    pq.write_table(pa.table({"id": pa.array([1, 2], pa.int32())}), files.dir / "files" / "counts.parquet")
+    assert load(files, COUNTS)[0] == 0
+    pq.write_table(pa.table({"id": pa.array(["1", "2"], pa.string())}), files.dir / "files" / "counts.parquet")
+    code, answer = load(files, COUNTS)  # the drop of the generic way out would take the key column for good
+    assert answer["raw_files.counts"]["reason"].replace("***", "x") == (  # x is the harness's password
+        "column id has changed its type from integer to text, a type of another family in the key, so a row before "
+        "cannot be told from one after: give the table another target_table, which begins a new mirror")
+
+
 def test_F4_a_parquet_column_that_flips_to_json_stops_with_the_hint_to_pin_it_as_well(files):
     parquet(files, [42, 43], pa.int64())
     assert load(files, COUNTS)[0] == 0
@@ -515,10 +525,11 @@ def test_a_run_ended_after_max_seconds_in_a_long_step_of_a_change_says_which_rol
     log_replays(erp)
 
 
-def test_a_run_ended_after_max_seconds_after_a_long_step_names_no_step(erp):
-    """The long step said its end, so a short step after it that a consumer holds up is not blamed on it."""
+def test_a_short_step_after_a_long_one_that_a_consumer_holds_up_names_no_step(erp):
+    """The long step said its end, so a short step after it that a consumer holds up is not blamed on it: the run
+    does not wait for it while it holds the mirror, and after ten seconds of tries it says what was in use (ticket 15)."""
     erp.source("insert into customers select g, 'n' || g, 'c' || (g % 7) from generate_series(4, 30) g")
-    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], max_seconds = 3 }\n'))
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], max_seconds = 30 }\n'))
     ok(erp)
     erp.source("alter table customers drop column city")  # a row of the change log per row: a long step
     erp.target("update _rowvioli.tables set requested_at = now()")
@@ -528,6 +539,7 @@ def test_a_run_ended_after_max_seconds_after_a_long_step_names_no_step(erp):
         reason = failed(erp).replace("***", "x")
     finally:
         holder.close()
-    assert reason == "ended after max_seconds = 3"
+    assert reason.startswith("raw_erp.customers, its change log and its history view were held by this run when an "
+                             "object it needed was in use"), reason
     again(erp)
     log_replays(erp)

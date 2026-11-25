@@ -302,7 +302,10 @@ def test_a_key_column_named_under_columns_that_no_file_has_stops_the_run_as_null
     orders(files, 1, 2)
     code, answer = load(files, '"orders_*.csv" = { key = ["order_id"], sep = ";", target_table = "orders", '
                                'columns = { order_id = "integer" } }\n')
-    assert (code, answer["raw_files.orders"]["reason"]) == (1, 'a key column of ("order_id") is null')
+    assert (code, answer["raw_files.orders"]["reason"]) == (1, 'a key column of ("order_id") is null in a row of the '
+                                                            "source or missing from its data, where it may be named "
+                                                            "otherwise, also in case: give it a value there, or give "
+                                                            "the table a key whose columns always have one")
     assert files.target("select to_regclass('raw_files.orders')") == [(None,)]
 
 
@@ -585,13 +588,16 @@ def test_a_time_finer_than_microseconds_fails_naming_the_column_and_a_type_under
          "01:00:00")]
 
 
-def test_a_csv_not_in_utf8_fails_without_its_text_and_loads_with_its_encoding(files):
-    (files.dir / "files" / "l1.csv").write_bytes("id;name\n1;Müller\n".encode("latin-1"))
+@pytest.mark.parametrize("before", [0, 100_000])  # the first character not in UTF-8 in the sample, or after it
+def test_a_csv_not_in_utf8_fails_without_its_text_saying_its_encoding_and_loads_with_it(files, before):
+    rows = "".join(f"{i};Anna\n" for i in range(before))
+    (files.dir / "files" / "l1.csv").write_bytes(f"id;name\n{rows}{before};Müller\n".encode("latin-1"))
     code, answer = load(files, '"l1.csv" = { sep = ";" }\n')
-    assert answer["raw_files.l1"]["reason"] == "Invalid Input Error: CSV Error on Line: 2"
+    assert answer["raw_files.l1"]["reason"] == (  # DuckDB's message gave the line, and the next its text
+        'l1.csv: the file is not UTF-8; give its encoding to the table, such as encoding = "latin-1"')
     code, answer = load(files, '"l1.csv" = { sep = ";", encoding = "latin-1" }\n')
     assert code == 0, answer
-    assert files.target("select name from raw_files.l1") == [("Müller",)]
+    assert files.target(f"select name from raw_files.l1 where id = '{before}'") == [("Müller",)]
 
 
 def test_an_unsigned_integer_of_a_parquet_file_arrives_whole(files):

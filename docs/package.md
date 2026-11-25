@@ -41,6 +41,7 @@ Two points:
 |---|---|---|
 | `pyarrow` | core | Apache-2.0 |
 | `adbc-driver-postgresql` | core, `postgres` connector | Apache-2.0 |
+| `adbc-driver-manager` | core, `postgres` connector: its reader keeps a source's SQLSTATE, read from a private attribute, so both stay below 2 | Apache-2.0 |
 | `pynacl` | core, encrypting connections | Apache-2.0 |
 | `duckdb` | extra `file` | MIT |
 | `arrow-odbc` | extra `odbc` | MIT |
