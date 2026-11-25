@@ -343,7 +343,7 @@ def test_a_value_in_the_sources_message_is_withheld_by_its_sqlstate(erp, value, 
     apply(erp, definition(erp, '"public.quoting" = {}\n'))
     reason = failed(erp)
     assert reason == (f"a statement raised an error (SQLSTATE {state}) in the source, reading public.quoting; its "
-                      "message may hold a row's values, so it is left out here: the source's server log has it"), reason
+                      "message may hold a row's values, so it is left out here: the source's server log or a trace has it"), reason
     assert "secret" not in reason and "3000000000" not in reason and "2000-13" not in reason
 
 
@@ -442,7 +442,7 @@ def test_a_message_a_function_in_a_source_view_raises_is_withheld(erp, statement
     state = "P0001" if "raise" in statement else "42P01"
     assert withheld(erp) == (f"function check_name(text) raised an error (SQLSTATE {state}) in the source, reading "
                              "public.checked; its message may hold a row's values, so it is left out here: the "
-                             "source's server log has it")
+                             "source's server log or a trace has it")
 
 
 @pytest.mark.parametrize("constraint, change, says", [
@@ -548,4 +548,4 @@ def test_a_message_a_function_in_pl_perl_or_pl_python_in_a_source_view_raises_is
     erp.source("create view checked as select customer_no, check_name(name) as name from customers")
     apply(erp, definition(erp, '"public.checked" = { key = ["customer_no"] }\n'))
     assert withheld(erp) == ('function "check_name" raised an error in the source; its message may hold a row\'s '
-                             "values, so it is left out here: the source's server log has it")
+                             "values, so it is left out here: the source's server log or a trace has it")

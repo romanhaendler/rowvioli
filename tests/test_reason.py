@@ -69,7 +69,7 @@ def test_a_source_table_named_columns_that_may_not_be_read_is_not_said_to_be_the
 
 
 WITHHELD = " raised an error in the source; its message may hold a row's values, so it is left out here: the source's " \
-           "server log has it"
+           "server log or a trace has it"
 
 
 @pytest.mark.parametrize("message, function", [
@@ -89,7 +89,7 @@ def test_a_message_of_a_violated_constraint_under_a_function_is_withheld_since_i
     assert reason('IO: [libpq] Execution error [PGRES_FATAL_ERROR]: ERROR:  duplicate key value violates unique '
                   'constraint "u"\nDETAIL:  Key (id)=(1) already exists.\nCONTEXT:  SQL function "f" statement 1') \
         == ('function "f" raised an error in the source; its message may hold a row\'s values, so it is left out here: '
-            "the source's server log has it")
+            "the source's server log or a trace has it")
 
 
 ODBC = "ODBC emitted an error calling 'SQLFetch': State: {}, Native error: 1, Message: "
@@ -121,7 +121,7 @@ def test_an_odbc_drivers_message_is_shown_by_its_sqlstate_alone(state, message, 
     else:
         assert said == (f"a{' function' if state == 'P0001' else ' statement'} raised an error"
                         f"{f' (SQLSTATE {state})' if state.isalnum() else ''} in the source, reading dbo.orders; its "
-                        "message may hold a row's values, so it is left out here: the source's server log has it")
+                        "message may hold a row's values, so it is left out here: the source's server log or a trace has it")
 
 
 @pytest.mark.parametrize("message", [  # as the driver gives them, without a SQLSTATE (ticket 15, R1: tried by hand)

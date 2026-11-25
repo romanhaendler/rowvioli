@@ -1372,7 +1372,7 @@ def withheld(e, step, source, name=None):
                 "target_table")
     return (f"{who} raised an error{f' (SQLSTATE {state})' if state and state.isalnum() else ''} in the {where}"
             f"{f', reading {source}' if source and where == 'source' else ''}; its message may hold a row's values, "
-            f"so it is left out here: the {where}'s server log has it")
+            f"so it is left out here: the {where}'s server log{' or a trace' if where == 'source' else ''} has it")
 
 
 def scrub(values, text):

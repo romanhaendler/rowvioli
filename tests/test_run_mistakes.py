@@ -74,7 +74,7 @@ def test_a_value_the_source_cannot_convert_stays_out_of_the_reason(erp, value, t
     assert r.returncode == 1
     why = erp.target("select reason from _rowvioli.runs where status = 'failed'")[0][0]
     assert why == (f"a statement raised an error (SQLSTATE {state}) in the source, reading public.cast_view; its message "
-                   "may hold a row's values, so it is left out here: the source's server log has it")
+                   "may hold a row's values, so it is left out here: the source's server log or a trace has it")
     assert value not in r.stdout + r.stderr
 
 
