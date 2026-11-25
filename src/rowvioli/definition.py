@@ -49,7 +49,8 @@ def read(directory, env=None, only=None):
     whole, sources, tables, names = {}, [], [], {}
     files = sorted(Path(directory).rglob("*.toml"))
     if not files:
-        raise SystemExit(f"{directory} holds no source files (*.toml); applying it would disable every table")
+        raise SystemExit(f"{directory} holds no source files (*.toml): write one, as the README shows with "
+                         "sources/erp.toml; applying none would disable every table")
     for path in files:
         label = path.relative_to(directory).as_posix()
         try:

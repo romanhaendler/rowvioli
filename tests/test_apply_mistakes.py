@@ -71,7 +71,8 @@ def test_apply_of_an_empty_directory_fails_and_disables_nothing(rv):
     (rv.dir / "empty").mkdir()
     r = rv.run("apply", "empty", env=ENV)
     assert r.returncode != 0
-    assert "empty" in r.stderr and "every table" in r.stderr
+    assert r.stderr.strip() == ("empty holds no source files (*.toml): write one, as the README shows with "
+                                "sources/erp.toml; applying none would disable every table")  # ticket 17, L4
     assert rv.target("select count(*) from _rowvioli.tables where enabled") == [(3,)]
     assert rv.run("apply", "--check", "empty", env=NO_TARGET).returncode != 0
 

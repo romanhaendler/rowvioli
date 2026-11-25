@@ -45,7 +45,7 @@ the key file /srv/etl/worker.key: No such file or directory; copy worker.key fro
 
   ```
   erp.toml: erp: max_agee is not a setting; did you mean max_age? (other keys go to the connector as options)
-  empty/ holds no source files (*.toml); applying it would disable every table
+  empty/ holds no source files (*.toml): write one, as the README shows with sources/erp.toml; applying none would disable every table
   ```
 - **It says a changed name.** For every table that is already in the target and gets another target name, `apply` prints one line, after it has written the definition. A table that was disabled and comes back under another name gets it too:
 
