@@ -306,19 +306,24 @@ def test_a_rule_on_the_history_view_that_names_a_column_the_run_renames_stops_it
     assert erp.target("select town from raw_erp.customers order by customer_no") == [("Bonn",), ("Essen",), (None,)]
 
 
-def test_a_worker_with_usage_alone_on_a_schema_it_did_not_create_is_told_it_needs_create(erp):  # ticket 15, I3
+@pytest.mark.parametrize("given", ["usage", "no right"])  # ticket 15, I3: told CREATE alone, one without USAGE looped
+def test_a_worker_without_its_rights_on_a_schema_it_did_not_create_is_told_them_and_loads_once_given(erp, given):
     db = erp.target("select current_database()")[0][0]
     worker = f"worker_{db}"
     try:
-        erp.target(f"create role {worker} login password 'w'; create schema raw_erp; "
-                   f"grant usage on schema raw_erp to {worker}")
+        erp.target(f"create role {worker} login password 'w'; create schema raw_erp")
+        if given == "usage":
+            erp.target(f"grant usage on schema raw_erp to {worker}")
         for statement in WORKER.format(worker, db).split(";\n"):
             erp.target(statement)
-        r = erp.run("run", env={"ROWVIOLI_TARGET_URL": erp.target_url.replace("postgres:x@", f"{worker}:w@")})
-        assert r.returncode == 1
-        assert erp.target("select reason from _rowvioli.runs")[0][0] == (
-            "permission denied for schema raw_erp: the worker's role needs CREATE on it (GRANT CREATE ON SCHEMA "
-            "raw_erp TO <the worker's role>)")
+        env = {"ROWVIOLI_TARGET_URL": erp.target_url.replace("postgres:x@", f"{worker}:w@")}
+        assert erp.run("run", env=env).returncode == 1
+        reason = erp.target("select reason from _rowvioli.runs")[0][0]
+        assert reason == ("permission denied for schema raw_erp: the worker's role needs USAGE and CREATE on it (GRANT "
+                          "USAGE, CREATE ON SCHEMA raw_erp TO <the worker's role>)")
+        erp.target(reason.rpartition("(")[2].rstrip(")").replace("<the worker's role>", worker))  # the way out
+        erp.target("update _rowvioli.tables set requested_at = now()")
+        assert erp.run("run", env=env).returncode == 0
     finally:
         erp.target(f"drop owned by {worker} cascade; drop role {worker}")
 

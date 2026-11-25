@@ -1294,8 +1294,9 @@ def reason_line(values, e, step, source=None):
         line = re.sub(r"must be owner of table \S+$", r"\g<0>: the worker's role must own it, or be a member of the "
                       r"role that owns it, to change its columns with the mirror's (ALTER TABLE <it> OWNER TO <the "
                       r"worker's role>)", line)
-        line = re.sub(r"permission denied for schema (\S+)$", r"\g<0>: the worker's role needs CREATE on it (GRANT "
-                      r"CREATE ON SCHEMA \1 TO <the worker's role>)", line)
+        # a target schema: without USAGE even the look for the mirror is refused (_rowvioli's rights are init's)
+        line = re.sub(r"permission denied for schema (?!_rowvioli$)(\S+)$", r"\g<0>: the worker's role needs USAGE "
+                      r"and CREATE on it (GRANT USAGE, CREATE ON SCHEMA \1 TO <the worker's role>)", line)
         line = re.sub(r"permission denied for table (columns(?:__log)?)$", r"\g<0>: the worker's role lacks a right on "
                       r"_rowvioli.\1, which rowvioli init printed with the upgrade to version 4 "
                       '(docs/operation.md "The target")', line)
