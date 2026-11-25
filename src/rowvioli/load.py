@@ -1347,10 +1347,11 @@ def reason_line(values, e, step, source=None, name=None):
                                          or str(getattr(e, "sqlstate", None) or "").startswith("28")):
         line += ("; the connection is the one the last apply stored: after changing a variable it reads, run apply "
                  "again")
-    if step == "publishing":  # rows of the mirror are deleted only where the source deleted them (ticket 17)
+    if step == "publishing":  # a row of the mirror is updated in place, deleted only where the source deleted it
         line = re.sub(r'^update or delete on table "[^"]*" violates foreign key constraint "[^"]*" on table ("[^"]*")$',
-                      r"\g<0>: the source deleted a row that table \1 refers to; delete the rows there that refer to "
-                      "it, or give the constraint ON DELETE CASCADE or ON DELETE SET NULL", line)
+                      r"\g<0>: the source deleted a row that table \1 refers to, or changed the value it refers to; "
+                      "delete the rows there that refer to it, or give the constraint ON DELETE CASCADE or ON DELETE "
+                      "SET NULL (ON UPDATE CASCADE for a changed value)", line)
     if step != "reading the source":  # a source may have a table of that name
         line = re.sub(r"must be owner of table \S+$", r"\g<0>: the worker's role must own it, or be a member of the "
                       r"role that owns it, to change its columns with the mirror's (ALTER TABLE <it> OWNER TO <the "

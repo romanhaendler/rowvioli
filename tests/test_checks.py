@@ -505,11 +505,31 @@ def test_a_row_the_source_deleted_that_a_consumers_foreign_key_refers_to_stops_w
     erp.target("update _rowvioli.tables set requested_at = now()")
     assert failed(erp) == (
         'update or delete on table "customers" violates foreign key constraint "orders_customer_no_fkey" on table '
-        '"orders": the source deleted a row that table "orders" refers to; delete the rows there that refer to it, or '
-        "give the constraint ON DELETE CASCADE or ON DELETE SET NULL")
+        '"orders"' + REFERS.format('"orders"'))
     erp.target("delete from reporting.orders")  # the way out
     erp.target("update _rowvioli.tables set requested_at = now()")
     ok(erp)
+
+
+REFERS = (": the source deleted a row that table {0} refers to, or changed the value it refers to; delete the rows "
+          "there that refer to it, or give the constraint ON DELETE CASCADE or ON DELETE SET NULL (ON UPDATE CASCADE "
+          "for a changed value)")
+
+
+def test_a_value_the_source_changed_that_a_consumers_foreign_key_refers_to_is_not_called_a_deleted_row(erp):
+    ok(erp)  # review of ticket 17: a foreign key onto a unique column of the mirror that is not its key
+    erp.target("alter table raw_erp.customers add constraint city_u unique (city); create schema reporting; "
+               "create table reporting.visits (city text references raw_erp.customers (city)); "
+               "insert into reporting.visits values ('Bonn')")
+    erp.source("update customers set city = 'Köln' where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == ('update or delete on table "customers" violates foreign key constraint "visits_city_fkey" '
+                           'on table "visits"' + REFERS.format('"visits"'))
+    erp.target("alter table reporting.visits drop constraint visits_city_fkey, add foreign key (city) references "
+               "raw_erp.customers (city) on update cascade")  # the way out
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    assert erp.target("select city from reporting.visits") == [("Köln",)]
 
 
 def test_a_source_table_created_anew_with_other_columns_says_what_it_may_be_and_the_setting_for_one_run(erp):  # H2
