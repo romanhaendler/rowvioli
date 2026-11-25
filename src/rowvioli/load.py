@@ -312,6 +312,17 @@ def check(conn, t, staged, mirror, log_columns, renamed):
             if not (keys := stretches(conn, t)):
                 before_the_record(conn, t, primary_key, key, log_columns, renamed)
             elif {renamed_to.get(c, c) for c in keys[-1]["key"]} != set(key):
+                # a first fill writes every row at one moment: under a key a change log was written under, no value has
+                # two rows of one _op at one moment (not an I while it lives, which rows deleted by hand also break)
+                with long(f"reading the change log {t['name']}__log under the key the comment on _op names, to tell "
+                          "whether it was written under it; raise max_seconds once, until a run has told it"):
+                    twice = sql(conn, f"SELECT 1 FROM ONLY {t['log_table']} GROUP BY "
+                                      f"{', '.join(quote(c) for c in keys[-1]['key'])}, _op, _loaded_at "
+                                      "HAVING count(*) > 1 LIMIT 1")
+                if twice:
+                    raise Exception(f"the comment on column _op of the change log {t['name']}__log names "
+                                    f"({', '.join(keys[-1]['key'])}) last, but the change log has several rows of one "
+                                    f"value of it at one moment, so it was not written under it: {written_under(t)}")
                 plan["key"] = {"was": [renamed_to.get(c, c) for c in keys[-1]["key"]], "by": "definition", "log": True,
                                "primary": primary_key}
         # the diff joins the mirror by the definition's key, or where it replaces it writes its old rows' D by the old
@@ -389,6 +400,13 @@ def noted(conn, t):
         return found[0][0]
 
 
+def written_under(t):
+    """The way out of a stop before the record where the change log was not written under a key (ticket 19)."""
+    return ("say the key it was written under, every column of the key the table had when its change log was written, "
+            "by the names the change log has, and the next run changes the key as the definition says: COMMENT ON "
+            f"COLUMN {t['log_table']}._op IS " + literal(json.dumps([{"key": ["<each column of that key>"]}])))
+
+
 def before_the_record(conn, t, primary_key, key, log_columns, renamed):
     """Decision 54: whether a person changed the primary key of a mirror the record does not know (a target of 0.4.1,
     which refused every run under a primary key other than the definition's). The table's last successful run loaded
@@ -413,9 +431,7 @@ def before_the_record(conn, t, primary_key, key, log_columns, renamed):
                                                               ORDER BY _loaded_at)) l
              WHERE at = _loaded_at OR (_op = 'I') <> (before IS NULL OR before = 'D') LIMIT 1""")
                 for k in keys]
-    say = ("say the key it was written under, the key the table had when its change log was written, and the next run "
-           f"changes the key as the definition says: COMMENT ON COLUMN {t['log_table']}._op IS "
-           + literal(json.dumps([{"key": ["<the key column>"]}])))
+    say = written_under(t)
     if len(keys) == 1:
         if fits[0]:
             return True

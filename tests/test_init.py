@@ -328,7 +328,7 @@ def test_a_change_log_from_before_the_upgrade_that_fits_neither_key_stops_with_t
     # ticket 19: each of the two comments it gave was false, so it says that neither wrote it and asks for the key
     assert reason.startswith("the primary key of raw_erp.customers is (customer_no, name), the definition's key is "
                              "(customer_no), and the change log raw_erp.customers__log was written under neither"), reason
-    assert reason.endswith("""._op IS '[{"key": ["<the key column>"]}]'"""), reason
+    assert reason.endswith("""._op IS '[{"key": ["<each column of that key>"]}]'"""), reason
 
 
 WAITING = "select count(*) from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'"
