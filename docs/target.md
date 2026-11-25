@@ -70,7 +70,15 @@ columns__log, columns__history   its change log and history view
 
 Today's state is read from the mirror. What changed when is in the change log, and every row of it says when: `_loaded_at` is the moment its run published, the same `now()` that goes into `loaded_at`. A run that finds nothing writes no log row, so the newest `_loaded_at` of a log is the last change, not the last load; the last load is the `age` in `rowvioli status`. Next to the log stands the view `<target table>__history`, which reads nothing but the log and gives every version of a row with the time it was valid.
 
-**A change log that exists is complete.** Replaying it from its last change of key (its first row, where the key never changed) gives the mirror, always, also after columns went or came. A log that is created begins with every row of the mirror as `I` (for a table on its first run that is the diff; for a mirror that was there before, for example after `log = false` was taken away, it replaces the diff, while the run still reports its diff counts). A run that would leave the log behind its mirror fails instead ([Checks before publishing](loading.md#checks-before-publishing)). So the history is either complete from its first moment or there is none.
+**A change log that exists is complete.** Replaying it from its last change of key (its first row, where the key never changed) gives the mirror, always, also after columns went or came. A log that is created begins with every row of the mirror as `I` (for a table on its first run that is the diff; for a mirror that was there before, for example after `log = false` was taken away, it replaces the diff, while the run still reports its diff counts). A run that would leave the log behind its mirror fails instead ([Checks before publishing](loading.md#checks-before-publishing)). So the history is either complete from its first moment or there is none. The replay takes, for each key value, its latest row and leaves it out where that is a `D`; within one run a key value has one row, except at a change of key, where a `D` of the old key and an `I` of the new one can meet on one key value at the same `_loaded_at` (`(id)` to `(n, id)`), and the `D` comes first. From the last change of key, whose moment is the `from` of the last entry in the comment on `_op` (none where the key never changed: then from the first row):
+
+```sql
+SELECT * FROM (
+  SELECT DISTINCT ON (customer_no) * FROM ONLY raw_erp.customers__log
+   WHERE _loaded_at > :from OR (_loaded_at = :from AND _op = 'I')
+   ORDER BY customer_no, _loaded_at DESC, _op = 'D') r
+ WHERE _op <> 'D';
+```
 
 Example: customer 7 moves and customer 9 is deleted between two runs. The time is the time of the run, which is the time consumers first saw the change. It is never a time of the source. Two changes of a row between two runs are one version, the last. A row that is deleted and inserted again between two runs is one `U`, or no change when it comes back as it was.
 
