@@ -85,6 +85,7 @@ Fixed:
 - A source that refuses a connection (a wrong password, an unknown host, a missing ODBC driver) adds to the reason that the connection is the one the last `apply` stored: after changing a variable, run `apply` again.
 - A password written plainly into a `postgres` source's URL that breaks it (`postgresql://lena:p@ss/w:rd#1@host/db`) is refused by `apply` and `list`, with the way to write it, as the target's address is. Before, it applied and the run failed with `could not translate host name "ss" to address`, a part of the password in the reason.
 - `apply` on a directory without a source file says to write one, as the README shows, which is the first step on an empty target too.
+- A date's `infinity` or `-infinity` read through `odbc` from psqlODBC, which gives it as `0000-00-00`, fails the run naming the column: the connector reads dates as their text. Before, it arrived as the day of the run with the run `ok`.
 
 ## 0.4.1 (2026-11-23)
 
