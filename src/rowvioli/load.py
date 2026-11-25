@@ -321,12 +321,23 @@ def check(conn, t, staged, mirror, log_columns, renamed):
     # and one that names another key last than the one the change log is written under, before this run's renames
     last = [renamed.get(c, c) for c in (plan["key"]["was"] if plan["key"].get("by") == "definition" else key)]
     if log_columns and last and (keys := stretches(conn, t)) and set(keys[-1]["key"]) != set(last):
+        text = noted(conn, t) or json.dumps([{"key": last}])
+        way = f"put it back, COMMENT ON COLUMN {t['log_table']}._op IS {literal(text)}"
+        # without a record under this target name (a mirror renamed by hand) a primary key changed by hand to the
+        # definition's is the other cause, and the comment the program wrote is no way out (ticket 18)
+        if not was and set(primary_key) == set(key):
+            [(name,)] = sql(conn, "SELECT conname FROM pg_constraint WHERE conrelid = $1::regclass AND contype = 'p'",
+                            [t["mirror"]])
+            back = (f"ALTER TABLE {t['mirror']} DROP CONSTRAINT {quote(name)}, ADD PRIMARY KEY "
+                    f"({', '.join(quote(c) for c in keys[-1]['key'])})")
+            way = (f"put the old primary key back, and the next run changes it as the definition says, {back}"
+                   if text == comments(conn, t)["_op"] else
+                   f"put back what was changed, the comment, COMMENT ON COLUMN {t['log_table']}._op IS "
+                   f"{literal(text)}, or the old primary key, {back}")
         raise Exception(f"the comment on column _op of the change log {t['name']}__log, which says the keys it was "
                         f"written under, names ({', '.join(keys[-1]['key'])}) last, where the change log is written "
                         f"under ({', '.join(last)}): the comment was changed, or the mirror's primary key was changed "
-                        "by hand to the definition's new key before a run changed it; put it back, COMMENT ON COLUMN "
-                        f"{t['log_table']}._op IS "
-                        + literal(noted(conn, t) or json.dumps([{"key": last}])))
+                        f"by hand to the definition's new key before a run changed it; {way}")
     # the same for a retired column's comment, whose text the record noted when the run retired it
     # also under an old target name (a mirror renamed by hand), where this one has not recorded the column otherwise
     for name, note in sql(conn, """SELECT "column", note FROM _rowvioli.columns c WHERE id = $1 AND NOT mirror

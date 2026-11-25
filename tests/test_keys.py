@@ -404,6 +404,40 @@ def test_a_lost_comment_on_op_of_a_mirror_renamed_by_hand_gives_its_keys_to_put_
     log_replays(erp, "raw_erp.clients")
 
 
+@pytest.mark.parametrize("earlier", [True, False])
+def test_a_primary_key_changed_by_hand_to_the_new_key_of_a_mirror_renamed_by_hand_stops_with_the_old_key_to_put_back(
+        erp, earlier):
+    ok(erp)  # ticket 18, review: without a record under the new name the stop gave the comment there already
+    moments = [(erp.target(LOADED_AT)[0][0], rows(erp.target, MIRROR))]
+    if earlier:  # a change of key by the definition, whose note gives the comment's text
+        apply(erp, definition(erp, ANOTHER_KEY))
+        moments.append((again(erp), rows(erp.target, MIRROR)))
+    old = comment(erp)[-1]["key"]
+    erp.target("alter table raw_erp.customers rename to clients; alter table raw_erp.customers__log rename to "
+               "clients__log; alter view raw_erp.customers__history rename to clients__history")
+    [(pk,)] = erp.target("select conname from pg_constraint where conrelid = 'raw_erp.clients'::regclass and "
+                         "contype = 'p'")
+    erp.target(f"alter table raw_erp.clients drop constraint {pk}, add constraint by_name primary key (name)")
+    pk = "by_name"
+    apply(erp, definition(erp, '"public.customers" = { key = ["name"], target_table = "clients" }\n'))
+    erp.source("update customers set city = 'Kiel' where customer_no = 3")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    reason = failed(erp)
+    put_back = f'ALTER TABLE "raw_erp"."clients" DROP CONSTRAINT "{pk}", ADD PRIMARY KEY ({", ".join(f'"{c}"' for c in old)})'
+    assert reason.endswith(put_back if earlier else f"or the old primary key, {put_back}"), reason
+    erp.target(put_back)
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    moments.append((erp.target("select loaded_at from _rowvioli.tables")[0][0],
+                    rows(erp.target, "select customer_no, name, city from raw_erp.clients")))
+    assert primary_key(erp, "raw_erp.clients") == ["name"]
+    log_replays(erp, "raw_erp.clients")
+    for moment, mirror in moments:
+        assert rows(lambda q: erp.target(q, [moment, moment]), "select customer_no, name, city from "
+                    "raw_erp.clients__history where _valid_from <= %s and (_valid_to > %s or _valid_to is null)") \
+            == mirror
+
+
 def test_a_column_of_an_old_key_retired_in_the_change_log_is_renamed_in_the_comment_on_op_too(erp):  # decision 9
     ok(erp)
     first = erp.target(LOADED_AT)[0][0]
