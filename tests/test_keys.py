@@ -264,11 +264,27 @@ def test_a_comment_on_op_that_names_another_key_than_the_change_logs_stops_with_
     put_back = f"""COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '{json.dumps(keys)}'"""
     assert failed(erp) == (
         "the comment on column _op of the change log raw_erp.customers__log, which says the keys it was written "
-        f"under, names (city) last, where the change log is written under ({', '.join(keys[-1]['key'])}): put it "
-        f"back, {put_back}")
+        f"under, names (city) last, where the change log is written under ({', '.join(keys[-1]['key'])}): the comment "
+        "was changed, or the mirror's primary key was changed by hand to the definition's new key before a run changed "
+        f"it; put it back, {put_back}")
     erp.target(put_back)
     again(erp)
     log_replays(erp)
+
+
+def test_a_primary_key_changed_by_hand_to_the_definitions_new_key_before_the_run_is_named_as_the_cause(erp):
+    ok(erp)  # ticket 17, M7
+    erp.target("alter table raw_erp.customers drop constraint customers_pkey, add primary key (customer_no, name)")
+    apply(erp, definition(erp, ANOTHER_KEY))
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    put_back = """COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '[{"key": ["customer_no", "name"]}]'"""
+    assert failed(erp) == (
+        "the comment on column _op of the change log raw_erp.customers__log, which says the keys it was written "
+        "under, names (customer_no) last, where the change log is written under (customer_no, name): the comment was "
+        "changed, or the mirror's primary key was changed by hand to the definition's new key before a run changed "
+        f"it; put it back, {put_back}")
+    erp.target(put_back)
+    again(erp)
 
 
 @pytest.mark.parametrize("removal", ["is null", "is 'our customers'", "a key no list", "a from no moment",

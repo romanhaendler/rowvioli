@@ -75,6 +75,7 @@ Fixed:
 - A type a person changed in the mirror to another family stops with the way out (drop the column from the mirror) also where the source changed its type too. Before, the run failed with a withheld `SQLSTATE 42804` on every run.
 - The stop for a column missing in the source, or of another family, without a change log says `and no change log keeps its values` instead of `without a change log its values are nowhere else`: it also fits the first run onto an existing table, whose change log only begins.
 - A key taken away while a change log exists says the least that works, the drop of the change log with its history view, as for `log = false`: the mirror stays and the next run loads it without a key. Before, the reason also told to drop the mirror, which consumers read.
+- The stop for a comment on `_op` that names another key last says its causes: the comment was changed, or the mirror's primary key was changed by hand to the definition's new key before a run changed it.
 
 ## 0.4.1 (2026-11-23)
 

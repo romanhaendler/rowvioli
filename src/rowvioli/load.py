@@ -295,7 +295,9 @@ def check(conn, t, staged, mirror, log_columns, renamed):
         noted = sql(conn, NOTED, [t["id"], KEYS_NOTE])
         raise Exception(f"the comment on column _op of the change log {t['name']}__log, which says the keys it was "
                         f"written under, names ({', '.join(keys[-1]['key'])}) last, where the change log is written "
-                        f"under ({', '.join(last)}): put it back, COMMENT ON COLUMN {t['log_table']}._op IS "
+                        f"under ({', '.join(last)}): the comment was changed, or the mirror's primary key was changed "
+                        "by hand to the definition's new key before a run changed it; put it back, COMMENT ON COLUMN "
+                        f"{t['log_table']}._op IS "
                         + literal(noted[0][0] if noted else json.dumps([{"key": last}])))
     # the same for a retired column's comment, whose text the record noted when the run retired it
     for name, note in sql(conn, 'SELECT "column", note FROM _rowvioli.columns WHERE id = $1 AND NOT mirror '
