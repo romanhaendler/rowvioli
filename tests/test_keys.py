@@ -310,6 +310,19 @@ def test_the_comment_on_op_removed_after_a_change_of_key_stops_the_run_with_the_
     log_replays(erp)
 
 
+def test_a_lost_comment_on_op_stops_the_run_when_the_change_logs_first_rows_are_those_of_the_run_that_noted_the_keys(erp):
+    ok(erp)  # the note and the oldest row of the change log carry the same moment: the note counts
+    erp.target("truncate raw_erp.customers__log")
+    apply(erp, definition(erp, ANOTHER_KEY))
+    again(erp)
+    keys = comment(erp)
+    erp.target("comment on column raw_erp.customers__log._op is null")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert failed(erp) == ("the comment on column _op of the change log raw_erp.customers__log, which says the keys it "
+                           "was written under, is missing or unreadable, and the key has changed: put it back, "
+                           f"""COMMENT ON COLUMN "raw_erp"."customers__log"._op IS '{json.dumps(keys)}'""")
+
+
 @pytest.mark.parametrize("how", ["created again", "another target_table"])
 def test_a_lost_comment_on_op_of_a_change_log_begun_after_a_change_of_key_is_no_stop(erp, how):
     ok(erp)  # ticket 17, V1: the text to put back was the note of an earlier change log under the same table
