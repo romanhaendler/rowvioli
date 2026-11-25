@@ -631,6 +631,22 @@ def test_a_run_never_waits_for_a_lock_while_holding_one_and_gives_up_after_10s(e
     log_replays(erp)
 
 
+def test_a_lock_timeout_before_the_run_holds_the_locks_is_no_wait_of_10s_but_the_runs_failure(erp):
+    ok(erp)  # only a run that holds the locks is let go and tried again: this one has none, its role's lock_timeout ends it
+    erp.target(f"alter role postgres in database {erp.target('select current_database()')[0][0]} "
+               "set lock_timeout = '300ms'")
+    erp.source("update customers set city = 'Köln' where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    with psycopg.connect(erp.target_url) as consumer:  # reads go on, an update waits
+        consumer.execute("lock table raw_erp.customers in share mode")
+        started = time.monotonic()
+        assert failed(erp).startswith("canceling statement due to lock timeout")
+        assert time.monotonic() - started < 8
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
+
+
 IN_USE = ("raw_erp.customers, its change log and its history view were held by this run when an object it needed was "
           "in use (such as a table with a foreign key to it, or its row in _rowvioli.tables while apply ran), and it "
           "stayed in use for 10 s of tries, so the run did not wait for it: nothing was published, the next run tries "
