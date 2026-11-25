@@ -114,6 +114,17 @@ def test_a_table_or_view_of_the_team_named_like_the_change_log_or_history_view_i
     assert erp.target(f"select * from {name}") == before
 
 
+@pytest.mark.parametrize("table, name", [('"public.notes" = {}', "raw_erp.notes__history"),
+                                         ('"public.customers" = { key = ["customer_no"], log = false }',
+                                          "raw_erp.customers__history")])
+def test_a_view_of_the_team_named_like_a_history_view_beside_a_table_without_a_change_log_is_no_stop(erp, table, name):
+    erp.target("create schema raw_erp")  # review of ticket 17, M2: such a table has no history view, and 0.4.1 loaded
+    erp.target(f"create view {name} as select 1 as x")
+    apply(erp, definition(erp, table + "\n"))
+    ok(erp)
+    assert erp.target(f"select * from {name}") == [(1,)]
+
+
 def test_a_new_source_column_appears_in_the_mirror_and_the_change_log_with_values(erp):
     ok(erp)
     erp.source("alter table customers add column phone text")

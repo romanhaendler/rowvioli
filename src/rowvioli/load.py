@@ -153,9 +153,12 @@ def check(conn, t, staged, mirror, log_columns, renamed):
     added, and `proven`, the note of each one the data proved. `unpinned`, the retired ones whose pin under `columns` was taken out. `moved`, the names the retired
     and renamed columns have after the run, old name to new."""
     types, logged, had = dict(staged), dict(log_columns), dict(mirror)
-    # first: a table or view of a person's under the name of the change log or the history view is never taken for it
-    for name, what, kind, own in ((f"{t['name']}__log", "change log", "r", ("_run", "_op", "_loaded_at")),
-                                  (f"{t['name']}__history", "history view", "v", ("_valid_from", "_valid_to"))):
+    # first: a table or view of a person's under the name of the change log or the history view is never taken for it.
+    # The change log's always, since one of the program's stops a run that would not write it (below)
+    names = [(f"{t['name']}__log", "change log", "r", ("_run", "_op", "_loaded_at"))]
+    if t["key"] and t["log"]:  # the history view's only where the run has one: 0.4.1 loaded beside a person's
+        names.append((f"{t['name']}__history", "history view", "v", ("_valid_from", "_valid_to")))
+    for name, what, kind, own in names:
         quoted = t["log_table"] if what == "change log" else t["history"]
         found = sql(conn, "SELECT relkind FROM pg_class WHERE oid = to_regclass($1)", [quoted])
         if found and (found[0][0] != kind or not set(own) <= dict(sql(conn, COLUMNS, [quoted])).keys()):
