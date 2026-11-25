@@ -321,8 +321,12 @@ def check(conn, t, staged, mirror, log_columns, renamed):
                         f"{t['log_table']}._op IS "
                         + literal(noted(conn, t) or json.dumps([{"key": last}])))
     # the same for a retired column's comment, whose text the record noted when the run retired it
-    for name, note in sql(conn, 'SELECT "column", note FROM _rowvioli.columns WHERE id = $1 AND NOT mirror '
-                                "AND strpos(note, $2) > 0", [t["id"], RETIRED_NOTE]):  # also under an old target name
+    # also under an old target name (a mirror renamed by hand), where this one has not recorded the column otherwise
+    for name, note in sql(conn, """SELECT "column", note FROM _rowvioli.columns c WHERE id = $1 AND NOT mirror
+                                      AND strpos(note, $2) > 0 AND ((target_schema, target_table) = ($3, $4)
+                                       OR NOT EXISTS (SELECT FROM _rowvioli.columns o WHERE (o.target_schema,
+                                                      o.target_table, o."column") = ($3, $4, c."column")))""",
+                          [t["id"], RETIRED_NOTE, t["schema"], t["table"]]):
         if name in said and name not in retired:
             text = retired_comment(note)
             raise Exception(f"the comment on column {name} of the change log {t['name']}__log, which says that it "

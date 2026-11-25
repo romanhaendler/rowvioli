@@ -560,6 +560,21 @@ def test_a_retired_column_whose_comment_a_person_removed_stops_with_the_text_to_
                                   "the old values of city")
 
 
+def test_a_source_column_under_a_new_target_name_named_like_an_old_target_names_retired_one_is_no_retired_column(erp):
+    ok(erp)  # ticket 18, item 4: the check read the note of the old target name's retired column
+    erp.source("alter table customers drop column city")
+    again(erp)
+    erp.source("alter table customers add column city integer")
+    again(erp)
+    [(run,)] = erp.target("select max(run) from _rowvioli.runs")
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], target_table = "clients" }\n'))
+    erp.source(f"alter table customers add column city__{run} text")
+    again(erp)
+    erp.source(f"update customers set city__{run} = 'x' where customer_no = 1")
+    again(erp)
+    log_replays(erp, "raw_erp.clients")
+
+
 @pytest.mark.parametrize("catalog", [None, "data", "definition"])
 def test_a_connector_of_ones_own_that_says_it_has_no_catalog_leaves_a_column_it_stops_delivering_empty(erp, catalog):
     env = {"ROWVIOLI_TEST_CATALOG": catalog} if catalog else {}
