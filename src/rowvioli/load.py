@@ -296,11 +296,15 @@ def check(conn, t, staged, mirror, log_columns, renamed):
             hand = {renamed_to.get(c, c) for c, k in recorded if k is not None} == set(key) if recorded else \
                 {renamed_to.get(c, c) for c in keys[-1]["key"]} == set(key) if keys else \
                 before_the_record(conn, t, primary_key, key, log_columns, renamed)
-            plan["key"] = {"was": primary_key, "by": "hand" if hand else "definition", "log": bool(log_columns)}
+            # by the definition, from the key the change log was written under, also where a person changed the
+            # primary key to a third one meanwhile (ticket 18)
+            old = was or ([renamed_to.get(c, c) for c in keys[-1]["key"]] if keys else primary_key)
+            plan["key"] = {"was": primary_key if hand else old, "by": "hand" if hand else "definition",
+                           "log": bool(log_columns), "primary": primary_key}
         elif log_columns and was and set(was) != set(key):
             # a person changed the primary key by hand to the definition's new key before a run did: the change log is
             # written under the recorded one, so the run changes the key as the definition would (ticket 18)
-            plan["key"] = {"was": was, "by": "definition", "log": True}
+            plan["key"] = {"was": was, "by": "definition", "log": True, "primary": primary_key}
         # the diff joins the mirror by the definition's key, unless it replaces it: a key column it lacks went by hand
         if plan["key"].get("by") != "definition" and (lost := [k for k in key if renamed.get(k, k) not in had]):
             raise Exception(f"key column {' and '.join(lost)} is missing in the mirror {t['name']}, dropped by hand, so "
@@ -931,7 +935,8 @@ def carry_out(conn, t, plan):
         was, key, by = plan["key"]["was"], t["key"] or [], plan["key"]["by"]
         note = (f"the primary key ({', '.join(was)}) was put back to the definition's ({', '.join(key)})"
                 if by == "hand" else None)
-        if was:
+        dropped = True
+        if plan["key"]["primary"]:
             [(name,)] = sql(conn, "SELECT conname FROM pg_constraint WHERE conrelid = $1::regclass AND contype = 'p'",
                             [t["mirror"]])
             why = f"the key of {t['name']} would change from ({', '.join(was)}) to ({', '.join(key)})"
@@ -942,9 +947,11 @@ def carry_out(conn, t, plan):
                 t.setdefault("blocked", []).append(
                     f"{why}, but {published} publishes its updates and deletes, for which the primary key is its "
                     f"replica identity: give it another for the change, ALTER TABLE {t['mirror']} REPLICA IDENTITY FULL")
-        # Postgres leaves NOT NULL behind, also where LIKE copied it; a column still in a key it refuses to free
-        if (loose := [c for c in was if c not in key]) and dropped:
-            for table, named in [(t["mirror"], {}), (t["log_table"], plan["retired"])][:2 if plan["key"]["log"] else 1]:
+        # Postgres leaves NOT NULL behind, also where LIKE copied it, and in the mirror of a primary key a person set;
+        # a column still in a key it refuses to free
+        for table, named, of in [(t["mirror"], {}, dict.fromkeys([*was, *plan["key"]["primary"]])),
+                                 (t["log_table"], plan["retired"], was)][:2 if plan["key"]["log"] else 1]:
+            if (loose := [c for c in of if c not in key]) and dropped:
                 # one retired in this run has its new name in the change log already
                 sql(conn, f"ALTER TABLE {table} " + ", ".join(f"ALTER {quote(named.get(c, c))} DROP NOT NULL"
                                                               for c in loose))

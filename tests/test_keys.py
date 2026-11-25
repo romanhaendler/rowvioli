@@ -295,6 +295,25 @@ def test_a_primary_key_changed_by_hand_to_the_definitions_new_key_before_the_run
         assert at(erp, moment) == mirror
 
 
+def test_a_primary_key_changed_by_hand_to_a_third_key_while_the_definition_changes_it_changes_from_the_recorded_one(
+        erp):
+    erp.source("update customers set city = 'Kiel' where customer_no = 3")
+    ok(erp)  # ticket 18, review: the stop said to write the hand's key into the comment, which the log was not written under
+    moments = [(erp.target(LOADED_AT)[0][0], rows(erp.target, MIRROR))]
+    erp.target("alter table raw_erp.customers drop constraint customers_pkey, add primary key (city)")
+    apply(erp, definition(erp, '"public.customers" = { key = ["name"] }\n'))
+    erp.source("update customers set city = 'Ulm' where customer_no = 2")
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    erp.source("alter table customers drop constraint customers_pkey, alter customer_no drop not null")  # no key now
+    erp.source("update customers set city = null, customer_no = null where customer_no = 1")
+    moments.append((again(erp), rows(erp.target, MIRROR)))
+    assert primary_key(erp) == ["name"]
+    assert [k["key"] for k in comment(erp)] == [["customer_no"], ["name"]]
+    log_replays(erp)
+    for moment, mirror in moments:
+        assert at(erp, moment) == mirror
+
+
 @pytest.mark.parametrize("removal", ["is null", "is 'our customers'", "a key no list", "a from no moment",
                                      "a column that does not exist"])
 def test_the_comment_on_op_removed_after_a_change_of_key_stops_the_run_with_the_text_to_put_back(erp, removal):
