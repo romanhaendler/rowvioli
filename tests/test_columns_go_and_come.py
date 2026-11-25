@@ -588,8 +588,20 @@ def test_a_run_never_waits_for_a_lock_while_holding_one_and_gives_up_after_10s(e
 
 
 IN_USE = ("raw_erp.customers, its change log and its history view were held by this run when an object it needed was "
-          "in use (such as a table with a foreign key to it, or its row in _rowvioli.tables while apply ran), so the run "
-          "did not wait for it: nothing was published, the next run tries again")
+          "in use (such as a table with a foreign key to it, or its row in _rowvioli.tables while apply ran), and it "
+          "stayed in use for 10 s of tries, so the run did not wait for it: nothing was published, the next run tries "
+          "again")
+
+
+def reads_meanwhile(rv):
+    """A reader of the mirror is never held up for a second while the run tries: it lets go between its tries."""
+    with psycopg.connect(rv.target_url) as reader:
+        reader.execute("set lock_timeout = '1s'")
+        for _ in range(5):
+            reader.execute("select count(*) from raw_erp.customers")
+            reader.rollback()
+            time.sleep(0.3)
+    return True
 
 
 def test_a_run_that_holds_the_mirror_waits_for_no_consumers_table_with_a_foreign_key_to_it(erp):  # ticket 15, B4
@@ -601,14 +613,18 @@ def test_a_run_that_holds_the_mirror_waits_for_no_consumers_table_with_a_foreign
     with psycopg.connect(erp.target_url) as consumer:  # the row the run deletes is checked against orders
         consumer.execute("lock table reporting.orders in exclusive mode")
         started = time.monotonic()
-        assert failed(erp).replace("***", "x") == IN_USE
-        assert time.monotonic() - started < 5
+        failing = erp.start("run")
+        assert reads_meanwhile(erp)
+        assert failing.wait(timeout=30) == 1
+        assert erp.target("select reason from _rowvioli.runs order by run desc limit 1")[0][0].replace(
+            "***", "x") == IN_USE
+        assert time.monotonic() - started < 15
     ok(erp)
     log_replays(erp)
 
 
-def test_a_run_that_adds_a_column_does_not_wait_for_an_apply_while_it_holds_the_mirror(erp):  # ticket 15, S5
-    erp.source("create table pause (seconds float); insert into pause values (0);"
+def test_a_run_that_adds_a_column_lets_go_of_the_mirror_while_an_apply_holds_its_row_and_then_publishes(erp):
+    erp.source("create table pause (seconds float); insert into pause values (0);"  # ticket 15, S5
                "create function slow(g int) returns int language plpgsql as $$ begin perform pg_sleep(seconds) "
                "from pause; return g; end $$;"
                "create view slow_customers as select slow(customer_no) as customer_no, name from customers")
@@ -621,12 +637,9 @@ def test_a_run_that_adds_a_column_does_not_wait_for_an_apply_while_it_holds_the_
     until(lambda: erp.target("select status from _rowvioli.status") == [("loading",)])
     with psycopg.connect(erp.target_url) as applying:  # the table's row, as an apply holds it until it commits
         applying.execute("select from _rowvioli.tables for update")
-        # the run gave up and rolled back, and waits to store its reason, holding nothing (the rows take 1.5 s to read)
-        until(lambda: erp.target("select 1 from pg_stat_activity where query like 'UPDATE _rowvioli.tables SET reason%'"
-                                 " and wait_event_type = 'Lock'"), timeout=5)
-    assert loading.wait(timeout=30) == 1
-    assert erp.target("select reason from _rowvioli.runs where status = 'failed'")[0][0].replace("***", "x") == IN_USE
-    erp.source("update pause set seconds = 0")
-    erp.target("update _rowvioli.tables set requested_at = now()")
-    ok(erp)
+        # the run has read the rows (1.5 s) and met the row: it lets go of the mirror and tries again
+        until(lambda: erp.target("select 1 from pg_stat_activity where query like 'UPDATE _rowvioli.tables SET "
+                                 "loaded_at%'"), timeout=5)
+        assert reads_meanwhile(erp)
+    assert loading.wait(timeout=30) == 0, loading.stdout.read()
     assert columns(erp) == ["customer_no", "name", "city"]

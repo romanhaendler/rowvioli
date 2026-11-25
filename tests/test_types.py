@@ -527,9 +527,9 @@ def test_a_run_ended_after_max_seconds_in_a_long_step_of_a_change_says_which_rol
 
 def test_a_short_step_after_a_long_one_that_a_consumer_holds_up_names_no_step(erp):
     """The long step said its end, so a short step after it that a consumer holds up is not blamed on it: the run
-    does not wait for it while it holds the mirror (ticket 15)."""
+    does not wait for it while it holds the mirror, and after ten seconds of tries it says what was in use (ticket 15)."""
     erp.source("insert into customers select g, 'n' || g, 'c' || (g % 7) from generate_series(4, 30) g")
-    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], max_seconds = 3 }\n'))
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no"], max_seconds = 30 }\n'))
     ok(erp)
     erp.source("alter table customers drop column city")  # a row of the change log per row: a long step
     erp.target("update _rowvioli.tables set requested_at = now()")

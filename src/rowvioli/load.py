@@ -118,15 +118,21 @@ def load(conn, t):
     if mirror:  # under another key the mirror is replaced as a whole, and only its shrinkage counts
         check_delete_share(conn, t, rows_read, None if plan["key"] else counts)
     t["step"] = "publishing"
-    try:
-        return publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, plan)
-    except Exception as e:  # lock() bounds every wait after it (decision 54)
-        if not (t.get("locked") and getattr(e, "sqlstate", None) == "55P03"):  # lock_not_available
-            raise
-        raise Exception(f"{t['name']}, its change log and its history view were held by this run when an object it "
-                        "needed was in use (such as a table with a foreign key to it, or its row in _rowvioli.tables "
-                        "while apply ran), so the run did not wait for it: nothing was published, the next run tries "
-                        "again") from None
+    t["tries"] = time.monotonic() + 10  # decision 54: lock() and every wait after it, for up to ten seconds
+    while True:
+        t["locked"], t["blocked"] = False, []
+        try:
+            return publish(conn, t, staged, delivered, mirror, log_columns, rows_read, counts, plan)
+        except Exception as e:  # lock() bounds every wait after it at 50 ms: the run lets go of all and tries again
+            if not (t["locked"] and getattr(e, "sqlstate", None) == "55P03"):  # lock_not_available
+                raise
+            sql(conn, "ROLLBACK")
+            if time.monotonic() > t["tries"]:
+                raise Exception(f"{t['name']}, its change log and its history view were held by this run when an "
+                                "object it needed was in use (such as a table with a foreign key to it, or its row in "
+                                "_rowvioli.tables while apply ran), and it stayed in use for 10 s of tries, so the run "
+                                "did not wait for it: nothing was published, the next run tries again") from None
+            time.sleep(0.1)
 
 
 def acting(stated, had, delivered, logged):
@@ -729,7 +735,6 @@ def lock(conn, t):
                         f"when it creates the view again for a change of columns: the worker's role must be a member of "
                         f"{owner}, and {owner} needs CREATE on schema {schema} and UPDATE on the change log "
                         f"{t['log_table']}; or give it back, ALTER VIEW {t['history']} OWNER TO {me}")
-    end = time.monotonic() + 10
     while True:
         sql(conn, "BEGIN")
         try:
@@ -741,7 +746,7 @@ def lock(conn, t):
             sql(conn, "ROLLBACK")
             if getattr(e, "sqlstate", None) != "55P03":  # lock_not_available
                 raise
-            if time.monotonic() > end:
+            if time.monotonic() > t["tries"]:  # since the first try (load)
                 raise Exception(f"{t['name']}, its change log or its history view stayed in use for 10 s, so its "
                                 "columns could not change; the next run tries again") from None
             time.sleep(0.1)
