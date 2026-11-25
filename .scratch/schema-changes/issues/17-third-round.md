@@ -117,9 +117,51 @@ scratch directory given in the task (they may be gone; each item says enough to 
 
 ## Acceptance criteria
 
-- [ ] Every item: a test seen red first, or a sentence under Comments why none and what was done instead.
-- [ ] Documents (`docs/*.md`, decision 54/55, `CHANGELOG.md`) say what changed; no new entry in
+- [x] Every item: a test seen red first, or a sentence under Comments why none and what was done instead.
+- [x] Documents (`docs/*.md`, decision 54/55, `CHANGELOG.md`) say what changed; no new entry in
       `docs/open-points.md`.
-- [ ] The whole suite and `tests/odbc/run.sh` pass.
+- [x] The whole suite and `tests/odbc/run.sh` pass.
 
 ## Comments
+
+Built on `sc-17` (Opus, 2026-11-25), one commit per item, each test seen red first unless said here.
+
+- T1 fixed, not only documented: `odbc` reads every date as its text (`map_schema`, `yyyy-mm-dd` as ODBC writes it)
+  and casts it back per batch; psqlODBC's `0000-00-00` fails naming the column. Tested in the ODBC container.
+- L1: the sentence is added for a failed connect through ADBC (`Failed to connect`), ODBC (`SQLDriverConnect`) or a
+  28xxx; a connector of one's own that fails to connect is not recognised.
+- L2/G2: one sentence for 42P01, 42703, 42704, 42883 and ODBC's 42S02, 42S22 in the source, not under a function. It
+  cannot tell the table from an object a view reads, so it names both and the way for a renamed table; 42703 and
+  42S22 only by the unit test (no statement the program sends can raise them on demand).
+- L3: `target.check_address` is reused for every `postgres(ql)://` string of a connection, in `apply` and `list`.
+- L4: one message for an empty and a full target (no query of the target): "write one, as the README shows".
+- J3 judged: what the connector delivers is checked in one place (`stream()`, no batch or another schema). An error
+  the connector's own code raises stays as raised: pyarrow raises `precision should be between 1 and 38` inside the
+  connector, before the run sees a column, so the decimal case cannot name the column.
+- M1 judged: not the way out the ticket named (`DEFERRABLE`), but the cause: a `U` is an `UPDATE` in place instead of
+  `DELETE` + `INSERT`. Deferring helps only where the row stays, cannot help `ON DELETE CASCADE`/`SET NULL`, which
+  silently took the consumer's rows (seen red, both), and would need a change of the consumer's object. A row the
+  source deletes still stops on such a key, now with the way out. A consumer's trigger sees `UPDATE` (CHANGELOG
+  "Changed"); two tests' insert triggers became insert-or-update. Decision 55.
+- M3: the trigger is the columns table (`mirror` true for a column now in neither mirror nor source), so the one
+  pass over the change log happens once; a table without a record (before version 4) is not covered.
+- M6 judged worth a bullet in docs/operation.md ("Moving onto existing tables"), with `max_delete_share = 0` as the
+  existing way to see the first run's deletes; no machinery.
+- M7: the cause is added; the docs say that putting the old primary key back lets the run change the key with the
+  history kept (that path is the ordinary change of key, not tested again here).
+- E1: no red possible for the helper: its stretch filter already leaves out the `D` rows at the moment of a change
+  of key, so the tie cannot occur in it; it now uses exactly the documented query (`_op = 'D'` last, `ONLY`).
+- E2: the special branch for a key taken away is deleted; the general reason (drop the change log with its view, or
+  rename) holds and was followed in the test (`ok`, mirror kept).
+- E3: docs one sentence; the harness's password is `harness-pw-7` now, and every `.replace("***", "x")` in the tests
+  is gone. `tests/test_work.py` starts a container of its own and keeps `x`.
+- E4 not mine (the coordinator sets the version).
+- G1: documented (docs/loading.md "A type", decision 54): Postgres has no `integer[] = bigint[]`, so an array kept in
+  its family needs casts in `misfits`, `diff` and `proven`, more than a few lines. The existing B13 test holds it.
+- G3, M6, J1: documents only, no test.
+- V1: rule by moment: a note counts only if the change log has a row no later than it (EXISTS, which ends at once on
+  a log that is only appended to); scoping by target name would lose a mirror renamed by hand. Both tested.
+- V2: "the source's server log or a trace has it", for every source.
+
+Suites at the tip (after merging schema-changes 7f19c9c): the whole suite 868 passed, 24 skipped (8 min 11 s);
+`tests/odbc/run.sh` 20 passed, 1 skipped.
