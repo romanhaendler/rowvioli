@@ -63,8 +63,8 @@ TABLES = {"customers": '{ key = ["id"] }', "dropped": '{ key = ["id"] }', "viewe
           "nolog": '{ key = ["id"], log = false }'}
 
 
-def definition(rv, tables):
-    rv.definition({"erp.toml": f'[erp]\ntype = "postgres"\nmax_age = "1h"\n[erp.connection]\nurl = '
+def definition(rv, tables, max_age="1h"):
+    rv.definition({"erp.toml": f'[erp]\ntype = "postgres"\nmax_age = "{max_age}"\n[erp.connection]\nurl = '
                                f'"{rv.source_url}"\n[erp.tables]\n'
                    + "".join(f'"public.{t}" = {o}\n' for t, o in tables.items())})
 
@@ -290,16 +290,16 @@ def test_a_primary_key_changed_by_hand_on_a_mirror_of_0_4_1_stops_and_the_key_it
     rv.target(f"alter table raw_erp.t drop constraint t_pkey, add primary key ({hand})")
     rv.target("update _rowvioli.tables set requested_at = now()")
     assert rv.run("run").returncode == 1
-    say = ("say the key it was written under, the key the table had when its change log was written, and the next "
-           """run changes the key as the definition says: COMMENT ON COLUMN "raw_erp"."t__log"._op IS """
-           """'[{"key": ["<the key column>"]}]'""")
+    say = ("say the key it was written under, every column of the key the table had when its change log was written, "
+           "by the names the change log has, and the next run changes the key as the definition says: COMMENT ON "
+           """COLUMN "raw_erp"."t__log"._op IS '[{"key": ["<each column of that key>"]}]'""")
     assert reasons(rv)["t"] == (
         "the change log raw_erp.t__log was not written under (k2), the key of the definition and of the mirror's "
         "primary key, as after a primary key changed by hand before a run changed it, or rows of the mirror deleted by "
         "hand: " + say if hand == "k2" else
         "the primary key of raw_erp.t is (k3), the definition's key is (k2), and the change log raw_erp.t__log was "
         "written under neither, so a person changed the primary key by hand before a run changed the key: " + say)
-    rv.target(say.split("says: ")[1].replace("<the key column>", "k"))
+    rv.target(say.split("says: ")[1].replace("<each column of that key>", "k"))
     rv.target("update _rowvioli.tables set requested_at = now()")
     assert rv.run("run").returncode == 0, reasons(rv)
     moments.append((rv.target("select loaded_at from _rowvioli.tables")[0][0], rows(rv.target, "select * from raw_erp.t")))
@@ -313,3 +313,52 @@ def test_a_primary_key_changed_by_hand_on_a_mirror_of_0_4_1_stops_and_the_key_it
     rv.target("update _rowvioli.tables set requested_at = now()")
     assert rv.run("run").returncode == 0
     assert rv.target("select count(*) from raw_erp.t__log where _run = (select max(run) from _rowvioli.runs)") == [(0,)]
+
+
+def test_a_comment_on_op_naming_columns_the_change_log_has_several_rows_of_at_one_moment_stops_and_the_true_key_goes_on(
+        rv, released):
+    """Ticket 19, the comment a person writes at its stop: 0.4.1 wrote the change log under (k1, k2), rows of the mirror
+    were deleted by hand, and the definition changed elsewhere. A comment naming (k1) alone is no key the change log
+    was written under (its first fill has several rows of one k1 at one moment), so the run stops; (k1, k2) goes on."""
+    for args in (["init"], ["key", "new"]):
+        assert old(rv, released, *args).returncode == 0
+    rv.source("create table b (k1 int, k2 text, v text, primary key (k1, k2))")
+    rv.source("insert into b select g % 4, 'x' || (g / 4), 'v' from generate_series(1, 12) g")
+    definition(rv, {"b": '{ key = ["k1", "k2"] }'})
+    assert old(rv, released, "apply", "sources").returncode == 0
+    moments = []
+    for change in ("select", "update b set v = 'w' where k1 = 2"):
+        rv.source(change)
+        rv.target("update _rowvioli.tables set requested_at = now()")
+        assert old(rv, released, "run").returncode == 0
+        moments.append((rv.target("select loaded_at from _rowvioli.tables")[0][0],
+                        rows(rv.target, "select * from raw_erp.b")))
+        if change == "select":
+            rv.target("delete from raw_erp.b where k1 = 1")  # by hand: 0.4.1 inserts them again, a second I
+    assert rv.run("init").returncode == 0
+    definition(rv, {"b": '{ key = ["k1", "k2"] }'}, max_age="3h")
+    assert rv.run("apply", "sources").returncode == 0
+    rv.source("update b set v = 'z' where k1 = 3; delete from b where k1 = 1 and k2 = 'x1'")
+    rv.target("update _rowvioli.tables set requested_at = now()")
+    assert rv.run("run").returncode == 1
+    assert reasons(rv)["b"].startswith("the change log raw_erp.b__log was not written under (k1, k2)"), reasons(rv)
+    rv.target("""COMMENT ON COLUMN raw_erp.b__log._op IS '[{"key": ["k1"]}]'""")
+    rv.target("update _rowvioli.tables set requested_at = now()")
+    assert rv.run("run").returncode == 1
+    assert reasons(rv)["b"] == (
+        "the comment on column _op of the change log raw_erp.b__log names (k1) last, but the change log has several "
+        "rows of one value of it at one moment, so it was not written under it: say the key it was written under, "
+        "every column of the key the table had when its change log was written, by the names the change log has, and "
+        """the next run changes the key as the definition says: COMMENT ON COLUMN "raw_erp"."b__log"._op IS """
+        """'[{"key": ["<each column of that key>"]}]'""")
+    rv.target("""COMMENT ON COLUMN raw_erp.b__log._op IS '[{"key": ["k1", "k2"]}]'""")
+    rv.target("update _rowvioli.tables set requested_at = now()")
+    assert rv.run("run").returncode == 0, reasons(rv)
+    assert rows(rv.target, "select * from raw_erp.b") == rows(rv.source, "select * from b")
+    log_replays(rv, "raw_erp.b")
+    for moment, mirror in moments:
+        assert rows(lambda q: rv.target(q, [moment, moment]), "select k1, k2, v from raw_erp.b__history where "
+                    "_valid_from <= %s and (_valid_to > %s or _valid_to is null)") == mirror
+    rv.target("update _rowvioli.tables set requested_at = now()")
+    assert rv.run("run").returncode == 0
+    assert rv.target("select count(*) from raw_erp.b__log where _run = (select max(run) from _rowvioli.runs)") == [(0,)]

@@ -64,5 +64,11 @@ Built on `sc-19` from `schema-changes` 4eecd7e (Opus, 2026-11-25), one commit pe
   in items 1 and 2 (the comment's placeholder names one
   column; `renamed` is applied as for the other comments). The reviewer's scripts are not run as they are: their
   scenarios are the tests above, and `test_c4_keys.py` follows the old two comments.
+- After review (sc-20): a comment naming (k1) of a composite key (k1, k2) was believed, and the run changed the key
+  from (k1) to (k1, k2) with a wrong history. Where the comment's last key differs from the definition's, the run now
+  scans the change log for two rows of one `_op` at one moment under it (in `long(...)`) and stops where it finds them:
+  `the comment on column _op of the change log <t>__log names (k1) last, but the change log has several rows of one
+  value of it at one moment, so it was not written under it: ` and the way out, whose placeholder is now
+  `<each column of that key>` in all three reasons. Tested on a target of 0.4.1, seen red first, way out followed.
 
 **Status:** resolved
