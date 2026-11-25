@@ -180,12 +180,18 @@ def check(conn, t, staged, mirror, log_columns, renamed):
     if log_columns and not (key and t["log"] and mirror):
         why = ("this run would not write to it (log = false or no key)" if not (key and t["log"])
                else "its mirror is missing")
+        # without it, a column the source no longer has in its family stops with its drop: said here, so one round leads out
+        drops = "; ".join(f"ALTER TABLE {t['mirror']} DROP COLUMN {quote(n)}" for n, type in mirror
+                          if n not in renamed.values() and (n not in types or family(types[n]) != family(type)))
         raise Exception(f"the definition has no key any more, the mirror's primary key is {primary_key}: put the key "
                         "back, or give the table another target_table; to load it without a key, drop the change log "
                         f"{t['name']}__log with its history view (DROP TABLE {t['log_table']} CASCADE) and the mirror"
                         if primary_key and not key else
                         f"the change log {t['name']}__log exists and {why}: drop it with its history view "
-                        f"(DROP TABLE {t['log_table']} CASCADE), or rename both" + (" with the mirror" if mirror else ""))
+                        f"(DROP TABLE {t['log_table']} CASCADE)"
+                        + (f", and with it the columns of the mirror the source no longer has, whose values are "
+                           f"nowhere else then ({drops})" if drops else "")
+                        + ", or rename both" + (" with the mirror" if mirror else ""))
     # nothing is proven without a catalog, a key or a change log, nor joined by a key of another family, which stops below
     if t["key"] and t["log"] and log_columns and not t["catalog"] \
             and set(primary_key) == set(t["key"]) \

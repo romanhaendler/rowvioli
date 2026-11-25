@@ -76,7 +76,18 @@ def test_a_change_log_this_run_would_not_write_is_told_before_a_column_gone_from
     apply(erp, definition(erp, f'"public.customers" = {table}\n'))
     erp.source("alter table customers drop column city")
     erp.target("update _rowvioli.tables set requested_at = now()")
-    assert says in failed(erp)
+    reason = failed(erp)
+    assert says in reason
+    # its way out, followed as it says, leads into no second stop: the column's drop is said with the change log's
+    ways = ['DROP TABLE "raw_erp"."customers__log" CASCADE'] + (
+        ['ALTER TABLE "raw_erp"."customers" DROP COLUMN "city"'] if "log = false" in table else [])
+    for way in ways:
+        assert way in reason.replace("***", "x"), reason
+        erp.target(way)
+    if "log = false" not in table:  # "and the mirror"
+        erp.target("drop table raw_erp.customers")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
 
 
 def test_a_new_source_column_appears_in_the_mirror_and_the_change_log_with_values(erp):
