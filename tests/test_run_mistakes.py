@@ -5,7 +5,7 @@ import psycopg
 import pytest
 
 from conftest import HOST, _query, _url, until
-from test_checks import failed
+from test_checks import MISSING, failed
 from test_rest import api, load, reason  # noqa: F401 (api is a fixture)
 from test_secrets import lab
 from test_run import apply, definition, erp, ok, run  # noqa: F401 (erp is a fixture)
@@ -76,6 +76,11 @@ def test_a_value_the_source_cannot_convert_stays_out_of_the_reason(erp, value, t
     assert why == (f"a statement raised an error (SQLSTATE {state}) in the source, reading public.cast_view; its message "
                    "may hold a row's values, so it is left out here: the source's server log has it")
     assert value not in r.stdout + r.stderr
+
+
+def test_a_table_the_source_does_not_have_is_said_in_the_programs_own_words(erp):  # ticket 17, L2, G2
+    apply(erp, definition(erp, '"public.customers2" = {}\n'))  # misspelt, which apply cannot know
+    assert failed(erp) == MISSING.format(table="public.customers2", state="42P01")
 
 
 def test_a_failed_rest_path_stays_in_the_reason(api):

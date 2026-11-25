@@ -2,6 +2,7 @@
 import pytest
 
 from rowvioli.load import reason_line
+from test_checks import MISSING
 
 TRACEBACK = ('. Detail: Python exception: Traceback (most recent call last):\n'
              '  File "/long/path/src/rowvioli/connectors/postgres.py", line 21, in batches\n'
@@ -101,8 +102,9 @@ ODBC = "ODBC emitted an error calling 'SQLFetch': State: {}, Native error: 1, Me
     ("HY000", "[MySQL][ODBC 9.1(w) Driver][mysqld-9.1.0]Incorrect integer value: 'Secret' for column 'n' at row 1", None),
     ("\0\0\0\0\0", "Secret is no number", None),
     ("P0001", "ERROR: bad row Secret;\nError while executing the query", None),
-    # a table that is not there: of class 42 only a missing right is shown, and the reason names the table
-    ("42S02", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Invalid object name 'dbo.orders'.", None),
+    # a table or column that is not there: the program's own words (ticket 17, L2)
+    ("42S02", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Invalid object name 'dbo.orders'.", "missing"),
+    ("42S22", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Invalid column name 'Secret'.", "missing"),
     # names alone: a refused login, a missing right
     ("28000", "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Login failed for user 'reader'.", True),
     ("42501", "ERROR: permission denied for table orders", True),
@@ -111,8 +113,10 @@ ODBC = "ODBC emitted an error calling 'SQLFetch': State: {}, Native error: 1, Me
     ("01000", "[unixODBC][Driver Manager]Can't open lib 'NoSuchDriver' : file not found", "connect")])
 def test_an_odbc_drivers_message_is_shown_by_its_sqlstate_alone(state, message, shown):  # decision 54, item 8
     odbc = ODBC.replace("SQLFetch", "SQLDriverConnect") if shown == "connect" else ODBC
-    said = reason_line([], RuntimeError(odbc.format(state) + message), "reading the source", "dbo.orders")
-    if shown:
+    said = reason_line([], RuntimeError(odbc.format(state) + message), "reading the source", "dbo.orders", "erp")
+    if shown == "missing":
+        assert said == MISSING.format(table="dbo.orders", state=state)
+    elif shown:
         assert said == odbc.format(state) + message
     else:
         assert said == (f"a{' function' if state == 'P0001' else ' statement'} raised an error"

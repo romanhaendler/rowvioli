@@ -21,6 +21,10 @@ def failed(rv, *args):
 
 
 MIRROR = "select * from raw_erp.customers"
+# what a reason says of an object the source does not have (ticket 17, L2, G2)
+MISSING = ("an object the statement reading {table} names does not exist (SQLSTATE {state}): the table itself, a "
+           "column, or one a view of it reads; rowvioli list erp shows the tables, and a table renamed or moved in "
+           "the source keeps its mirror and history when the definition names it anew and keeps its target_table")
 
 
 @pytest.mark.parametrize("change, expected", [
@@ -321,7 +325,7 @@ def test_a_table_without_a_key_is_emptied_the_same_way(erp):
     ('my "secret": value', "n::int", "22P02"), ("3000000000", "n::int", "22003"),
     # Postgres's own messages that show the value unquoted or as a name: date field value out of range: 2000-13-01,
     # relation "3000000000" does not exist
-    ("3000000000", "make_date(2000, length(n) + 3, 1)", "22008"), ("3000000000", "n::regclass", "42P01"),
+    ("3000000000", "make_date(2000, length(n) + 3, 1)", "22008"),
     # a syntax error of a row's value, which Postgres quotes in class 42 too: syntax error in tsquery: "my secret 4711",
     # syntax error at or near "4711", improper relation name (too many dotted names): a.b.c.secret.e, invalid name
     # syntax; of class 42 only a missing right is shown
@@ -341,6 +345,15 @@ def test_a_value_in_the_sources_message_is_withheld_by_its_sqlstate(erp, value, 
     assert reason == (f"a statement raised an error (SQLSTATE {state}) in the source, reading public.quoting; its "
                       "message may hold a row's values, so it is left out here: the source's server log has it"), reason
     assert "secret" not in reason and "3000000000" not in reason and "2000-13" not in reason
+
+
+def test_an_object_a_rows_value_names_that_does_not_exist_is_said_without_the_value(erp):  # ticket 17, L2
+    erp.source("create table texts (k int, n text)")
+    erp.source("insert into texts values (1, '3000000000')")
+    erp.source("create view quoting as select k, n::regclass as n from texts")  # relation "3000000000" does not exist
+    apply(erp, definition(erp, '"public.quoting" = {}\n'))
+    reason = failed(erp)
+    assert reason == MISSING.format(table="public.quoting", state="42P01") and "3000000000" not in reason
 
 
 @pytest.mark.parametrize("where", ["target", "source"])

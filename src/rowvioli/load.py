@@ -1260,14 +1260,15 @@ ODBC_STATE = re.compile(r"(?:\bcalling '(\w+)':\s*)?\bState: ([^,]{5}), Native e
 OWN = os.path.dirname(os.path.abspath(__file__)) + os.sep  # the program's code, its shipped connectors among it
 
 
-def reason_line(values, e, step, source=None):
+def reason_line(values, e, step, source=None, name=None):
     """The reason as it is stored, shown and logged: the first line of the driver's message without its wrapper,
     joined with the next when it ends in a colon, without a value of a row (VALUE), scrubbed last, so that a password
     that occurs in the wrapper (`x`, `query`) does not keep the wrapper from being cut. A message that holds a
     traceback gives the text before it, or the exception's own line (the traceback's last) when nothing is before it;
     ADBC cuts long messages, so the end may be missing. A line saying so, with the exception's type, when there is no
-    message. A database's message that may hold a row's value is withheld (withheld); `source` is the source table."""
-    if reason := withheld(e, step, source):
+    message. A database's message that may hold a row's value is withheld (withheld); `source` is the source table,
+    `name` the source's."""
+    if reason := withheld(e, step, source, name):
         return scrub(values, CONTROL.sub("?", reason))
     # first only a value with a line break or another control character, which the cut and the ? would break up
     text = scrub([v for v in values if v and CONTROL.search(v)], str(e)).strip()
@@ -1335,7 +1336,12 @@ SHOWN = {"08000", "08001", "08003", "08004", "08006", "08P01", "08S01",  # a con
          "57014", "57P01", "57P02", "57P03", "57P04", "57P05"}  # a cancel, a timeout, a shutdown: fixed words
 
 
-def withheld(e, step, source):
+# an object a statement names that does not exist: a table, a column, a type or a function; ODBC's for a table and a
+# column. Its message may name a row's value (`relation "Anna" does not exist` of ::regclass), so the program says it
+MISSING = {"42P01", "42703", "42704", "42883", "42S02", "42S22"}
+
+
+def withheld(e, step, source, name=None):
     """Decision 54, item 8, the one rule for a database's message, of the source or the target, through ADBC or ODBC:
     it reaches a reason only where the SQLSTATE the driver gives says that it holds names alone (SHOWN),
     or as Postgres's own message of a violated constraint, and never from under a consumer's function. Every other is
@@ -1359,6 +1365,11 @@ def withheld(e, step, source):
         return None
     who = f"function {function[1]}" if function else "a function" if state in ("P0001", "P0004") else "a statement"
     where = "source" if step == "reading the source" else "target"
+    if state in MISSING and where == "source" and not function:  # the program's own words, which hold no value
+        return (f"an object the statement reading {source} names does not exist (SQLSTATE {state}): the table itself, "
+                f"a column, or one a view of it reads; rowvioli list {name} shows the tables, and a table renamed or "
+                "moved in the source keeps its mirror and history when the definition names it anew and keeps its "
+                "target_table")
     return (f"{who} raised an error{f' (SQLSTATE {state})' if state and state.isalnum() else ''} in the {where}"
             f"{f', reading {source}' if source and where == 'source' else ''}; its message may hold a row's values, "
             f"so it is left out here: the {where}'s server log has it")
@@ -1446,7 +1457,8 @@ def main(worker, source, table):
     try:
         answer = load(conn, t)
     except BaseException as e:  # everything, so no unscrubbed traceback reaches stderr (open point F4)
-        answer = {"reason": reason_line(t.get("values", []), e, t.get("step", "claiming"), t.get("source_table"))}
+        answer = {"reason": reason_line(t.get("values", []), e, t.get("step", "claiming"), t.get("source_table"),
+                                       t.get("source"))}
     if "reason" in answer:  # outside the except, so a failing fail() cannot print the unscrubbed error with it
         try:
             answer = fail(conn, t, answer["reason"])
