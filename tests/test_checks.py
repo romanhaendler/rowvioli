@@ -616,6 +616,19 @@ def test_a_consumers_table_that_inherits_from_the_mirror_keeps_its_rows_and_is_n
         ("I", 1), ("I", 2), ("I", 3), ("U", 1)]
 
 
+def test_a_consumers_table_that_inherits_from_the_mirror_keeps_rows_of_the_key_the_source_updates_or_deletes(erp):
+    ok(erp)  # a child's row with the key of a mirror row is not the mirror's: ONLY in the update and the delete
+    erp.target("create table public.branch () inherits (raw_erp.customers);"
+               "insert into public.branch values (1, 'Gus', 'Ulm'), (2, 'Hal', 'Ulm')")
+    branch = erp.target(CHILD)
+    erp.source("update customers set city = 'Köln' where customer_no = 1; delete from customers where customer_no = 2")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    assert run(erp, "erp")[1]["tables"]["raw_erp.customers"] == {"status": "ok", "inserted": 0, "updated": 1,
+                                                                 "deleted": 1}
+    assert erp.target(CHILD) == branch
+    assert rows(erp.target, "select customer_no from only raw_erp.customers") == [(1,), (3,)]
+
+
 def test_a_consumers_table_that_inherits_from_the_mirror_keeps_its_rows_when_the_key_changes(erp):
     ok(erp)
     erp.target(BRANCH + ";create table public.notes () inherits (raw_erp.customers__log);"
