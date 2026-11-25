@@ -62,6 +62,15 @@ def test_a_driver_version_that_is_not_one_short_line_fails_the_run_naming_the_co
         'run records: give it a short one, such as "mylib 2.3.1", or none', None)]
 
 
+@pytest.mark.parametrize("odd, delivered", [("list", "a list, not an Arrow record batch"),
+                                            ("schemas", "a batch of another schema than its first")])
+def test_a_connector_that_delivers_what_the_contract_does_not_allow_is_named(erp, odd, delivered):
+    lab(erp, f'odd = "{odd}"')  # ticket 17, J3: Arrow's own words, `'list' object has no attribute 'schema'`
+    assert erp.run("run", "lab").returncode == 1
+    assert erp.target("select reason from _rowvioli.runs") == [
+        (f'connector "testing" delivered {delivered}, which the contract does not allow',)]
+
+
 @pytest.mark.parametrize("fail", ["at_once", "deep"])
 def test_a_connector_failing_with_connection_values_in_its_message_leaks_none_of_them(erp, fail):
     out = [lab(erp, f'fail = "{fail}"'), erp.run("run", "lab")]

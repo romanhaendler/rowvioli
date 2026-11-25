@@ -81,6 +81,7 @@ Fixed:
 - A row the source changes is updated in place in the mirror. Before, an update was a delete and an insert: a consumer's foreign key onto the mirror failed every run that changed a row it refers to, and one with `ON DELETE CASCADE` or `SET NULL` deleted or emptied the consumer's rows (in 0.4.1 too). A row the source deletes that such a key refers to stops the run with the way out.
 - The text offered to put back a lost comment on `_op` is a note of this change log only, no older than its first row: a change log created again, or one under a new target name, no longer stops with the keys of an earlier one. A mirror renamed by hand still gets its own.
 - A connector's `driver_version` that is no text of one line and at most 200 characters fails the run naming the connector. Before, it was stored as given with every run: an integer as text, a line break, 100,000 characters. docs/connectors.md says the contract's three optional names in one place, and the README points to them.
+- A connector that delivers something that is no Arrow record batch, or a batch of another schema than its first, fails with `connector "<type>" delivered ..., which the contract does not allow`. Before, the reason was Arrow's own words (`'list' object has no attribute 'schema'`, `Expected array with 2 buffer(s) but found 3`).
 
 ## 0.4.1 (2026-11-23)
 

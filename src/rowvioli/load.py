@@ -512,7 +512,7 @@ def stage(conn, t):
     t["values"] = connection_values(connection, ("path",) if t["type"] == "file" else ())
     options = dict(t["options"])
     options.pop("renamed", None)  # the run's, not the connector's (decision 54)
-    batches = stream(connector.read(connection, t["source_table"], options))
+    batches = stream(connector.read(connection, t["source_table"], options), t["type"])
     if batches is None:
         raise Exception("the connector delivered nothing, not even the columns")
     batches = whole(batches, t)
@@ -623,16 +623,31 @@ def without_nul(batches, raised):
     return pa.RecordBatchReader.from_batches(batches.schema, clean())
 
 
-def stream(batches):
+def stream(batches, connector):
     """The driver's ingest needs the schema before the first batch; a connector may return any iterator. None for
-    one without a batch."""
+    one without a batch. What is no record batch, or one of another schema than the first, fails naming the
+    `connector`, instead of Arrow's words (ticket 17)."""
     if isinstance(batches, pa.RecordBatchReader):
         return batches
     batches = iter(batches)
     first = next(batches, None)
     if first is None:
         return None
-    return pa.RecordBatchReader.from_batches(first.schema, itertools.chain([first], batches))
+    if not isinstance(first, pa.RecordBatch):
+        raise odd(first, connector)
+
+    def checked():
+        for b in itertools.chain([first], batches):
+            if not isinstance(b, pa.RecordBatch) or not b.schema.equals(first.schema):
+                raise odd(b, connector)
+            yield b
+    return pa.RecordBatchReader.from_batches(first.schema, checked())
+
+
+def odd(batch, connector):
+    what = "a batch of another schema than its first" if isinstance(batch, pa.RecordBatch) else \
+        f"a {type(batch).__name__}, not an Arrow record batch"
+    return Exception(f'connector "{connector}" delivered {what}, which the contract does not allow')
 
 
 def diff(conn, t, staged, mirror, plan):
