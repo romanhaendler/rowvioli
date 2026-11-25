@@ -153,8 +153,17 @@ def check(conn, t, staged, mirror, log_columns, renamed):
     added, and `proven`, the note of each one the data proved. `unpinned`, the retired ones whose pin under `columns` was taken out. `moved`, the names the retired
     and renamed columns have after the run, old name to new."""
     types, logged, had = dict(staged), dict(log_columns), dict(mirror)
+    # first: a table or view of a person's under the name of the change log or the history view is never taken for it
+    for name, what, kind, own in ((f"{t['name']}__log", "change log", "r", ("_run", "_op", "_loaded_at")),
+                                  (f"{t['name']}__history", "history view", "v", ("_valid_from", "_valid_to"))):
+        quoted = t["log_table"] if what == "change log" else t["history"]
+        found = sql(conn, "SELECT relkind FROM pg_class WHERE oid = to_regclass($1)", [quoted])
+        if found and (found[0][0] != kind or not set(own) <= dict(sql(conn, COLUMNS, [quoted])).keys()):
+            raise Exception(f"{name} is not rowvioli's {what} (a {'table' if kind == 'r' else 'view'} with the columns "
+                            f"{', '.join(own[:-1])} and {own[-1]}), so the run leaves it alone: rename it, or give the "
+                            "table another target_table")
     key = t["key"] or []
-    if key:  # first: the change log's own columns are never what a way out below renames
+    if key:  # the change log's own columns are never what a way out below renames
         # the diff, the change log and the history view carry them beside the table's columns
         for name in RESERVED if t["log"] else ["_op"]:
             if name in types:

@@ -94,6 +94,28 @@ def test_a_change_log_this_run_would_not_write_is_told_before_a_column_gone_from
     ok(erp)
 
 
+@pytest.mark.parametrize("mirror", [False, True])
+@pytest.mark.parametrize("team, what", [
+    ("create table raw_erp.customers__log (x int)", "change log"),
+    ("create table raw_erp.customers__log (customer_no int, name text, city text)", "change log"),
+    ("create view raw_erp.customers__log as select 1 as _run, 'I' as _op, 'epoch'::timestamptz as _loaded_at", "change log"),
+    ("create table raw_erp.customers__history (x int)", "history view"),
+    ("create view raw_erp.customers__history as select 1 as x", "history view")])
+def test_a_table_or_view_of_the_team_named_like_the_change_log_or_history_view_is_never_taken_for_it(
+        erp, team, what, mirror):  # ticket 17, M2
+    erp.target("create schema raw_erp")
+    if mirror:  # the program moves onto a table it did not create
+        erp.target("create table raw_erp.customers (customer_no int primary key, name text, city text)")
+    erp.target(team)
+    name = team.split()[2]
+    before = erp.target(f"select * from {name}")
+    kind = "a table with the columns _run, _op and _loaded_at" if what == "change log" else \
+        "a view with the columns _valid_from and _valid_to"
+    assert failed(erp) == (f"{name} is not rowvioli's {what} ({kind}), so the run leaves it alone: rename it, or "
+                           "give the table another target_table")
+    assert erp.target(f"select * from {name}") == before
+
+
 def test_a_new_source_column_appears_in_the_mirror_and_the_change_log_with_values(erp):
     ok(erp)
     erp.source("alter table customers add column phone text")

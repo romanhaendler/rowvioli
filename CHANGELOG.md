@@ -71,6 +71,7 @@ Fixed:
 - A shipped connector whose extra is not installed says which to install, in `run`, `work` and `list`: `connector "file" cannot be loaded: No module named 'duckdb'; pip install "rowvioli[file]" installs it`.
 - A source table that does not exist, misspelt or renamed, is said so in the program's words: `an object the statement reading public.customers2 names does not exist (SQLSTATE 42P01): the table itself, a column, or one a view of it reads; rowvioli list erp shows the tables, and a table renamed or moved in the source keeps its mirror and history when the definition names it anew and keeps its target_table`. Before, the reason withheld the message and said only the SQLSTATE.
 - A withheld message of a source says that the source's server log or a trace has it: SQL Server keeps no failed statement in its log by default.
+- A table or view of a person's named like a mirror's change log or history view (`<table>__log`, `<table>__history`) stops the run before anything else with `raw_erp.customers__log is not rowvioli's change log (a table with the columns _run, _op and _loaded_at), so the run leaves it alone: rename it, or give the table another target_table`. Before, the run took it for its own and stopped with a way out that dropped a source column, printed SQL that did not run, or a withheld SQLSTATE.
 
 ## 0.4.1 (2026-11-23)
 
