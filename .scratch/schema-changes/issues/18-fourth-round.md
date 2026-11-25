@@ -2,7 +2,7 @@
 
 **Blocked by:** 17
 
-**Status:** claimed
+**Status:** resolved
 
 **Model:** Opus
 
@@ -90,3 +90,43 @@ Built on `sc-18b` from `schema-changes` 2a71d03 (Opus, 2026-11-25), one commit p
 
 Suites at the tip (after merging schema-changes db4ad54), on fresh containers: the whole suite 900 passed, 24 skipped
 (8 min 15 s); `tests/odbc/run.sh` 20 passed, 1 skipped.
+
+### Review (Opus, 2026-11-25, on `sc-18b-review` from `sc-18b` 1e3850d)
+
+Each fix of items 1 to 4 taken out: its test red (item 1: 5 of its 8 cases; item 2: both; item 3: both; 4a and 4b of
+item 4: red), put back: green. Item 1 tried on a database (scratch tests, not kept): a retired column `c__<run>` with
+and without a record, then quiet runs; a column gone by the source's drop that comes back in its family, in another,
+or never, with and without a record; a renamed column then dropped by hand; a mirror renamed by hand with a retired
+and a gone column (no record under the new name), then a drop by hand; `log = false` and back; a change of key by the
+definition in the run with a drop by hand; two quiet runs. After each: mirror = source, replay = mirror, history at
+every earlier moment = the snapshot, later runs write no row. All held. Item 2: composite keys, the same columns in
+another order, from and to composite keys, a key changed by hand to another than the definition's (put back): held.
+Faults found, each fixed test-first, one commit each:
+
+- **A primary key changed by hand to a third key while the definition changed it** (ae1100b): the plan took the
+  person's key for the one the change log was written under, so the run stopped with a comment naming it, and
+  following it made the history partition by a key the log was never written under; the person's key also kept NOT
+  NULL in the mirror. Now the change goes from the recorded key (or, without a record, the comment's last), and the
+  person's columns lose NOT NULL too.
+- **4b, an old key column dropped by hand in the run that changes the key by the definition** (9e9e199): the `D` rows
+  had a null in the old key, and the run failed on the change log's NOT NULL with no way out. Now it stops with item
+  3's reason, whose way out (another `target_table`) is followed in the test.
+- **4a** (ddc7631): without a record under the target name, where the mirror's primary key is the definition's, the
+  reason gives `ALTER TABLE ... DROP CONSTRAINT ..., ADD PRIMARY KEY (<the comment's last key>)`; where the comment is
+  not the program's last note it gives both statements. Followed in the test, history right at every moment.
+- **4c** (a976712): a cheap exact fix exists. The `I` insert also takes a `U` whose row is gone from the mirror
+  (`NOT EXISTS` by the key): no delete and insert of a changed row, and a row kept for a column that went is in the
+  mirror, so it is not touched. Counted as updated. Tested with and without a column that goes. Decision 54 says it.
+- **A 0.4.1 change log upgraded** (a74a561): where a person dropped a column under 0.4.1 that the source kept, 0.4.1
+  added it again and left a value that had become null current in the change log. The first run without a record
+  now closes every column of the change log that differs from the mirror (key columns, the join's, excepted). And a
+  closing alone took the lock of a change of columns and dropped the history view, so a consumer's view on it
+  stopped the run, also for a drop by hand with a record; now closing writes rows alone. Tested on a target of the
+  released 0.4.1 (`tests/test_upgrade.py`).
+
+Every reason this ticket added or changed names columns, keys, tables and a constraint, never a value of a row, and
+says its way out. Not checked: a primary key changed by hand to a third key on a 0.4.1 change log without a comment
+(before_the_record), and a mirror renamed by hand while its key is changed by hand to a third key.
+
+Suites at a74a561 on fresh containers: the whole suite 909 passed, 24 skipped (8 min 39 s), no failure;
+`tests/odbc/run.sh` 20 passed, 1 skipped.
