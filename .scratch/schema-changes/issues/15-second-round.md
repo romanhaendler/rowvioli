@@ -2,7 +2,7 @@
 
 **Blocked by:** 14
 
-**Status:** claimed
+**Status:** resolved
 
 **Model:** Opus
 
@@ -150,3 +150,37 @@ Built on `sc-15` (2026-11-25), test first, one commit per item or per group of i
   the suite at once and loudly; an upper bound in `pyproject.toml` would need a new lock while ticket 16 works on
   the dependencies.
 - S2, S3, S4, S6, S8: no behaviour; the suite is the net.
+
+### Review (Opus, 2026-11-25)
+
+Every fix of O1/X1, S5+B4, P2, P3, P4, B1, B2, B3, D1, X5 and I1 taken out at the tip: each of their tests fails. Found
+and fixed, test first:
+
+- B2 incomplete: a history view given to another owner failed every change of columns with `permission denied for
+  table customers__log` also for a member or a superuser (a lock of a view takes its owner's rights on what it reads),
+  and an owner it could keep came back as the worker's role; its columns' defaults and the comments on its triggers
+  and rules were lost; a rule or trigger naming a column the run renames, retires or drops was created again from its
+  text, naming another column or failing with a withheld 42703 on every run. Now carried over, or one stop that says
+  what the owner needs and how to give it back, and one that names the rule (fc1275e).
+- S5+B4: under load (3 workers, `apply` in a loop, readers, FK consumers, 3 minutes) 2 of 265 runs that took `lock()`
+  failed on the table's row while `apply` held it up for 112 ms, with no reader of the mirror in the way. Rule now: a
+  run that meets a lock after `lock()` lets go of everything and tries its publishing again, as it tries the lock, for
+  up to ten seconds; measured again: 0 of 281 failed, readers waited at most 0.32 s (894610b).
+- P3's way out (drop the change log) led into the stop for the gone column; its drop is said with it (7810b3f).
+- I3 said CREATE alone: a role without USAGE granted it and met the same reason (568cbc4).
+- I1: what `connect()` refuses (`SystemExit`, such as another schema version) still came without its cause (437f471).
+- R1, tried by hand (20 runs, target restarted 0.1 to 0.5 s after the start): 12 gave Postgres's bare FATAL, none
+  `connection to the target lost`, since the driver gives no SQLSTATE between two statements. After 3152e49: 17 say
+  `connection to the target lost`, 3 that connected while it shut down `the database system is shutting down`.
+- S7: `adbc-driver-postgresql` and `adbc-driver-manager` bounded below 2; `uv lock` changed rowvioli's entries alone. A
+  fall back to the public reader was not taken: it gives no SQLSTATE, so a reason would show the message (6ac0e5e).
+- From ticket 16's review: a CSV that is not UTF-8 names the option `encoding` (8d07a96).
+
+Judged right as built: the allowlist `SHOWN` (of its codes only 42501 can carry a runtime string, and only the name
+of an existing object the role may not use, or a large object's number), P4's shared test, D1, X5, the worker's two
+seconds after a failure before the claim (SIGTERM is seen within two seconds as before). Left: the text to put back a
+lost comment on `_op` is the table's latest note, also one written for an earlier change log under the same id (a
+log dropped and created again, or an old target name), which may name stretches the new log never had.
+
+Resolved on branch `schema-changes`, from sc-15 (2583551). Review fixes: fc1275e, 8d07a96, 437f471, 894610b, 6ac0e5e,
+7810b3f, 568cbc4, 3152e49.
