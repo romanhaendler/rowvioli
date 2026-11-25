@@ -490,6 +490,18 @@ def test_a_source_column_named_like_a_retired_one_that_goes_and_comes_back_conti
     log_replays(erp)
 
 
+@pytest.mark.parametrize("text", ['{"retired": 5}', '{"retired": null}'])
+def test_a_comment_on_a_change_log_column_that_names_no_column_is_not_read_as_a_retired_one(erp, text):
+    ok(erp)  # a retired column's comment names the column it keeps: this one is a person's, and city may come back
+    erp.source("alter table customers drop column city")
+    again(erp)
+    erp.target(f"comment on column raw_erp.customers__log.city is '{text}'")
+    erp.source("alter table customers add column city text")
+    again(erp)
+    assert columns(erp) == ["customer_no", "name", "city"]
+    log_replays(erp)
+
+
 @pytest.mark.parametrize("meanwhile", [None, "a type changed by hand", "a new target name"])
 def test_a_retired_column_whose_comment_a_person_removed_stops_with_the_text_to_put_back(erp, meanwhile):
     ok(erp)
