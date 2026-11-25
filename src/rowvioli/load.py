@@ -256,8 +256,8 @@ def check(conn, t, staged, mirror, log_columns, renamed):
     if t["key"] and t["log"] and log_columns:
         recorded = sql(conn, 'SELECT "column", mirror FROM _rowvioli.columns WHERE id = $1 AND target_schema = $2 AND '
                              "target_table = $3", [t["id"], t["schema"], t["table"]])
-        plan["closed"] = [n for n, in_mirror in recorded or [(n, True) for n in logged if n not in ("_run", "_op", "_loaded_at")]
-                          if in_mirror and n in logged and n not in had]
+        unknown = [(n, True) for n in logged if n not in ("_run", "_op", "_loaded_at")]
+        plan["closed"] = [n for n, in_mirror in recorded or unknown if in_mirror and n in logged and n not in had]
     said = comments(conn, t)  # decision 54: a retired column is known by its comment, never by its name
     retired = {n: was for n, text in said.items() if (was := retirement(text))}
     for name, type in staged:
@@ -1383,6 +1383,11 @@ def reason_line(values, e, step, source=None, name=None):
                       "a run, as well as one the source holds twice; drop it, or put in its place a constraint that "
                       "Postgres checks at the end of the statement: ALTER TABLE <the mirror> ADD UNIQUE (<its "
                       "columns>) DEFERRABLE", line)
+        line = re.sub(r'^conflicting key value violates exclusion constraint "[^"]*"$', r"\g<0>: Postgres checks an "
+                      "exclusion constraint on the mirror row by row, so it refuses a value that moves from one row to "
+                      "another within a run, as well as one the source holds twice; drop it, or put it in again so that "
+                      "Postgres checks it at the end of the statement: ALTER TABLE <the mirror> ADD EXCLUDE (<its "
+                      "elements>) DEFERRABLE", line)
     if step != "reading the source":  # a source may have a table of that name
         line = re.sub(r"must be owner of table \S+$", r"\g<0>: the worker's role must own it, or be a member of the "
                       r"role that owns it, to change its columns with the mirror's (ALTER TABLE <it> OWNER TO <the "

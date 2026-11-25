@@ -95,6 +95,35 @@ def test_one_slot_loads_the_tables_in_the_order_of_how_far_they_miss_their_maxim
                         "where r.run > %s order by r.run", [first]) == [("public.b",), ("public.a",), ("public.c",)]
 
 
+def loads_in_order(ready, settings):
+    """b, a, c loaded and then overdue by 2x, 1x and 0.5x of their max_age, d added after and never tried; returns the
+    order in which `ok --slots 1` loads the four."""
+    for name in "abcd":
+        ready.source(f"create table {name} (id int primary key)")
+        ready.source(f"insert into {name} values (1)")
+    tables = '"public.{}" = {{ key = ["id"]{} }}'
+    first = "\n".join(tables.format(n, ', max_age = "10m"' if n == "b" else "") for n in "abc")
+    apply(ready, source(ready, "erp", settings, first))
+    ok(ready)
+    for name, loaded in (("a", "2 hours"), ("b", "30 minutes"), ("c", "90 minutes")):
+        ready.target("update _rowvioli.tables set loaded_at = now() - %s::interval where source_table = %s",
+                     [loaded, f"public.{name}"])
+    apply(ready, source(ready, "erp", settings, first + "\n" + tables.format("d", "")))
+    before = ready.target("select max(run) from _rowvioli.runs")[0][0]
+    ok(ready, "--slots", "1")
+    return [t for (t,) in ready.target("select t.source_table from _rowvioli.runs r join _rowvioli.tables t on "
+                                       "t.id = r.table where r.run > %s order by r.run", [before])]
+
+
+def test_with_fewer_places_than_due_tables_the_never_tried_and_then_the_most_overdue_are_claimed(ready):
+    ready.target("update _rowvioli.meta set max_running = 1")  # the places cut the claimable set before the claim picks
+    assert loads_in_order(ready, "parallel = 4") == ["public.d", "public.b", "public.a", "public.c"]
+
+
+def test_with_parallel_1_a_never_tried_table_is_chosen_before_an_overdue_one_of_its_source(ready):
+    assert loads_in_order(ready, "parallel = 1") == ["public.d", "public.b", "public.a", "public.c"]
+
+
 HELD = """select s.name, count(*) from pg_locks l join _rowvioli.sources s on s.id = l.classid::int
            where l.locktype = 'advisory' and l.objsubid = 2 and l.granted and l.classid <> 0
              and l.database = (select oid from pg_database where datname = current_database()) group by s.name"""

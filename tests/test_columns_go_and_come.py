@@ -122,6 +122,27 @@ def test_a_column_a_person_dropped_from_the_mirror_that_the_source_keeps_is_clos
     assert erp.target("select count(*) from raw_erp.customers__log where _loaded_at = %s", [third]) == [(0,)]
 
 
+def test_two_columns_a_person_dropped_from_the_mirror_close_a_row_that_had_a_value_in_only_one(erp):
+    ok(erp)  # customer 3 has a name and no city: the closing U is written for a value in any of the columns
+    erp.source("alter table customers drop column name, drop column city")
+    erp.target("alter table raw_erp.customers drop column name, drop column city")
+    again(erp)
+    assert erp.target("select _op, customer_no from raw_erp.customers__log where _run = (select max(run) from "
+                      "_rowvioli.runs) order by customer_no") == [("U", 1), ("U", 2), ("U", 3)]
+
+
+def test_a_column_a_person_dropped_is_closed_by_the_latest_version_of_a_key_the_i_not_the_d_of_one_moment(erp):
+    ok(erp)  # a change of key writes a D and an I of one key at one _loaded_at: the I, whose city is null here, is latest
+    erp.source("update customers set city = null where customer_no = 1")
+    apply(erp, definition(erp, '"public.customers" = { key = ["customer_no", "name"] }\n'))
+    again(erp)
+    erp.source("alter table customers drop column city")
+    erp.target("alter table raw_erp.customers drop column city")
+    again(erp)
+    assert erp.target("select _op, customer_no from raw_erp.customers__log where _run = (select max(run) from "
+                      "_rowvioli.runs) order by customer_no") == [("U", 2)]
+
+
 @pytest.mark.parametrize("table", ['{ key = ["customer_no"], log = false }', "{}", "begins"])
 def test_A5_without_a_change_log_a_gone_column_stops_the_run_and_says_how_to_drop_it(erp, table):
     if table == "begins":  # the first run onto a table it did not create, whose change log begins (ticket 17, M5)
@@ -524,6 +545,18 @@ def test_a_source_column_named_like_a_retired_one_that_goes_and_comes_back_conti
     log_replays(erp)
 
 
+@pytest.mark.parametrize("text", ['{"retired": 5}', '{"retired": null}'])
+def test_a_comment_on_a_change_log_column_that_names_no_column_is_not_read_as_a_retired_one(erp, text):
+    ok(erp)  # a retired column's comment names the column it keeps: this one is a person's, and city may come back
+    erp.source("alter table customers drop column city")
+    again(erp)
+    erp.target(f"comment on column raw_erp.customers__log.city is '{text}'")
+    erp.source("alter table customers add column city text")
+    again(erp)
+    assert columns(erp) == ["customer_no", "name", "city"]
+    log_replays(erp)
+
+
 @pytest.mark.parametrize("meanwhile", [None, "a type changed by hand", "a new target name"])
 def test_a_retired_column_whose_comment_a_person_removed_stops_with_the_text_to_put_back(erp, meanwhile):
     ok(erp)
@@ -626,6 +659,25 @@ def test_a_retired_name_longer_than_postgres_takes_stops_and_says_what_to_rename
     log_replays(erp)
 
 
+@pytest.mark.parametrize("size, stops", [(63, False), (64, True)])
+def test_a_retired_name_is_measured_in_bytes_63_pass_and_64_stop(erp, size, stops):
+    ok(erp)
+    retired = erp.target("select max(run) + 3 from _rowvioli.runs")[0][0]  # the run after: add, drop, add again
+    room = size - len(f"__{retired}")  # in bytes: é takes two, so a count of characters is another
+    long = "é" * (room // 2) + "y" * (room % 2)
+    erp.source(f'alter table customers add column "{long}" text')
+    again(erp)
+    erp.source(f'alter table customers drop column "{long}"')
+    again(erp)
+    erp.source(f'alter table customers add column "{long}" integer')
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    if stops:
+        assert "names longer than 63 bytes" in failed(erp)
+    else:
+        again(erp)
+        assert f"{long}__{retired}" in columns(erp, "raw_erp.customers__log")
+
+
 def test_retired_names_longer_than_postgres_takes_are_named_together_and_one_round_of_the_way_out_leads_out(erp):
     one, two = "y" * 62, "z" * 62  # P18 followed one column at a time into a second and a third stop
     erp.source(f"alter table customers add column {one} text, add column {two} text")
@@ -678,6 +730,22 @@ def test_a_run_never_waits_for_a_lock_while_holding_one_and_gives_up_after_10s(e
     assert p.wait(timeout=30) == 0, p.stdout.read()
     assert columns(erp) == ["customer_no", "name"]
     log_replays(erp)
+
+
+def test_a_lock_timeout_before_the_run_holds_the_locks_is_no_wait_of_10s_but_the_runs_failure(erp):
+    ok(erp)  # only a run that holds the locks is let go and tried again: this one has none, its role's lock_timeout ends it
+    erp.target(f"alter role postgres in database {erp.target('select current_database()')[0][0]} "
+               "set lock_timeout = '300ms'")
+    erp.source("update customers set city = 'Köln' where customer_no = 1")
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    with psycopg.connect(erp.target_url) as consumer:  # reads go on, an update waits
+        consumer.execute("lock table raw_erp.customers in share mode")
+        started = time.monotonic()
+        assert failed(erp).startswith("canceling statement due to lock timeout")
+        assert time.monotonic() - started < 8
+    erp.target("update _rowvioli.tables set requested_at = now()")
+    ok(erp)
+    assert rows(erp.target, MIRROR) == rows(erp.source, "select * from customers")
 
 
 IN_USE = ("raw_erp.customers, its change log and its history view were held by this run when an object it needed was "
